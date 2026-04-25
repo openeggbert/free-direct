@@ -16,6 +16,84 @@
 
 namespace {
     class DirectDrawImpl;
+    class DirectDrawSurfaceImpl;
+
+    class DirectDrawPaletteImpl final : public IDirectDrawPalette {
+    public:
+        DirectDrawPaletteImpl(DWORD dwFlags, LPPALETTEENTRY lpColorTable) : refCount_(1), flags_(dwFlags) {
+            if (lpColorTable) {
+                for (int i = 0; i < 256; ++i) {
+                    entries_[i] = lpColorTable[i];
+                }
+            } else {
+                for (auto & entrie : entries_) {
+                    entrie = {0, 0, 0, 0};
+                }
+            }
+        }
+
+        HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
+            (void)riid; (void)ppvObject; return DDERR_UNSUPPORTED;
+        }
+
+        ULONG WINAPI AddRef() override { return ++refCount_; }
+
+        ULONG WINAPI Release() override {
+            ULONG val = --refCount_;
+            if (val == 0) delete this;
+            return val;
+        }
+
+        HRESULT WINAPI GetEntries(DWORD dwFlags, DWORD dwBase, DWORD dwNumEntries, LPPALETTEENTRY lpEntries) override {
+            (void)dwFlags;
+            if (!lpEntries || dwBase + dwNumEntries > 256) return DDERR_INVALIDPARAMS;
+            for (DWORD i = 0; i < dwNumEntries; ++i) {
+                lpEntries[i] = entries_[dwBase + i];
+            }
+            return DD_OK;
+        }
+
+        HRESULT WINAPI SetEntries(DWORD dwFlags, DWORD dwBase, DWORD dwNumEntries, LPPALETTEENTRY lpEntries) override {
+            (void)dwFlags;
+            if (!lpEntries || dwBase + dwNumEntries > 256) return DDERR_INVALIDPARAMS;
+            for (DWORD i = 0; i < dwNumEntries; ++i) {
+                entries_[dwBase + i] = lpEntries[i];
+            }
+            return DD_OK;
+        }
+
+    private:
+        std::atomic<ULONG> refCount_;
+        DWORD flags_;
+        PALETTEENTRY entries_[256];
+    };
+
+    class DirectDrawClipperImpl final : public IDirectDrawClipper {
+    public:
+        DirectDrawClipperImpl() : refCount_(1), hwnd_(NULL) {}
+
+        HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
+            (void)riid; (void)ppvObject; return DDERR_UNSUPPORTED;
+        }
+
+        ULONG WINAPI AddRef() override { return ++refCount_; }
+
+        ULONG WINAPI Release() override {
+            ULONG val = --refCount_;
+            if (val == 0) delete this;
+            return val;
+        }
+
+        HRESULT WINAPI SetHWnd(DWORD dwFlags, HWND hWnd) override {
+            (void)dwFlags;
+            hwnd_ = hWnd;
+            return DD_OK;
+        }
+
+    private:
+        std::atomic<ULONG> refCount_;
+        HWND hwnd_;
+    };
 
     class DirectDrawSurfaceImpl final : public IDirectDrawSurface {
     public:
@@ -24,7 +102,7 @@ namespace {
             Offscreen
         };
 
-        DirectDrawSurfaceImpl(DirectDrawImpl* owner, SurfaceType type, int width, int height);
+        DirectDrawSurfaceImpl(DirectDrawImpl* owner, SurfaceType type, int width, int height, int bpp);
         ~DirectDrawSurfaceImpl() override;
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override;
@@ -35,15 +113,27 @@ namespace {
                            LPRECT lpSrcRect,
                            DWORD dwFlags,
                            LPDDBLTFX lpDDBltFx) override;
+        HRESULT WINAPI BltFast(DWORD dwX, DWORD dwY, LPDIRECTDRAWSURFACE lpDDSrcSurface, LPRECT lpSrcRect, DWORD dwTrans) override;
         HRESULT WINAPI Flip(LPDIRECTDRAWSURFACE lpDDSurfaceTargetOverride, DWORD dwFlags) override;
+        HRESULT WINAPI SetClipper(LPDIRECTDRAWCLIPPER lpDDClipper) override;
+        HRESULT WINAPI SetPalette(LPDIRECTDRAWPALETTE lpDDPalette) override;
+        HRESULT WINAPI IsLost() override;
+        HRESULT WINAPI Restore() override;
+        HRESULT WINAPI GetDC(HDC* lphDC) override;
+        HRESULT WINAPI ReleaseDC(HDC hDC) override;
+        HRESULT WINAPI GetSurfaceDesc(LPDDSURFACEDESC lpDDSurfaceDesc) override;
+        HRESULT WINAPI Lock(LPRECT lpDestRect, LPDDSURFACEDESC lpDDSurfaceDesc, DWORD dwFlags, HANDLE hEvent) override;
+        HRESULT WINAPI Unlock(LPVOID lpSurfaceData) override;
+        HRESULT WINAPI SetColorKey(DWORD dwFlags, LPDDCOLORKEY lpDDColorKey) override;
 
         [[nodiscard]] SurfaceType GetType() const { return type_; }
         [[nodiscard]] int GetWidth() const { return width_; }
         [[nodiscard]] int GetHeight() const { return height_; }
+        [[nodiscard]] int GetBPP() const { return bpp_; }
         [[nodiscard]] const std::vector<uint8_t>& GetPixels() const { return pixels_; }
 
         HRESULT FillColor(const RECT* destRect, DWORD fillColor);
-        HRESULT BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect);
+        HRESULT BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, bool useSrcColorKey);
 
     private:
         friend class DirectDrawImpl;
@@ -52,8 +142,13 @@ namespace {
         SurfaceType type_;
         int width_;
         int height_;
+        int bpp_;
         std::vector<uint8_t> pixels_;
         SDL_Texture* texture_;
+        LPDIRECTDRAWPALETTE palette_ = nullptr;
+        LPDIRECTDRAWCLIPPER clipper_ = nullptr;
+        DDCOLORKEY colorKey_ = {0, 0};
+        bool hasSrcColorKey_ = false;
     };
 
     class DirectDrawImpl final : public IDirectDraw {
@@ -68,10 +163,14 @@ namespace {
         HRESULT WINAPI CreateSurface(const DDSURFACEDESC* lpDDSurfaceDesc,
                                      LPDIRECTDRAWSURFACE* lplpDDSurface,
                                      IUnknown* pUnkOuter) override;
+        HRESULT WINAPI SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP) override;
+        HRESULT WINAPI CreatePalette(DWORD dwFlags, LPPALETTEENTRY lpColorTable, LPDIRECTDRAWPALETTE* lplpDDPalette, IUnknown* pUnkOuter) override;
+        HRESULT WINAPI CreateClipper(DWORD dwFlags, LPDIRECTDRAWCLIPPER* lplpDDClipper, IUnknown* pUnkOuter) override;
 
-        HRESULT PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect);
+        HRESULT PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, float rotationAngle = 0.0f);
 
     private:
+        friend class DirectDrawSurfaceImpl;
         std::atomic<ULONG> refCount_;
         HWND hwnd_;
         SDL_Window* sdlWindow_;
@@ -109,16 +208,17 @@ namespace {
     }
 
 
-    DirectDrawSurfaceImpl::DirectDrawSurfaceImpl(DirectDrawImpl* owner, const SurfaceType type, const int width, const int height)
+    DirectDrawSurfaceImpl::DirectDrawSurfaceImpl(DirectDrawImpl* owner, const SurfaceType type, const int width, const int height, const int bpp)
         : refCount_(1),
           owner_(owner),
           type_(type),
           width_(width),
           height_(height),
+          bpp_(bpp),
           texture_(nullptr)
     {
         if (type_ == SurfaceType::Offscreen) {
-            pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4u, 0);
+            pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * (bpp_ / 8u), 0);
         }
     }
 
@@ -127,6 +227,8 @@ namespace {
         if (texture_) {
             SDL_DestroyTexture(texture_);
         }
+        if (palette_) palette_->Release();
+        if (clipper_) clipper_->Release();
     }
 
     HRESULT WINAPI DirectDrawSurfaceImpl::QueryInterface(const GUID& riid, void** ppvObject)
@@ -157,6 +259,18 @@ namespace {
         }
 
         const RECT fillRect = ClampRect(destRect ? *destRect : GetFullRect(width_, height_), width_, height_);
+
+        if (bpp_ == 8) {
+            const auto index = static_cast<uint8_t>(fillColor & 0xFFu);
+            for (int y = fillRect.top; y < fillRect.bottom; ++y) {
+                for (int x = fillRect.left; x < fillRect.right; ++x) {
+                    const size_t offset = static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x);
+                    pixels_[offset] = index;
+                }
+            }
+            return DD_OK;
+        }
+
         const auto r = static_cast<uint8_t>((fillColor >> 16) & 0xFFu);
         const auto g = static_cast<uint8_t>((fillColor >> 8) & 0xFFu);
         const auto b = static_cast<uint8_t>(fillColor & 0xFFu);
@@ -174,7 +288,7 @@ namespace {
         return DD_OK;
     }
 
-    HRESULT DirectDrawSurfaceImpl::BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect)
+    HRESULT DirectDrawSurfaceImpl::BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, bool useSrcColorKey)
     {
         if (type_ != SurfaceType::Offscreen || source.GetType() != SurfaceType::Offscreen) {
             return DDERR_UNSUPPORTED;
@@ -191,18 +305,47 @@ namespace {
             return DD_OK;
         }
 
+        uint32_t srcKey = 0;
+        if (useSrcColorKey && source.hasSrcColorKey_) {
+            srcKey = source.colorKey_.dwColorSpaceLowValue;
+        }
+
         for (int y = 0; y < dstHeight; ++y) {
             const int srcY = sourceClamped.top + (y * srcHeight) / dstHeight;
             const int dstY = destClamped.top + y;
             for (int x = 0; x < dstWidth; ++x) {
                 const int srcX = sourceClamped.left + (x * srcWidth) / dstWidth;
                 const int dstX = destClamped.left + x;
-                const size_t srcOffset = (static_cast<size_t>(srcY) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(srcX)) * 4u;
-                const size_t dstOffset = (static_cast<size_t>(dstY) * static_cast<size_t>(width_) + static_cast<size_t>(dstX)) * 4u;
-                pixels_[dstOffset + 0u] = source.GetPixels()[srcOffset + 0u];
-                pixels_[dstOffset + 1u] = source.GetPixels()[srcOffset + 1u];
-                pixels_[dstOffset + 2u] = source.GetPixels()[srcOffset + 2u];
-                pixels_[dstOffset + 3u] = source.GetPixels()[srcOffset + 3u];
+
+                if (bpp_ == 8 && source.GetBPP() == 8) {
+                    const size_t srcOffset = static_cast<size_t>(srcY) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(srcX);
+                    const size_t dstOffset = static_cast<size_t>(dstY) * static_cast<size_t>(width_) + static_cast<size_t>(dstX);
+                    const uint8_t index = source.GetPixels()[srcOffset];
+                    if (useSrcColorKey && source.hasSrcColorKey_ && index == static_cast<uint8_t>(srcKey)) continue;
+                    pixels_[dstOffset] = index;
+                    continue;
+                }
+
+                if (bpp_ == 32 && source.GetBPP() == 32) {
+                    const size_t srcOffset = (static_cast<size_t>(srcY) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(srcX)) * 4u;
+                    const size_t dstOffset = (static_cast<size_t>(dstY) * static_cast<size_t>(width_) + static_cast<size_t>(dstX)) * 4u;
+
+                    const uint8_t r = source.GetPixels()[srcOffset + 0u];
+                    const uint8_t g = source.GetPixels()[srcOffset + 1u];
+                    const uint8_t b = source.GetPixels()[srcOffset + 2u];
+                    const uint8_t a = source.GetPixels()[srcOffset + 3u];
+
+                    if (useSrcColorKey && source.hasSrcColorKey_) {
+                        // Assuming color key is in the same format as pixels (simplified)
+                        const uint32_t pixelColor = (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
+                        if (pixelColor == srcKey) continue;
+                    }
+
+                    pixels_[dstOffset + 0u] = r;
+                    pixels_[dstOffset + 1u] = g;
+                    pixels_[dstOffset + 2u] = b;
+                    pixels_[dstOffset + 3u] = a;
+                }
             }
         }
 
@@ -216,17 +359,27 @@ namespace {
                                               LPDDBLTFX lpDDBltFx)
     {
         if (type_ == SurfaceType::Primary) {
+            if (!owner_ || !owner_->renderer_) return DDERR_INVALIDPARAMS;
+
             if ((dwFlags & DDBLT_COLORFILL) != 0) {
-                (void)lpDDBltFx;
-                (void)lpDestRect;
-                return DDERR_UNSUPPORTED;
+                if (!lpDDBltFx) return DDERR_INVALIDPARAMS;
+                uint8_t r = (uint8_t)((lpDDBltFx->dwFillColor >> 16) & 0xFF);
+                uint8_t g = (uint8_t)((lpDDBltFx->dwFillColor >> 8) & 0xFF);
+                uint8_t b = (uint8_t)(lpDDBltFx->dwFillColor & 0xFF);
+                SDL_SetRenderDrawColor(owner_->renderer_, r, g, b, 255);
+                SDL_RenderClear(owner_->renderer_);
+                return DD_OK;
             }
 
             auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
-            if (!sourceSurface || !owner_) {
+            if (!sourceSurface) {
                 return DDERR_INVALIDPARAMS;
             }
-            return owner_->PresentSurface(*sourceSurface, lpDestRect, lpSrcRect);
+            float angle = 0.0f;
+            if (lpDDBltFx && (dwFlags & DDBLT_ROTATIONANGLE)) {
+                angle = (float)lpDDBltFx->dwRotationAngle;
+            }
+            return owner_->PresentSurface(*sourceSurface, lpDestRect, lpSrcRect, angle);
         }
 
         if ((dwFlags & DDBLT_COLORFILL) != 0) {
@@ -241,26 +394,135 @@ namespace {
             if (!sourceSurface) {
                 return DDERR_INVALIDPARAMS;
             }
-            return BlitFrom(*sourceSurface, lpDestRect, lpSrcRect);
+            return BlitFrom(*sourceSurface, lpDestRect, lpSrcRect, false);
         }
 
         return DDERR_UNSUPPORTED;
     }
 
+    HRESULT WINAPI DirectDrawSurfaceImpl::BltFast(DWORD dwX, DWORD dwY, LPDIRECTDRAWSURFACE lpDDSrcSurface, LPRECT lpSrcRect, DWORD dwTrans)
+    {
+        if (!lpDDSrcSurface) return DDERR_INVALIDPARAMS;
+        auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
+        if (!sourceSurface) return DDERR_INVALIDPARAMS;
+
+        RECT destRect{};
+        destRect.left = static_cast<LONG>(dwX);
+        destRect.top = static_cast<LONG>(dwY);
+        if (lpSrcRect) {
+            destRect.right = destRect.left + RectWidth(*lpSrcRect);
+            destRect.bottom = destRect.top + RectHeight(*lpSrcRect);
+        } else {
+            destRect.right = destRect.left + sourceSurface->GetWidth();
+            destRect.bottom = destRect.top + sourceSurface->GetHeight();
+        }
+
+        bool useKey = (dwTrans & DDBLTFAST_SRCCOLORKEY) != 0;
+        return BlitFrom(*sourceSurface, &destRect, lpSrcRect, useKey);
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::SetClipper(LPDIRECTDRAWCLIPPER lpDDClipper)
+    {
+        if (clipper_) clipper_->Release();
+        clipper_ = lpDDClipper;
+        if (clipper_) clipper_->AddRef();
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::SetPalette(LPDIRECTDRAWPALETTE lpDDPalette)
+    {
+        if (palette_) palette_->Release();
+        palette_ = lpDDPalette;
+        if (palette_) palette_->AddRef();
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::IsLost()
+    {
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::Restore()
+    {
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::GetDC(HDC* lphDC)
+    {
+        if (lphDC) *lphDC = nullptr;
+        return DDERR_UNSUPPORTED;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::ReleaseDC(HDC hDC)
+    {
+        (void)hDC;
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::GetSurfaceDesc(LPDDSURFACEDESC lpDDSurfaceDesc)
+    {
+        if (!lpDDSurfaceDesc) return DDERR_INVALIDPARAMS;
+        if (lpDDSurfaceDesc->dwSize != sizeof(DDSURFACEDESC)) return DDERR_INVALIDPARAMS;
+
+        lpDDSurfaceDesc->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS | DDSD_PIXELFORMAT;
+        lpDDSurfaceDesc->dwWidth = static_cast<DWORD>(width_);
+        lpDDSurfaceDesc->dwHeight = static_cast<DWORD>(height_);
+        lpDDSurfaceDesc->ddsCaps.dwCaps = (type_ == SurfaceType::Primary) ? DDSCAPS_PRIMARYSURFACE : DDSCAPS_OFFSCREENPLAIN;
+        
+        lpDDSurfaceDesc->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+        lpDDSurfaceDesc->ddpfPixelFormat.dwFlags = (bpp_ == 8) ? 0x00000020L : 0x00000040L; // DDPF_PALETTEINDEXED8 : DDPF_RGB
+        lpDDSurfaceDesc->ddpfPixelFormat.dwRGBBitCount = static_cast<DWORD>(bpp_);
+        if (bpp_ == 32) {
+            lpDDSurfaceDesc->ddpfPixelFormat.dwRBitMask = 0x00FF0000;
+            lpDDSurfaceDesc->ddpfPixelFormat.dwGBitMask = 0x0000FF00;
+            lpDDSurfaceDesc->ddpfPixelFormat.dwBBitMask = 0x000000FF;
+        }
+
+        if (type_ == SurfaceType::Offscreen) {
+            lpDDSurfaceDesc->dwFlags |= DDSD_PITCH | DDSD_LPSURFACE;
+            lpDDSurfaceDesc->lPitch = static_cast<LONG>(width_ * (bpp_ / 8));
+            lpDDSurfaceDesc->lpSurface = const_cast<uint8_t*>(pixels_.data());
+        }
+
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::Lock(LPRECT lpDestRect, LPDDSURFACEDESC lpDDSurfaceDesc, DWORD dwFlags, HANDLE hEvent)
+    {
+        (void)lpDestRect; (void)dwFlags; (void)hEvent;
+        return GetSurfaceDesc(lpDDSurfaceDesc);
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::Unlock(LPVOID lpSurfaceData)
+    {
+        (void)lpSurfaceData;
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawSurfaceImpl::SetColorKey(DWORD dwFlags, LPDDCOLORKEY lpDDColorKey)
+    {
+        if (dwFlags & DDCKEY_SRCBLT) {
+            if (lpDDColorKey) {
+                colorKey_ = *lpDDColorKey;
+                hasSrcColorKey_ = true;
+            } else {
+                hasSrcColorKey_ = false;
+            }
+            return DD_OK;
+        }
+        return DDERR_UNSUPPORTED;
+    }
+
     HRESULT WINAPI DirectDrawSurfaceImpl::Flip(LPDIRECTDRAWSURFACE lpDDSurfaceTargetOverride, DWORD dwFlags)
     {
-        (void)dwFlags;
+        (void)dwFlags; (void)lpDDSurfaceTargetOverride;
 
-        if (type_ != SurfaceType::Primary || !owner_ || !lpDDSurfaceTargetOverride) {
+        if (type_ != SurfaceType::Primary || !owner_ || !owner_->renderer_) {
             return DDERR_UNSUPPORTED;
         }
 
-        auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSurfaceTargetOverride);
-        if (!sourceSurface) {
-            return DDERR_INVALIDPARAMS;
-        }
-
-        return owner_->PresentSurface(*sourceSurface, nullptr, nullptr);
+        SDL_RenderPresent(owner_->renderer_);
+        return DD_OK;
     }
 
     DirectDrawImpl::DirectDrawImpl()
@@ -342,23 +604,31 @@ namespace {
 
         int width = 640;
         int height = 480;
+        int bpp = 32;
+
         if (primary) {
             if (sdlWindow_) {
                 SDL_GetWindowSize(sdlWindow_, &width, &height);
             }
         } else {
-            if ((lpDDSurfaceDesc->dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) != (DDSD_WIDTH | DDSD_HEIGHT)) {
+            if ((lpDDSurfaceDesc->dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) == 0) {
                 return DDERR_INVALIDPARAMS;
             }
             width = static_cast<int>(lpDDSurfaceDesc->dwWidth);
             height = static_cast<int>(lpDDSurfaceDesc->dwHeight);
+            if (lpDDSurfaceDesc->dwFlags & DDSD_PIXELFORMAT) {
+                bpp = static_cast<int>(lpDDSurfaceDesc->ddpfPixelFormat.dwRGBBitCount);
+            }
         }
+
+        if (bpp != 8 && bpp != 32) bpp = 32;
 
         auto* surface = new (std::nothrow) DirectDrawSurfaceImpl(this,
                                                                   primary ? DirectDrawSurfaceImpl::SurfaceType::Primary
                                                                           : DirectDrawSurfaceImpl::SurfaceType::Offscreen,
                                                                   width,
-                                                                  height);
+                                                                  height,
+                                                                  bpp);
         if (!surface) {
             return DDERR_OUTOFMEMORY;
         }
@@ -367,7 +637,28 @@ namespace {
         return DD_OK;
     }
 
-    HRESULT DirectDrawImpl::PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect)
+    HRESULT WINAPI DirectDrawImpl::SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP)
+    {
+        (void)dwWidth; (void)dwHeight; (void)dwBPP;
+        return DD_OK;
+    }
+
+    HRESULT WINAPI DirectDrawImpl::CreatePalette(DWORD dwFlags, LPPALETTEENTRY lpColorTable, LPDIRECTDRAWPALETTE* lplpDDPalette, IUnknown* pUnkOuter)
+    {
+        if (!lplpDDPalette || pUnkOuter) return DDERR_INVALIDPARAMS;
+        *lplpDDPalette = new (std::nothrow) DirectDrawPaletteImpl(dwFlags, lpColorTable);
+        return (*lplpDDPalette) ? DD_OK : DDERR_OUTOFMEMORY;
+    }
+
+    HRESULT WINAPI DirectDrawImpl::CreateClipper(DWORD dwFlags, LPDIRECTDRAWCLIPPER* lplpDDClipper, IUnknown* pUnkOuter)
+    {
+        (void)dwFlags;
+        if (!lplpDDClipper || pUnkOuter) return DDERR_INVALIDPARAMS;
+        *lplpDDClipper = new (std::nothrow) DirectDrawClipperImpl();
+        return (*lplpDDClipper) ? DD_OK : DDERR_OUTOFMEMORY;
+    }
+
+    HRESULT DirectDrawImpl::PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, float rotationAngle)
     {
         if (!renderer_ || source.GetType() != DirectDrawSurfaceImpl::SurfaceType::Offscreen) {
             return DDERR_UNSUPPORTED;
@@ -381,7 +672,34 @@ namespace {
             return DDERR_GENERIC;
         }
 
-        SDL_UpdateTexture(source.texture_, NULL, source.GetPixels().data(), source.GetWidth() * 4);
+        if (source.GetBPP() == 8) {
+            // Convert 8-bit to 32-bit using palette
+            std::vector<uint32_t> temp(static_cast<size_t>(source.GetWidth()) * static_cast<size_t>(source.GetHeight()));
+            PALETTEENTRY entries[256];
+            bool hasPalette = false;
+            if (source.palette_) {
+                source.palette_->GetEntries(0, 0, 256, entries);
+                hasPalette = true;
+            }
+
+            for (size_t i = 0; i < temp.size(); ++i) {
+                uint8_t index = source.GetPixels()[i];
+                if (hasPalette) {
+                    temp[i] = (static_cast<uint32_t>(entries[index].peRed) << 16) |
+                              (static_cast<uint32_t>(entries[index].peGreen) << 8) |
+                              (static_cast<uint32_t>(entries[index].peBlue)) |
+                              0xFF000000;
+                } else {
+                    temp[i] = (static_cast<uint32_t>(index) << 16) |
+                              (static_cast<uint32_t>(index) << 8) |
+                              (static_cast<uint32_t>(index)) |
+                              0xFF000000;
+                }
+            }
+            SDL_UpdateTexture(source.texture_, NULL, temp.data(), source.GetWidth() * 4);
+        } else {
+            SDL_UpdateTexture(source.texture_, NULL, source.GetPixels().data(), source.GetWidth() * 4);
+        }
 
         const RECT src = srcRect ? ClampRect(*srcRect, source.GetWidth(), source.GetHeight()) : GetFullRect(source.GetWidth(), source.GetHeight());
 
@@ -393,10 +711,11 @@ namespace {
         SDL_FRect srect = { (float)src.left, (float)src.top, (float)RectWidth(src), (float)RectHeight(src) };
         SDL_FRect drect = { (float)dst.left, (float)dst.top, (float)RectWidth(dst), (float)RectHeight(dst) };
 
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
-        SDL_RenderClear(renderer_);
-        SDL_RenderTexture(renderer_, source.texture_, &srect, &drect);
-        SDL_RenderPresent(renderer_);
+        if (rotationAngle != 0.0f) {
+            SDL_RenderTextureRotated(renderer_, source.texture_, &srect, &drect, (double)rotationAngle, NULL, SDL_FLIP_NONE);
+        } else {
+            SDL_RenderTexture(renderer_, source.texture_, &srect, &drect);
+        }
 
         return DD_OK;
     }

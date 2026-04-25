@@ -22,7 +22,11 @@ DirectX 3 (subset)
 ```
 
 * **Free Direct** → reimplements selected DirectX 3 APIs (2D only)
-* **SDL 3** → internal implementation detail used as a backend
+* **DirectDraw** → Current real implementation focus using SDL3.
+* **DirectSound** → Currently stubbed (dummy implementations).
+* **DirectPlay** → Currently stubbed (dummy implementations).
+* **Direct3D** → Not implemented (not used by target code).
+* **SDL 3** → Internal implementation detail used as a backend.
 
 ---
 
@@ -46,11 +50,12 @@ DirectX 3 (subset)
 
 ## Features
 
-* Surface / bitmap rendering
-* Basic blitting operations
-* Transparency handling (color key)
-* Simple sprite rendering
-* Internal SDL3 renderer mapping
+* **DirectDraw**: Narrow subset implemented using SDL3.
+* **DirectSound**: Declarations and dummy stubs provided.
+* **DirectPlay**: Declarations and dummy stubs provided.
+* Transparency handling (color key).
+* 8-bit paletted surface support (conversion to RGBA32).
+* Lock/Unlock for direct pixel access.
 
 ---
 

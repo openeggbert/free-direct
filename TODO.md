@@ -218,26 +218,47 @@ Ensure controlled include paths or rename internally.
 
 * `DirectDrawCreate`
 * `SetCooperativeLevel`
-* `CreateSurface`
-* `Blt`:
-
+* `CreateSurface` (Primary, Offscreen)
+* `CreatePalette`
+* `CreateClipper`
+* `SetDisplayMode` (Stub)
+* `Blt` / `BltFast`:
     * color fill
     * surface-to-surface copy
+    * source color key transparency
+* `Lock` / `Unlock`: direct pixel access
+* `GetSurfaceDesc`: returns width, height, pitch, pixel format
+* `SetPalette` / `SetClipper`: basic support
+* 8-bit paletted surfaces: automatic conversion to RGBA32 on present
 * simplified present via primary surface
+
+### DirectSound Subset (Stubs)
+
+* `DirectSoundCreate`
+* `SetCooperativeLevel`
+* `CreateSoundBuffer`: allocates dummy memory
+* `Lock` / `Unlock`: provides access to dummy memory
+* `Play` / `Stop` / `GetStatus`: consistent dummy behavior
+
+### DirectPlay Subset (Stubs)
+
+* `DirectPlayCreate`
+* `DirectPlayEnumerateA` / `DirectPlayEnumerateW`
+* `EnumSessions` / `Open` / `CreatePlayer`
+* `Send` / `Receive`: dummy behavior
 
 ---
 
 ## 🚧 Not Yet Implemented
 
-* COM correctness
-* Pixel formats
-* Lock / Unlock
-* Clipper support
-* Palette support
+* COM correctness (`QueryInterface` etc.)
+* Accurate Pixel formats (mostly fixed to RGBA32 internally)
 * Real flipping chain
 * Multi-window message routing
 * Accurate message filtering
 * GDI / HDC support
+* Real audio output (DirectSound)
+* Real networking (DirectPlay)
 
 ---
 
