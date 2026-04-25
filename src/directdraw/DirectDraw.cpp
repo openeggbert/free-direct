@@ -1,11 +1,11 @@
+/**
+ * @file DirectDraw.cpp
+ * @brief SDL3-based internal implementation of DirectDraw subset.
+ * @note Status: IMPLEMENTED (Minimal backend mapping)
+ */
 #include "ddraw.h"
 
 #include <SDL3/SDL.h>
-
-#include "CNA/Internal/Backends/Common/IGraphicsBackend.hpp"
-#include "CNA/Internal/Graphics/ImageData.hpp"
-#include "Microsoft/Xna/Framework/Color.hpp"
-#include "Microsoft/Xna/Framework/Rectangle.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -15,15 +15,6 @@
 #include <vector>
 
 namespace {
-    using CNA::Internal::Backends::CreateGraphicsBackend;
-    using CNA::Internal::Backends::GraphicsBackendCreateArgs;
-    using CNA::Internal::Backends::IGraphicsBackend;
-    using CNA::Internal::Backends::ISpriteBatchBackend;
-    using CNA::Internal::Backends::ITextureBackend;
-    using CNA::Internal::Graphics::ImageData;
-    using Microsoft::Xna::Framework::Color;
-    using Microsoft::Xna::Framework::Rectangle;
-
     class DirectDrawImpl;
 
     class DirectDrawSurfaceImpl final : public IDirectDrawSurface {
@@ -34,6 +25,7 @@ namespace {
         };
 
         DirectDrawSurfaceImpl(DirectDrawImpl* owner, SurfaceType type, int width, int height);
+        ~DirectDrawSurfaceImpl() override;
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override;
         ULONG WINAPI AddRef() override;
@@ -54,17 +46,20 @@ namespace {
         HRESULT BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect);
 
     private:
+        friend class DirectDrawImpl;
         std::atomic<ULONG> refCount_;
         DirectDrawImpl* owner_;
         SurfaceType type_;
         int width_;
         int height_;
         std::vector<uint8_t> pixels_;
+        SDL_Texture* texture_;
     };
 
     class DirectDrawImpl final : public IDirectDraw {
     public:
         DirectDrawImpl();
+        ~DirectDrawImpl() override;
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override;
         ULONG WINAPI AddRef() override;
@@ -74,14 +69,13 @@ namespace {
                                      LPDIRECTDRAWSURFACE* lplpDDSurface,
                                      IUnknown* pUnkOuter) override;
 
-        HRESULT PresentSurface(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect);
+        HRESULT PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect);
 
     private:
         std::atomic<ULONG> refCount_;
         HWND hwnd_;
         SDL_Window* sdlWindow_;
-        std::unique_ptr<IGraphicsBackend> backend_;
-        std::unique_ptr<ISpriteBatchBackend> spriteBatch_;
+        SDL_Renderer* renderer_;
     };
 
     RECT GetFullRect(const int width, const int height)
@@ -120,10 +114,18 @@ namespace {
           owner_(owner),
           type_(type),
           width_(width),
-          height_(height)
+          height_(height),
+          texture_(nullptr)
     {
         if (type_ == SurfaceType::Offscreen) {
             pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 4u, 0);
+        }
+    }
+
+    DirectDrawSurfaceImpl::~DirectDrawSurfaceImpl()
+    {
+        if (texture_) {
+            SDL_DestroyTexture(texture_);
         }
     }
 
@@ -264,8 +266,16 @@ namespace {
     DirectDrawImpl::DirectDrawImpl()
         : refCount_(1),
           hwnd_(NULL),
-          sdlWindow_(nullptr)
+          sdlWindow_(nullptr),
+          renderer_(nullptr)
     {
+    }
+
+    DirectDrawImpl::~DirectDrawImpl()
+    {
+        if (renderer_) {
+            SDL_DestroyRenderer(renderer_);
+        }
     }
 
     HRESULT WINAPI DirectDrawImpl::QueryInterface(const GUID& riid, void** ppvObject)
@@ -300,15 +310,12 @@ namespace {
         hwnd_ = hWnd;
         sdlWindow_ = reinterpret_cast<SDL_Window*>(hwnd_);
 
-        GraphicsBackendCreateArgs createArgs{};
-        createArgs.window = sdlWindow_;
-        backend_ = CreateGraphicsBackend(createArgs);
-        if (!backend_) {
-            return DDERR_GENERIC;
+        if (renderer_) {
+            SDL_DestroyRenderer(renderer_);
         }
 
-        spriteBatch_ = backend_->CreateSpriteBatch();
-        if (!spriteBatch_) {
+        renderer_ = SDL_CreateRenderer(sdlWindow_, NULL);
+        if (!renderer_) {
             return DDERR_GENERIC;
         }
 
@@ -360,44 +367,36 @@ namespace {
         return DD_OK;
     }
 
-    HRESULT DirectDrawImpl::PresentSurface(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect)
+    HRESULT DirectDrawImpl::PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect)
     {
-        if (!backend_ || !spriteBatch_ || source.GetType() != DirectDrawSurfaceImpl::SurfaceType::Offscreen) {
+        if (!renderer_ || source.GetType() != DirectDrawSurfaceImpl::SurfaceType::Offscreen) {
             return DDERR_UNSUPPORTED;
         }
 
-        ImageData imageData{};
-        imageData.width = source.GetWidth();
-        imageData.height = source.GetHeight();
-        imageData.pixels = source.GetPixels();
+        if (!source.texture_) {
+            source.texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, source.GetWidth(), source.GetHeight());
+        }
 
-        std::unique_ptr<ITextureBackend> texture = backend_->CreateTexture(imageData);
-        if (!texture) {
+        if (!source.texture_) {
             return DDERR_GENERIC;
         }
 
-        const RECT src = srcRect ? ClampRect(*srcRect, source.GetWidth(), source.GetHeight()) : GetFullRect(source.GetWidth(), source.GetHeight());
-        RECT dst = {};
-        if (destRect) {
-            int viewportWidth = 0;
-            int viewportHeight = 0;
-            backend_->GetViewportSize(viewportWidth, viewportHeight);
-            dst = ClampRect(*destRect, viewportWidth, viewportHeight);
-        } else {
-            int viewportWidth = 0;
-            int viewportHeight = 0;
-            backend_->GetViewportSize(viewportWidth, viewportHeight);
-            dst = GetFullRect(viewportWidth, viewportHeight);
-        }
+        SDL_UpdateTexture(source.texture_, NULL, source.GetPixels().data(), source.GetWidth() * 4);
 
-        backend_->Clear(0.0f, 0.0f, 0.0f, 1.0f);
-        spriteBatch_->Begin();
-        spriteBatch_->Draw(*texture,
-                           Rectangle(src.left, src.top, RectWidth(src), RectHeight(src)),
-                           Rectangle(dst.left, dst.top, RectWidth(dst), RectHeight(dst)),
-                           Color(255, 255, 255, 255));
-        spriteBatch_->End();
-        backend_->Present();
+        const RECT src = srcRect ? ClampRect(*srcRect, source.GetWidth(), source.GetHeight()) : GetFullRect(source.GetWidth(), source.GetHeight());
+
+        int winW, winH;
+        SDL_GetRenderOutputSize(renderer_, &winW, &winH);
+
+        const RECT dst = destRect ? ClampRect(*destRect, winW, winH) : GetFullRect(winW, winH);
+
+        SDL_FRect srect = { (float)src.left, (float)src.top, (float)RectWidth(src), (float)RectHeight(src) };
+        SDL_FRect drect = { (float)dst.left, (float)dst.top, (float)RectWidth(dst), (float)RectHeight(dst) };
+
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+        SDL_RenderClear(renderer_);
+        SDL_RenderTexture(renderer_, source.texture_, &srect, &drect);
+        SDL_RenderPresent(renderer_);
 
         return DD_OK;
     }

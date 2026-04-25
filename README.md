@@ -3,7 +3,7 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
 
-**Free Direct** is an experimental C++ project that aims to reimplement a **subset of DirectX 3 (2D)** on top of the **CNA** library.
+**Free Direct** is an experimental C++ project that aims to reimplement a **subset of DirectX 3 (2D)** using **SDL3** as a backend.
 
 The goal is not full DirectX compatibility, but a **focused, minimal implementation** sufficient to run specific legacy games (e.g. *Speedy Blupi*) while remaining portable and modern.
 
@@ -18,14 +18,11 @@ DirectX 3 (subset)
         ↓
    Free Direct
         ↓
-       CNA
-        ↓
      SDL 3
 ```
 
 * **Free Direct** → reimplements selected DirectX 3 APIs (2D only)
-* **CNA** → XNA-like abstraction layer written in C++
-* **SDL 3** → low-level cross-platform backend
+* **SDL 3** → internal implementation detail used as a backend
 
 ---
 
@@ -34,7 +31,7 @@ DirectX 3 (subset)
 * Recreate a **minimal subset of DirectX 3 (2D)** in modern C++
 * Enable running legacy DirectX-based games without original dependencies
 * Keep the implementation **simple, readable, and hackable**
-* Build everything on top of your existing **CNA architecture**
+* Use **SDL3** internally for cross-platform rendering
 * Maintain **cross-platform support** (Linux, Windows, macOS, Android, Web)
 
 ---
@@ -47,48 +44,20 @@ DirectX 3 (subset)
 
 ---
 
-## Features (Planned / In Progress)
+## Features
 
 * Surface / bitmap rendering
 * Basic blitting operations
 * Transparency handling (color key)
 * Simple sprite rendering
-* Timing and game loop integration via CNA
-* Input abstraction via CNA
+* Internal SDL3 renderer mapping
 
 ---
 
 ## Technologies
 
-* **C++17**
-* **CNA** (custom XNA-like framework in C++)
-* **SDL 3** (platform abstraction layer)
-
----
-
-## Example Use Case
-
-Free Direct is primarily designed to support:
-
-* Porting old DirectX 3 games to modern platforms
-* Running reverse-engineered games
-* Studying legacy graphics APIs in a simplified environment
-
----
-
-## Project Structure (Conceptual)
-
-```
-freedirect/
- ├── include/
- │    ├── FreeDirect/
- │    │    ├── Surface.hpp
- │    │    ├── Device.hpp
- │    │    └── ...
- ├── src/
- ├── examples/
- └── screenshots/
-```
+* **C++20**
+* **SDL 3** (internal backend)
 
 ---
 
@@ -98,27 +67,15 @@ freedirect/
 git clone https://github.com/openeggbert/free-direct.git
 cd free-direct
 
-mkdir build
-cd build
-cmake ..
-make
+cmake -B build
+cmake --build build
 ```
 
 Run example:
 
 ```bash
-./FreeDirectDemo
+./build/FREE_DIRECT
 ```
-
----
-
-## Screenshots
-
-![Screenshot 1](screenshots/screenshot1.png)
-Basic rendering using Free Direct over CNA.
-
-![Screenshot 2](screenshots/screenshot2.png)
-Example of sprite drawing and background handling.
 
 ---
 
@@ -129,19 +86,8 @@ Example of sprite drawing and background handling.
 Current focus:
 
 * Designing API compatible subset of DirectX 3 (2D)
-* Integrating with CNA rendering pipeline
-* Making first legacy game run successfully
-
----
-
-## Long-Term Vision
-
-* Stable subset sufficient for at least one full game
-* Expandable architecture for additional DirectX features
-* Optional future support for:
-
-  * Direct3D (limited)
-  * More advanced rendering paths (OpenGL / Vulkan via CNA backend)
+* Implementing DirectDraw surfaces using SDL3 textures
+* Supporting basic blitting and presentation
 
 ---
 

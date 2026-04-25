@@ -1,3 +1,8 @@
+/**
+ * @file ddraw.h
+ * @brief Narrow DirectX 3 / DirectDraw subset reimplementation.
+ * @note Status: PARTIAL
+ */
 #ifndef FREE_DIRECT_DDRAW_H
 #define FREE_DIRECT_DDRAW_H
 
@@ -64,10 +69,15 @@ HRESULT WINAPI DirectDrawCreate(const GUID* lpGUID, LPDIRECTDRAW* lplpDD, IUnkno
 
 class IDirectDraw {
 public:
+    /** @note Status: STUB */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
+    /** @note Status: IMPLEMENTED */
     virtual ULONG WINAPI AddRef() = 0;
+    /** @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
+    /** @note Status: IMPLEMENTED (Minimal SDL3 mapping) */
     virtual HRESULT WINAPI SetCooperativeLevel(HWND hWnd, DWORD dwFlags) = 0;
+    /** @note Status: PARTIAL (Supports Primary and Offscreen) */
     virtual HRESULT WINAPI CreateSurface(const DDSURFACEDESC* lpDDSurfaceDesc,
                                          LPDIRECTDRAWSURFACE* lplpDDSurface,
                                          IUnknown* pUnkOuter) = 0;
@@ -78,14 +88,19 @@ protected:
 
 class IDirectDrawSurface {
 public:
+    /** @note Status: STUB */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
+    /** @note Status: IMPLEMENTED */
     virtual ULONG WINAPI AddRef() = 0;
+    /** @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
+    /** @note Status: PARTIAL (ColorFill and Surface-to-Surface Blit) */
     virtual HRESULT WINAPI Blt(LPRECT lpDestRect,
                                LPDIRECTDRAWSURFACE lpDDSrcSurface,
                                LPRECT lpSrcRect,
                                DWORD dwFlags,
                                LPDDBLTFX lpDDBltFx) = 0;
+    /** @note Status: IMPLEMENTED (Simplified Present) */
     virtual HRESULT WINAPI Flip(LPDIRECTDRAWSURFACE lpDDSurfaceTargetOverride, DWORD dwFlags) = 0;
 
 protected:

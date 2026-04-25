@@ -12,7 +12,7 @@ LRESULT CALLBACK DemoWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM l
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-FREE_API_IMPLEMENT_WINMAIN()
+int  WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow); int main(int argc, char** argv) { return FreeApiRunWinMain(&WinMain, argc, argv); } int  WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     WNDCLASSA windowClass{};
     windowClass.lpfnWndProc = DemoWindowProc;
