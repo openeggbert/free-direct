@@ -21,6 +21,12 @@ extern "C" {
 #define FAILED(hr) (((HRESULT)(hr)) < 0)
 #endif
 
+/**
+ * @name DirectDraw result codes
+ * @brief HRESULT values used by the compatibility subset.
+ * @note Status: PARTIAL
+ */
+/** @{ */
 #define DD_OK ((HRESULT)0L)
 #define DDERR_GENERIC ((HRESULT)0x88760000L)
 #define DDERR_INVALIDPARAMS ((HRESULT)0x88760064L)
@@ -124,7 +130,14 @@ extern "C" {
 #define DDERR_CANTPAGEUNLOCK ((HRESULT)0x8876105DL)
 #define DDERR_NOTPAGELOCKED ((HRESULT)0x8876105EL)
 #define DDERR_NOTINITIALIZED ((HRESULT)0x8876105FL)
+/** @} */
 
+/**
+ * @name Surface capability and description flags
+ * @brief Legacy DirectDraw bit flags required by the current game path.
+ * @note Status: PARTIAL
+ */
+/** @{ */
 #define DDSCAPS_PRIMARYSURFACE 0x00000200L
 #define DDSCAPS_OFFSCREENPLAIN 0x00000040L
 #define DDSCAPS_SYSTEMMEMORY   0x00000800L
@@ -153,16 +166,32 @@ extern "C" {
 
 #define DDPF_RGB              0x00000040L
 #define DDPF_PALETTEINDEXED8  0x00000020L
+/** @} */
 
+/**
+ * @brief Color key range used for transparent blits.
+ * @note Status: PARTIAL
+ */
 typedef struct _DDCOLORKEY {
     DWORD dwColorSpaceLowValue;
     DWORD dwColorSpaceHighValue;
 } DDCOLORKEY, *LPDDCOLORKEY;
 
+/**
+ * @brief Surface capability mask container.
+ * @note Status: PARTIAL
+ */
 typedef struct _DDSCAPS {
     DWORD dwCaps;
 } DDSCAPS, *LPDDSCAPS;
 
+/**
+ * @brief Pixel format descriptor for DirectDraw surfaces.
+ *
+ * The compatibility layer primarily supports RGB and palettized 8-bit layouts
+ * used by the current game path.
+ * @note Status: PARTIAL
+ */
 typedef struct _DDPIXELFORMAT {
     DWORD dwSize;
     DWORD dwFlags;
@@ -191,6 +220,12 @@ typedef struct _DDPIXELFORMAT {
     };
 } DDPIXELFORMAT, *LPDDPIXELFORMAT;
 
+/**
+ * @brief Surface descriptor used in create/lock/get operations.
+ *
+ * Only a subset of fields is interpreted depending on API call and flags.
+ * @note Status: PARTIAL
+ */
 typedef struct _DDSURFACEDESC {
     DWORD dwSize;
     DWORD dwFlags;
@@ -217,6 +252,13 @@ typedef struct _DDSURFACEDESC {
     DDSCAPS ddsCaps;
 } DDSURFACEDESC, *LPDDSURFACEDESC;
 
+/**
+ * @brief Blit effect parameters.
+ *
+ * The compatibility layer currently uses only fields required for color fill
+ * and keying in existing game code paths.
+ * @note Status: PARTIAL
+ */
 typedef struct _DDBLTFX {
     DWORD dwSize;
     DWORD dwDDFX;
@@ -258,6 +300,13 @@ typedef struct IDirectDrawSurface* LPDIRECTDRAWSURFACE;
 typedef struct IDirectDrawPalette* LPDIRECTDRAWPALETTE;
 typedef struct IDirectDrawClipper* LPDIRECTDRAWCLIPPER;
 
+/**
+ * @brief Creates a DirectDraw object instance.
+ *
+ * Internally maps DirectDraw behavior to an SDL-backed implementation while
+ * preserving legacy API shape.
+ * @note Status: PARTIAL
+ */
 HRESULT WINAPI DirectDrawCreate(const GUID* lpGUID, LPDIRECTDRAW* lplpDD, IUnknown* pUnkOuter);
 
 #ifdef __cplusplus
@@ -265,10 +314,15 @@ HRESULT WINAPI DirectDrawCreate(const GUID* lpGUID, LPDIRECTDRAW* lplpDD, IUnkno
 
 class IDirectDrawPalette {
 public:
+    /** @brief COM query method. @note Status: STUB */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
+    /** @brief Increments object reference count. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI AddRef() = 0;
+    /** @brief Decrements object reference count. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
+    /** @brief Reads palette entries from the object. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI GetEntries(DWORD dwFlags, DWORD dwBase, DWORD dwNumEntries, LPPALETTEENTRY lpEntries) = 0;
+    /** @brief Writes palette entries into the object. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI SetEntries(DWORD dwFlags, DWORD dwBase, DWORD dwNumEntries, LPPALETTEENTRY lpEntries) = 0;
 
 protected:
@@ -277,9 +331,13 @@ protected:
 
 class IDirectDrawClipper {
 public:
+    /** @brief COM query method. @note Status: STUB */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
+    /** @brief Increments object reference count. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI AddRef() = 0;
+    /** @brief Decrements object reference count. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
+    /** @brief Associates clipper object with an HWND. @note Status: PARTIAL */
     virtual HRESULT WINAPI SetHWnd(DWORD dwFlags, HWND hWnd) = 0;
 
 protected:

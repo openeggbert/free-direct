@@ -16,6 +16,12 @@ typedef struct IDirectPlay* LPDIRECTPLAY;
 typedef struct IDirectPlay2A* LPDIRECTPLAY2;
 typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 
+/**
+ * @name DirectPlay result codes
+ * @brief HRESULT values used by this compatibility subset.
+ * @note Status: STUB
+ */
+/** @{ */
 #define DP_OK ((HRESULT)0L)
 #define DPERR_INVALIDPARAMS ((HRESULT)0x88770005L)
 #define DPERR_OUTOFMEMORY   ((HRESULT)0x8877000EL)
@@ -52,11 +58,18 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 #define DPERR_UNKNOWNAPPLICATION ((HRESULT)0x8877002EL)
 #define DPERR_INVALIDINTERFACE ((HRESULT)0x8877002FL)
 #define DPERR_NOTLOBBIED ((HRESULT)0x88770030L)
+/** @} */
 
 #ifndef E_NOINTERFACE
 #define E_NOINTERFACE ((HRESULT)0x80004002L)
 #endif
 
+/**
+ * @name Session and send flags
+ * @brief Legacy DirectPlay flags required by the game build.
+ * @note Status: STUB
+ */
+/** @{ */
 #define DPENUMSESSIONS_AVAILABLE 0x00000001L
 
 #define DPOPEN_CREATE       0x00000001L
@@ -71,9 +84,20 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 
 #define DPSESSION_KEEPALIVE   0x00000008L
 #define DPSESSION_MIGRATEHOST 0x00000004L
+/** @} */
 
+/**
+ * @brief DirectPlay player identifier type.
+ *
+ * Uses pointer-sized storage to stay ABI-safe on both 32-bit and 64-bit hosts.
+ * @note Status: PARTIAL
+ */
 typedef DWORD_PTR DPID, *LPDPID;
 
+/**
+ * @brief Player/group display names used by DirectPlay APIs.
+ * @note Status: STUB
+ */
 typedef struct _DPNAME {
     DWORD dwSize;
     DWORD dwFlags;
@@ -89,6 +113,10 @@ typedef struct _DPNAME {
     };
 } DPNAME, *LPDPNAME;
 
+/**
+ * @brief Session descriptor used for enumeration and open/join calls.
+ * @note Status: STUB
+ */
 typedef struct _DPSESSIONDESC2 {
     DWORD dwSize;
     DWORD dwFlags;
@@ -114,14 +142,41 @@ typedef struct _DPSESSIONDESC2 {
     DWORD dwUser4;
 } DPSESSIONDESC2, *LPDPSESSIONDESC2;
 
+/**
+ * @brief Callback signature used by `DirectPlayEnumerateA`.
+ * @note Status: STUB
+ */
 typedef BOOL (CALLBACK *LPDPENUMDPCALLBACKA)(LPGUID, LPSTR, DWORD, DWORD, LPVOID);
+/**
+ * @brief Wide callback signature used by `DirectPlayEnumerateW`.
+ * @note Status: STUB
+ */
 typedef BOOL (CALLBACK *LPDPENUMDPCALLBACKW)(LPGUID, LPWSTR, DWORD, DWORD, LPVOID);
 
+/**
+ * @brief Callback used by `IDirectPlay2A::EnumSessions`.
+ * @note Status: STUB
+ */
 typedef BOOL (CALLBACK *LPDPENUMSESSIONS_CALLBACK2)(LPDPSESSIONDESC2, LPDWORD, DWORD, LPVOID);
 typedef LPDPENUMSESSIONS_CALLBACK2 LPDPENUMSESSIONSCALLBACK2;
 
+/**
+ * @brief Enumerates available DirectPlay service providers (ANSI).
+ * @note Status: STUB
+ */
 HRESULT WINAPI DirectPlayEnumerateA(LPDPENUMDPCALLBACKA lpEnumCallback, LPVOID lpContext);
+/**
+ * @brief Enumerates available DirectPlay service providers (Unicode).
+ * @note Status: STUB
+ */
 HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID lpContext);
+/**
+ * @brief Creates a DirectPlay object.
+ *
+ * Current implementation only provides a minimal object to satisfy legacy
+ * initialization and compile-time expectations.
+ * @note Status: STUB
+ */
 HRESULT WINAPI DirectPlayCreate(LPGUID lpGUID, LPDIRECTPLAY* lplpDP, IUnknown* pUnkOuter);
 
 #ifdef __cplusplus
@@ -135,14 +190,23 @@ static const GUID IID_IDirectPlay2A = {0};
 
 class IDirectPlay2A {
 public:
+    /** @brief COM query method. @note Status: STUB */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
+    /** @brief Increments object reference count. @note Status: STUB */
     virtual ULONG WINAPI AddRef() = 0;
+    /** @brief Decrements object reference count. @note Status: STUB */
     virtual ULONG WINAPI Release() = 0;
+    /** @brief Enumerates sessions. @note Status: STUB */
     virtual HRESULT WINAPI EnumSessions(LPDPSESSIONDESC2 lpEnumSessionsDesc, DWORD dwTimeout, LPDPENUMSESSIONS_CALLBACK2 lpEnumSessionsCallback, LPVOID lpContext, DWORD dwFlags) = 0;
+    /** @brief Opens or creates a session. @note Status: STUB */
     virtual HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) = 0;
+    /** @brief Creates a player endpoint. @note Status: STUB */
     virtual HRESULT WINAPI CreatePlayer(LPDPID lpidPlayer, LPDPNAME lpPlayerName, HANDLE hEvent, LPVOID lpData, DWORD dwDataSize, DWORD dwFlags) = 0;
+    /** @brief Sends a packet to another player. @note Status: STUB */
     virtual HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) = 0;
+    /** @brief Receives a packet from queue. @note Status: STUB */
     virtual HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) = 0;
+    /** @brief Closes active DirectPlay session. @note Status: STUB */
     virtual HRESULT WINAPI Close() = 0;
 
 protected:
@@ -152,8 +216,11 @@ protected:
 // Minimal IDirectPlay for QueryInterface to IDirectPlay2A
 class IDirectPlay {
 public:
+    /** @brief COM query method. @note Status: STUB */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
+    /** @brief Increments object reference count. @note Status: STUB */
     virtual ULONG WINAPI AddRef() = 0;
+    /** @brief Decrements object reference count. @note Status: STUB */
     virtual ULONG WINAPI Release() = 0;
 
 protected:
