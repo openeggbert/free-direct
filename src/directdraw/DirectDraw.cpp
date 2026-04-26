@@ -333,8 +333,6 @@ namespace {
                     const uint8_t r = source.GetPixels()[srcOffset + 0u];
                     const uint8_t g = source.GetPixels()[srcOffset + 1u];
                     const uint8_t b = source.GetPixels()[srcOffset + 2u];
-                    const uint8_t a = source.GetPixels()[srcOffset + 3u];
-
                     if (useSrcColorKey && source.hasSrcColorKey_) {
                         // Assuming color key is in the same format as pixels (simplified)
                         const uint32_t pixelColor = (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
@@ -344,7 +342,9 @@ namespace {
                     pixels_[dstOffset + 0u] = r;
                     pixels_[dstOffset + 1u] = g;
                     pixels_[dstOffset + 2u] = b;
-                    pixels_[dstOffset + 3u] = a;
+                    // PARTIAL: DirectDraw blits are opaque by default; avoid transparent
+                    // desktop-window output when legacy assets have undefined alpha bytes.
+                    pixels_[dstOffset + 3u] = 255;
                 }
             }
         }
@@ -535,9 +535,7 @@ namespace {
 
     DirectDrawImpl::~DirectDrawImpl()
     {
-        if (renderer_) {
-            SDL_DestroyRenderer(renderer_);
-        }
+        if (renderer_) SDL_DestroyRenderer(renderer_);
     }
 
     HRESULT WINAPI DirectDrawImpl::QueryInterface(const GUID& riid, void** ppvObject)
@@ -572,11 +570,25 @@ namespace {
         hwnd_ = hWnd;
         sdlWindow_ = reinterpret_cast<SDL_Window*>(hwnd_);
 
+        SDL_Renderer* windowRenderer = SDL_GetRenderer(sdlWindow_);
+        if (windowRenderer && windowRenderer != renderer_) {
+            // PARTIAL: The legacy game may recreate DirectDraw over the same HWND
+            // during cache/bootstrap. Ensure renderer recreation does not fail due
+            // to an already attached renderer on the SDL window.
+            SDL_DestroyRenderer(windowRenderer);
+        }
+
         if (renderer_) {
             SDL_DestroyRenderer(renderer_);
+            renderer_ = nullptr;
         }
 
         renderer_ = SDL_CreateRenderer(sdlWindow_, NULL);
+        if (!renderer_) {
+            // PARTIAL: Legacy compatibility fallback for environments where
+            // the default renderer cannot be created for the existing window.
+            renderer_ = SDL_CreateRenderer(sdlWindow_, "software");
+        }
         if (!renderer_) {
             return DDERR_GENERIC;
         }
@@ -596,8 +608,14 @@ namespace {
             return DDERR_INVALIDPARAMS;
         }
 
-        const bool primary = (lpDDSurfaceDesc->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE) != 0;
-        const bool offscreen = (lpDDSurfaceDesc->ddsCaps.dwCaps & DDSCAPS_OFFSCREENPLAIN) != 0;
+        const DWORD caps = lpDDSurfaceDesc->ddsCaps.dwCaps;
+        const bool primary = (caps & DDSCAPS_PRIMARYSURFACE) != 0;
+        const bool offscreenPlain = (caps & DDSCAPS_OFFSCREENPLAIN) != 0;
+        const bool systemMemory = (caps & DDSCAPS_SYSTEMMEMORY) != 0;
+
+        // PARTIAL: DX3 compatibility accepts SYSTEMMEMORY-only offscreen surfaces
+        // used by legacy game code during back/mouse surface creation.
+        const bool offscreen = offscreenPlain || systemMemory;
         if (primary == offscreen) {
             return DDERR_INVALIDPARAMS;
         }
@@ -666,6 +684,9 @@ namespace {
 
         if (!source.texture_) {
             source.texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, source.GetWidth(), source.GetHeight());
+            if (source.texture_) {
+                SDL_SetTextureBlendMode(source.texture_, SDL_BLENDMODE_NONE);
+            }
         }
 
         if (!source.texture_) {
