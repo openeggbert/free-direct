@@ -11,7 +11,11 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_subdirectory(../free-api FREE_API)
+set(FREE_API_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+
+if(NOT TARGET free-api)
+    add_subdirectory(../free-api FREE_API)
+endif()
 
 add_executable(FREE_DIRECT
         src/Main.cpp
@@ -27,7 +31,7 @@ target_include_directories(FREE_DIRECT
 
 target_link_libraries(FREE_DIRECT
         PRIVATE
-        free-api
+        free-api::free-api
         SDL3::SDL3
         SDL3_image::SDL3_image
 )
