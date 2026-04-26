@@ -3,7 +3,7 @@
  * @brief SDL3-based internal implementation of DirectDraw subset.
  * @note Status: IMPLEMENTED (Minimal backend mapping)
  */
-#include "ddraw.h"
+#include <ddraw.h>
 
 #include <SDL3/SDL.h>
 

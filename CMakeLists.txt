@@ -11,27 +11,33 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(FREE_API_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-
 if(NOT TARGET free-api)
+    set(FREE_API_BUILD_TESTS OFF)
     add_subdirectory(../free-api FREE_API)
 endif()
 
-add_executable(FREE_DIRECT
-        src/Main.cpp
+add_library(free-direct)
+
+target_sources(free-direct
+        PRIVATE
         src/directdraw/DirectDraw.cpp
         src/directsound/DirectSound.cpp
         src/directplay/DirectPlay.cpp
 )
 
-target_include_directories(FREE_DIRECT
-        PRIVATE
-        include
+# Intentionally mirrors the legacy DirectX SDK include layout, e.g. #include <ddraw.h>.
+target_include_directories(free-direct
+        PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(FREE_DIRECT
-        PRIVATE
+target_link_libraries(free-direct
+        PUBLIC
         free-api::free-api
+        PRIVATE
         SDL3::SDL3
         SDL3_image::SDL3_image
 )
+
+add_executable(FREE_DIRECT src/Main.cpp)
+target_link_libraries(FREE_DIRECT PRIVATE free-direct)
