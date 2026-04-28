@@ -3,9 +3,9 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
 
-**Free Direct** is an experimental C++ project that aims to reimplement a **subset of DirectX 3 (2D)** using **SDL3** as a backend.
+**Free Direct** is a C++ project that reimplements a **narrow, game-driven subset of DirectX 3 (2D)** using **SDL3** as an internal backend.
 
-The goal is not full DirectX compatibility, but a **focused, minimal implementation** sufficient to run specific legacy games (e.g. *Speedy Blupi*) while remaining portable and modern.
+The goal is not full DirectX compatibility, but a **focused, minimal implementation** sufficient to run specific legacy games (e.g. *Speedy Blupi*) while remaining portable.
 
 ---
 
@@ -22,11 +22,11 @@ DirectX 3 (subset)
 ```
 
 * **Free Direct** → reimplements selected DirectX 3 APIs (2D only)
-* **DirectDraw** → Current real implementation focus using SDL3.
+* **DirectDraw** → Current real implementation focus, constrained to methods and flags used by the game and demo.
 * **DirectSound** → Currently stubbed (dummy implementations).
 * **DirectPlay** → Currently stubbed (dummy implementations).
 * **Direct3D** → Not implemented (not used by target code).
-* **SDL 3** → Internal implementation detail used as a backend.
+* **SDL 3** → Internal implementation detail used only inside `.cpp` files.
 
 ---
 
@@ -36,7 +36,7 @@ DirectX 3 (subset)
 * Enable running legacy DirectX-based games without original dependencies
 * Keep the implementation **simple, readable, and hackable**
 * Use **SDL3** internally for cross-platform rendering
-* Maintain **cross-platform support** (Linux, Windows, macOS, Android, Web)
+* Keep compatibility behavior driven by real call sites, not by full API coverage
 
 ---
 
@@ -44,7 +44,8 @@ DirectX 3 (subset)
 
 * ❌ Full DirectX 3 compatibility
 * ❌ Hardware-accurate emulation
-* ❌ Direct3D (3D pipeline) support (for now)
+* ❌ Direct3D (3D pipeline) support
+* ❌ Expanding APIs that are not used by the target game/demo
 
 ---
 
@@ -53,9 +54,12 @@ DirectX 3 (subset)
 * **DirectDraw**: Narrow subset implemented using SDL3.
 * **DirectSound**: Declarations and dummy stubs provided.
 * **DirectPlay**: Declarations and dummy stubs provided.
-* Transparency handling (color key).
-* 8-bit paletted surface support (conversion to RGBA32).
-* Lock/Unlock for direct pixel access.
+* Surface creation for primary and system-memory/offscreen surfaces.
+* `Blt` / `BltFast` with clipping and source color key handling.
+* `Lock` / `Unlock` for direct pixel access.
+* Palette support (`CreatePalette`, `SetEntries`, `GetEntries`, `SetPalette`).
+* Primary surface presentation through SDL renderer.
+* Minimal clipper support (`CreateClipper`, `SetHWnd`, `SetClipper`).
 
 ---
 
@@ -90,9 +94,21 @@ Run example:
 
 Current focus:
 
-* Designing API compatible subset of DirectX 3 (2D)
-* Implementing DirectDraw surfaces using SDL3 textures
-* Supporting basic blitting and presentation
+* Keep the implementation limited to the used DirectDraw subset
+* Stabilize surface/lock/blit behavior required by game code
+* Document known limits honestly (partial/stub behavior)
+
+Current known limitations:
+
+* The implementation is subset-oriented, not full DirectDraw.
+* Some compatibility paths are intentionally minimal (`SetDisplayMode`, `IsLost`, `Restore`).
+* `GetDC` support is minimal and intended for compatibility helpers.
+* 8-bit rendering is supported through palette conversion on present; full hardware-era semantics are not replicated.
+
+Debug logging:
+
+* DirectDraw debug logs can be enabled with `FREE_DIRECT_DEBUG_DDRAW=1`.
+* Optional one-time primary clear diagnostic can be enabled with `FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1`.
 
 ---
 

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -19,6 +20,33 @@ extern "C" HDC FreeApiCreateSurfaceDC(void* pixels, int width, int height, int p
 extern "C" BOOL FreeApiDestroySurfaceDC(HDC hdc);
 
 namespace {
+    bool IsDirectDrawDebugEnabled()
+    {
+        const char* env = SDL_getenv("FREE_DIRECT_DEBUG_DDRAW");
+        if (!env) {
+            return false;
+        }
+
+        return SDL_strcasecmp(env, "1") == 0
+            || SDL_strcasecmp(env, "true") == 0
+            || SDL_strcasecmp(env, "yes") == 0
+            || SDL_strcasecmp(env, "on") == 0;
+    }
+
+    void DirectDrawLog(const char* format, ...)
+    {
+        if (!IsDirectDrawDebugEnabled()) {
+            return;
+        }
+
+        va_list args;
+        va_start(args, format);
+        SDL_LogMessageV(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO, format, args);
+        va_end(args);
+    }
+
+#define SDL_Log DirectDrawLog
+
     const char* BoolToText(const bool value)
     {
         return value ? "yes" : "no";
@@ -359,11 +387,6 @@ namespace {
             return DD_OK;
         }
 
-        uint32_t srcKey = 0;
-        if (useSrcColorKey && source.hasSrcColorKey_) {
-            srcKey = source.colorKey_.dwColorSpaceLowValue;
-        }
-
         for (int y = 0; y < dstHeight; ++y) {
             const int srcY = sourceClamped.top + (y * srcHeight) / dstHeight;
             const int dstY = destClamped.top + y;
@@ -375,7 +398,13 @@ namespace {
                     const size_t srcOffset = static_cast<size_t>(srcY) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(srcX);
                     const size_t dstOffset = static_cast<size_t>(dstY) * static_cast<size_t>(width_) + static_cast<size_t>(dstX);
                     const uint8_t index = source.GetPixels()[srcOffset];
-                    if (useSrcColorKey && source.hasSrcColorKey_ && index == static_cast<uint8_t>(srcKey)) continue;
+                    if (useSrcColorKey && source.hasSrcColorKey_) {
+                        const auto srcKeyLow = static_cast<uint8_t>(source.colorKey_.dwColorSpaceLowValue & 0xFFu);
+                        const auto srcKeyHigh = static_cast<uint8_t>(source.colorKey_.dwColorSpaceHighValue & 0xFFu);
+                        if (index >= srcKeyLow && index <= srcKeyHigh) {
+                            continue;
+                        }
+                    }
                     pixels_[dstOffset] = index;
                     continue;
                 }
@@ -390,7 +419,11 @@ namespace {
                     if (useSrcColorKey && source.hasSrcColorKey_) {
                         // Assuming color key is in the same format as pixels (simplified)
                         const uint32_t pixelColor = (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
-                        if (pixelColor == srcKey) continue;
+                        const uint32_t srcKeyLow = source.colorKey_.dwColorSpaceLowValue;
+                        const uint32_t srcKeyHigh = source.colorKey_.dwColorSpaceHighValue;
+                        if (pixelColor >= srcKeyLow && pixelColor <= srcKeyHigh) {
+                            continue;
+                        }
                     }
 
                     pixels_[dstOffset + 0u] = r;
@@ -561,16 +594,19 @@ namespace {
         return DD_OK;
     }
 
+    /** @note Status: STUB - Surfaces are currently kept resident in this backend. */
     HRESULT WINAPI DirectDrawSurfaceImpl::IsLost()
     {
         return DD_OK;
     }
 
+    /** @note Status: STUB - Returns success because no real lost-surface recovery is required yet. */
     HRESULT WINAPI DirectDrawSurfaceImpl::Restore()
     {
         return DD_OK;
     }
 
+    /** @note Status: PARTIAL - Provides a compatibility DC for 32-bit offscreen system-memory surfaces. */
     HRESULT WINAPI DirectDrawSurfaceImpl::GetDC(HDC* lphDC)
     {
         if (!lphDC) {
@@ -606,6 +642,7 @@ namespace {
         return DD_OK;
     }
 
+    /** @note Status: PARTIAL - Validates compatibility DC handle and keeps it cached on the surface. */
     HRESULT WINAPI DirectDrawSurfaceImpl::ReleaseDC(HDC hDC)
     {
         if (hDC != attachedDc_) {
