@@ -108,7 +108,19 @@ Current known limitations:
 Debug logging:
 
 * DirectDraw debug logs can be enabled with `FREE_DIRECT_DEBUG_DDRAW=1`.
+* Presentation-path debug logs can be enabled with `FREE_DIRECT_DEBUG_PRESENTATION=1`.
 * Optional one-time primary clear diagnostic can be enabled with `FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1`.
+
+Presentation model:
+
+* All surfaces (primary and offscreen) store CPU pixel buffers.
+* `Blt` / `BltFast` write to CPU buffers only — no direct SDL rendering.
+* `Flip` is the single presentation entry point:
+  1. Uploads the primary surface buffer to a cached streaming `SDL_Texture`.
+  2. Clears the renderer immediately before drawing.
+  3. Renders the texture to the full window.
+  4. Calls `SDL_RenderPresent` exactly once.
+* This avoids flickering caused by clearing after drawing or presenting before upload.
 
 ---
 

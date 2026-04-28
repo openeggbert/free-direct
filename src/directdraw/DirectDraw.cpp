@@ -20,9 +20,9 @@ extern "C" HDC FreeApiCreateSurfaceDC(void* pixels, int width, int height, int p
 extern "C" BOOL FreeApiDestroySurfaceDC(HDC hdc);
 
 namespace {
-    bool IsDirectDrawDebugEnabled()
+    bool IsEnvFlagEnabled(const char* envName)
     {
-        const char* env = SDL_getenv("FREE_DIRECT_DEBUG_DDRAW");
+        const char* env = SDL_getenv(envName);
         if (!env) {
             return false;
         }
@@ -33,9 +33,32 @@ namespace {
             || SDL_strcasecmp(env, "on") == 0;
     }
 
+    bool IsDirectDrawDebugEnabled()
+    {
+        return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_DDRAW");
+    }
+
+    bool IsPresentationDebugEnabled()
+    {
+        return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_PRESENTATION");
+    }
+
     void DirectDrawLog(const char* format, ...)
     {
         if (!IsDirectDrawDebugEnabled()) {
+            return;
+        }
+
+        va_list args;
+        va_start(args, format);
+        SDL_LogMessageV(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO, format, args);
+        va_end(args);
+    }
+
+    /** @brief Presentation-specific debug log, controlled by FREE_DIRECT_DEBUG_PRESENTATION env var. */
+    void PresentLog(const char* format, ...)
+    {
+        if (!IsPresentationDebugEnabled()) {
             return;
         }
 
@@ -190,6 +213,11 @@ namespace {
         HRESULT FillColor(const RECT* destRect, DWORD fillColor);
         HRESULT BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, bool useSrcColorKey);
 
+        /** @brief Mark this surface as dirty (content changed, needs re-upload for presentation). */
+        void MarkDirty() { dirty_ = true; }
+        /** @brief Check and clear dirty flag. Returns true if surface was dirty. */
+        bool ConsumeAndClearDirty() { bool was = dirty_; dirty_ = false; return was; }
+
     private:
         friend class DirectDrawImpl;
         std::atomic<ULONG> refCount_;
@@ -204,6 +232,7 @@ namespace {
         LPDIRECTDRAWCLIPPER clipper_ = nullptr;
         DDCOLORKEY colorKey_ = {0, 0};
         bool hasSrcColorKey_ = false;
+        bool dirty_ = false;
         uint64_t debugId_ = 0;
         HDC attachedDc_ = nullptr;
     };
@@ -224,7 +253,16 @@ namespace {
         HRESULT WINAPI CreatePalette(DWORD dwFlags, LPPALETTEENTRY lpColorTable, LPDIRECTDRAWPALETTE* lplpDDPalette, IUnknown* pUnkOuter) override;
         HRESULT WINAPI CreateClipper(DWORD dwFlags, LPDIRECTDRAWCLIPPER* lplpDDClipper, IUnknown* pUnkOuter) override;
 
-        HRESULT PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, float rotationAngle = 0.0f);
+        /**
+         * @brief Upload the primary surface CPU pixel buffer to an SDL_Texture and present it.
+         *
+         * This is the single presentation path. Called from Flip (or end-of-frame fallback).
+         * The primary surface's CPU pixel buffer is uploaded to a streaming SDL_Texture,
+         * rendered via SDL_RenderTexture, and then SDL_RenderPresent is called exactly once.
+         *
+         * @note Status: IMPLEMENTED
+         */
+        HRESULT PresentPrimary(DirectDrawSurfaceImpl& primary);
 
     private:
         friend class DirectDrawSurfaceImpl;
@@ -279,9 +317,9 @@ namespace {
           texture_(nullptr),
           debugId_(g_nextSurfaceId.fetch_add(1))
     {
-        if (type_ == SurfaceType::Offscreen) {
-            pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * (bpp_ / 8u), 0);
-        }
+        // Both primary and offscreen surfaces own CPU pixel buffers.
+        // Primary surface pixels are uploaded to SDL_Texture during presentation (Flip).
+        pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * (bpp_ / 8u), 0);
 
         SDL_Log("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s", 
                 static_cast<unsigned long long>(debugId_),
@@ -334,11 +372,16 @@ namespace {
         return value;
     }
 
+    /**
+     * @brief Fill a rectangle on this surface with a solid color.
+     *
+     * Works on both primary and offscreen surfaces. Writes directly to the CPU pixel buffer.
+     * Marks the surface dirty if it is the primary surface.
+     *
+     * @note Status: IMPLEMENTED
+     */
     HRESULT DirectDrawSurfaceImpl::FillColor(const RECT* destRect, const DWORD fillColor)
     {
-        if (type_ != SurfaceType::Offscreen) {
-            return DDERR_UNSUPPORTED;
-        }
 
         const RECT fillRect = ClampRect(destRect ? *destRect : GetFullRect(width_, height_), width_, height_);
 
@@ -367,14 +410,23 @@ namespace {
             }
         }
 
+        if (type_ == SurfaceType::Primary) {
+            MarkDirty();
+        }
         return DD_OK;
     }
 
+    /**
+     * @brief Copy pixels from a source surface to this surface (CPU-to-CPU blit).
+     *
+     * Works on both primary and offscreen destination surfaces.
+     * Handles 8-bit and 32-bit pixel formats, optional source color key, and scaling.
+     * Marks the destination surface dirty if it is the primary surface.
+     *
+     * @note Status: IMPLEMENTED
+     */
     HRESULT DirectDrawSurfaceImpl::BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, bool useSrcColorKey)
     {
-        if (type_ != SurfaceType::Offscreen || source.GetType() != SurfaceType::Offscreen) {
-            return DDERR_UNSUPPORTED;
-        }
 
         const RECT sourceClamped = ClampRect(srcRect ? *srcRect : GetFullRect(source.GetWidth(), source.GetHeight()), source.GetWidth(), source.GetHeight());
         const RECT destClamped = ClampRect(destRect ? *destRect : GetFullRect(width_, height_), width_, height_);
@@ -436,6 +488,9 @@ namespace {
             }
         }
 
+        if (type_ == SurfaceType::Primary) {
+            MarkDirty();
+        }
         return DD_OK;
     }
 
@@ -470,62 +525,63 @@ namespace {
                     static_cast<long>(lpSrcRect->bottom));
         }
 
-        if (type_ == SurfaceType::Primary) {
-            if (!owner_ || !owner_->renderer_) {
-                SDL_Log("free-direct Blt: primary surface has no active renderer");
-                return DDERR_INVALIDPARAMS;
-            }
-
-            if ((dwFlags & DDBLT_COLORFILL) != 0) {
-                if (!lpDDBltFx) {
-                    SDL_Log("free-direct Blt: COLORFILL requested without DDBLTFX");
-                    return DDERR_INVALIDPARAMS;
-                }
-                uint8_t r = (uint8_t)((lpDDBltFx->dwFillColor >> 16) & 0xFF);
-                uint8_t g = (uint8_t)((lpDDBltFx->dwFillColor >> 8) & 0xFF);
-                uint8_t b = (uint8_t)(lpDDBltFx->dwFillColor & 0xFF);
-                SDL_SetRenderDrawColor(owner_->renderer_, r, g, b, 255);
-                SDL_RenderClear(owner_->renderer_);
-                SDL_Log("free-direct Blt primary COLORFILL: color=0x%08lx", static_cast<unsigned long>(lpDDBltFx->dwFillColor));
-                return DD_OK;
-            }
-
-            if (!sourceSurface) {
-                SDL_Log("free-direct Blt: source surface type mismatch or null");
-                return DDERR_INVALIDPARAMS;
-            }
-            float angle = 0.0f;
-            if (lpDDBltFx && (dwFlags & DDBLT_ROTATIONANGLE)) {
-                angle = (float)lpDDBltFx->dwRotationAngle;
-            }
-            const HRESULT hr = owner_->PresentSurface(*sourceSurface, lpDestRect, lpSrcRect, angle);
-            SDL_Log("free-direct Blt primary->PresentSurface: dstId=%llu srcId=%llu hr=0x%08lx primaryPresented=%s presentCalls=%llu", 
-                    static_cast<unsigned long long>(debugId_),
-                    static_cast<unsigned long long>(sourceSurface->GetDebugId()),
-                    static_cast<unsigned long>(hr),
-                    BoolToText(owner_->primaryPresented_),
-                    static_cast<unsigned long long>(owner_->presentCallCount_));
-            return hr;
+        // In windowed mode the game converts client coords to screen coords
+        // before blitting to the primary surface.  On real DirectDraw the
+        // primary surface represents the whole desktop, but here it is only
+        // window-sized.  Translate the dest rect back to client-local coords
+        // by subtracting the window position so the pixels land inside the
+        // surface buffer.
+        RECT adjustedDestRect{};
+        LPRECT effectiveDestRect = lpDestRect;
+        if (lpDestRect && type_ == SurfaceType::Primary && clipper_ && owner_ && owner_->sdlWindow_) {
+            int winX = 0, winY = 0;
+            SDL_GetWindowPosition(owner_->sdlWindow_, &winX, &winY);
+            adjustedDestRect.left   = lpDestRect->left   - static_cast<LONG>(winX);
+            adjustedDestRect.top    = lpDestRect->top    - static_cast<LONG>(winY);
+            adjustedDestRect.right  = lpDestRect->right  - static_cast<LONG>(winX);
+            adjustedDestRect.bottom = lpDestRect->bottom - static_cast<LONG>(winY);
+            effectiveDestRect = &adjustedDestRect;
+            SDL_Log("free-direct Blt: adjusted dstRect from screen [%ld,%ld,%ld,%ld] to client [%ld,%ld,%ld,%ld] (winPos=%d,%d)",
+                    static_cast<long>(lpDestRect->left), static_cast<long>(lpDestRect->top),
+                    static_cast<long>(lpDestRect->right), static_cast<long>(lpDestRect->bottom),
+                    static_cast<long>(adjustedDestRect.left), static_cast<long>(adjustedDestRect.top),
+                    static_cast<long>(adjustedDestRect.right), static_cast<long>(adjustedDestRect.bottom),
+                    winX, winY);
         }
 
+        // All blits go through CPU pixel buffer. When the destination is the
+        // primary surface, present immediately so games that never call Flip
+        // (e.g. Speedy Blupi) still get visible output.
         if ((dwFlags & DDBLT_COLORFILL) != 0) {
             if (!lpDDBltFx) {
-                SDL_Log("free-direct Blt: offscreen COLORFILL requested without DDBLTFX");
+                SDL_Log("free-direct Blt: COLORFILL requested without DDBLTFX");
                 return DDERR_INVALIDPARAMS;
             }
-            return FillColor(lpDestRect, lpDDBltFx->dwFillColor);
+            PresentLog("free-direct Blt COLORFILL: dstId=%llu type=%s color=0x%08lx",
+                    static_cast<unsigned long long>(debugId_),
+                    (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
+                    static_cast<unsigned long>(lpDDBltFx->dwFillColor));
+            const HRESULT hr = FillColor(effectiveDestRect, lpDDBltFx->dwFillColor);
+            if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_) {
+                owner_->PresentPrimary(*this);
+            }
+            return hr;
         }
 
         if (lpDDSrcSurface) {
             if (!sourceSurface) {
-                SDL_Log("free-direct Blt: offscreen source surface type mismatch");
+                SDL_Log("free-direct Blt: source surface type mismatch");
                 return DDERR_INVALIDPARAMS;
             }
-            const HRESULT hr = BlitFrom(*sourceSurface, lpDestRect, lpSrcRect, false);
-            SDL_Log("free-direct Blt offscreen: dstId=%llu srcId=%llu hr=0x%08lx", 
+            const HRESULT hr = BlitFrom(*sourceSurface, effectiveDestRect, lpSrcRect, false);
+            PresentLog("free-direct Blt: dstId=%llu srcId=%llu type=%s hr=0x%08lx",
                     static_cast<unsigned long long>(debugId_),
                     static_cast<unsigned long long>(sourceSurface->GetDebugId()),
+                    (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                     static_cast<unsigned long>(hr));
+            if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_) {
+                owner_->PresentPrimary(*this);
+            }
             return hr;
         }
 
@@ -570,6 +626,9 @@ namespace {
                 static_cast<unsigned long long>(debugId_),
                 static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                 static_cast<unsigned long>(hr));
+        if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_) {
+            owner_->PresentPrimary(*this);
+        }
         return hr;
     }
 
@@ -747,13 +806,24 @@ namespace {
         return DDERR_UNSUPPORTED;
     }
 
+    /**
+     * @brief Present the primary surface to the screen.
+     *
+     * Delegates to DirectDrawImpl::PresentPrimary which uploads the CPU pixel buffer
+     * to an SDL_Texture and calls SDL_RenderPresent exactly once.
+     * This is the single presentation path for the DirectDraw subset.
+     *
+     * @note Status: IMPLEMENTED
+     */
     HRESULT WINAPI DirectDrawSurfaceImpl::Flip(LPDIRECTDRAWSURFACE lpDDSurfaceTargetOverride, DWORD dwFlags)
     {
         (void)lpDDSurfaceTargetOverride;
+        (void)dwFlags;
 
-        SDL_Log("free-direct Flip: surfaceId=%llu type=%s flags=0x%08lx", 
+        PresentLog("free-direct Flip: surfaceId=%llu type=%s dirty=%s flags=0x%08lx",
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
+                BoolToText(dirty_),
                 static_cast<unsigned long>(dwFlags));
 
         if (type_ != SurfaceType::Primary || !owner_ || !owner_->renderer_) {
@@ -764,26 +834,7 @@ namespace {
             return DDERR_UNSUPPORTED;
         }
 
-        if (owner_->debugPrimaryClearEnabled_ && !owner_->debugPrimaryClearDone_) {
-            SDL_SetRenderDrawColor(owner_->renderer_, 255, 0, 255, 255);
-            SDL_RenderClear(owner_->renderer_);
-            SDL_RenderPresent(owner_->renderer_);
-            owner_->presentCallCount_++;
-            owner_->primaryPresented_ = true;
-            owner_->debugPrimaryClearDone_ = true;
-            SDL_Log("free-direct debug primary clear/present: executed once before normal Flip present (set FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1)");
-        }
-
-        const bool firstPrimaryPresent = !owner_->primaryPresented_;
-
-        SDL_RenderPresent(owner_->renderer_);
-        owner_->presentCallCount_++;
-        owner_->primaryPresented_ = true;
-        SDL_Log("free-direct Flip present: first=%s primaryPresented=%s presentCalls=%llu", 
-                BoolToText(firstPrimaryPresent),
-                BoolToText(owner_->primaryPresented_),
-                static_cast<unsigned long long>(owner_->presentCallCount_));
-        return DD_OK;
+        return owner_->PresentPrimary(*this);
     }
 
     DirectDrawImpl::DirectDrawImpl()
@@ -1023,185 +1074,93 @@ namespace {
         return (*lplpDDClipper) ? DD_OK : DDERR_OUTOFMEMORY;
     }
 
-    HRESULT DirectDrawImpl::PresentSurface(DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, float rotationAngle)
+    /**
+     * @brief Single presentation path: upload primary CPU buffer to SDL texture, render, present.
+     *
+     * Steps:
+     * 1. Create streaming SDL_Texture if not yet created (cached on primary surface).
+     * 2. Upload CPU pixel buffer to the SDL_Texture (handles 8-bit palette conversion).
+     * 3. SDL_RenderClear (immediately before render to avoid stale back-buffer).
+     * 4. SDL_RenderTexture (full primary → full window).
+     * 5. SDL_RenderPresent (exactly once per call).
+     *
+     * @note Status: IMPLEMENTED
+     */
+    HRESULT DirectDrawImpl::PresentPrimary(DirectDrawSurfaceImpl& primary)
     {
-        SDL_Log("free-direct PresentSurface begin: srcId=%llu srcType=%s srcSize=%dx%d srcBpp=%d srcPitch=%ld srcHasPalette=%s primaryPresented=%s", 
-                static_cast<unsigned long long>(source.GetDebugId()),
-                (source.GetType() == DirectDrawSurfaceImpl::SurfaceType::Primary) ? "primary" : "offscreen",
-                source.GetWidth(),
-                source.GetHeight(),
-                source.GetBPP(),
-                static_cast<long>(source.GetPitch()),
-                BoolToText(source.HasPalette()),
-                BoolToText(primaryPresented_));
-
-        if (source.GetBPP() == 32 && !source.GetPixels().empty() && (presentCallCount_ < 8 || !primaryPresented_)) {
-            const auto& pixels = source.GetPixels();
-            const int pitch = static_cast<int>(source.GetPitch());
-            const int centerX = source.GetWidth() / 2;
-            const int centerY = source.GetHeight() / 2;
-            const size_t topLeftOffset = 0;
-            const size_t centerOffset = static_cast<size_t>(centerY) * static_cast<size_t>(pitch) + static_cast<size_t>(centerX) * 4u;
-            if (pixels.size() >= centerOffset + 4u) {
-                SDL_Log("free-direct PresentSurface pixels: srcId=%llu tl=(%u,%u,%u,%u) center=(%u,%u,%u,%u)",
-                        static_cast<unsigned long long>(source.GetDebugId()),
-                        static_cast<unsigned>(pixels[topLeftOffset + 0u]),
-                        static_cast<unsigned>(pixels[topLeftOffset + 1u]),
-                        static_cast<unsigned>(pixels[topLeftOffset + 2u]),
-                        static_cast<unsigned>(pixels[topLeftOffset + 3u]),
-                        static_cast<unsigned>(pixels[centerOffset + 0u]),
-                        static_cast<unsigned>(pixels[centerOffset + 1u]),
-                        static_cast<unsigned>(pixels[centerOffset + 2u]),
-                        static_cast<unsigned>(pixels[centerOffset + 3u]));
-            }
-        }
-
-        if (!renderer_ || source.GetType() != DirectDrawSurfaceImpl::SurfaceType::Offscreen) {
-            SDL_Log("free-direct PresentSurface: unsupported renderer=%p sourceType=%s", 
-                    static_cast<void*>(renderer_),
-                    (source.GetType() == DirectDrawSurfaceImpl::SurfaceType::Primary) ? "primary" : "offscreen");
+        if (!renderer_) {
+            SDL_Log("free-direct PresentPrimary: no renderer");
             return DDERR_UNSUPPORTED;
         }
 
-        if (!source.texture_) {
-            SDL_Log("free-direct SDL_CreateTexture: srcId=%llu size=%dx%d format=%s access=streaming", 
-                    static_cast<unsigned long long>(source.GetDebugId()),
-                    source.GetWidth(),
-                    source.GetHeight(),
-                    SDL_GetPixelFormatName(SDL_PIXELFORMAT_RGBA32));
-            source.texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, source.GetWidth(), source.GetHeight());
-            if (source.texture_) {
-                SDL_SetTextureBlendMode(source.texture_, SDL_BLENDMODE_NONE);
-                SDL_Log("free-direct SDL_CreateTexture result: texture=%p blend=none", static_cast<void*>(source.texture_));
+        PresentLog("free-direct PresentPrimary: id=%llu size=%dx%d bpp=%d dirty=%s presentCalls=%llu",
+                static_cast<unsigned long long>(primary.GetDebugId()),
+                primary.GetWidth(),
+                primary.GetHeight(),
+                primary.GetBPP(),
+                BoolToText(primary.dirty_),
+                static_cast<unsigned long long>(presentCallCount_));
+
+        // 1. Create streaming texture if needed (cached on primary, not recreated per frame).
+        if (!primary.texture_) {
+            PresentLog("free-direct PresentPrimary: creating streaming texture %dx%d",
+                    primary.GetWidth(), primary.GetHeight());
+            primary.texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32,
+                                                  SDL_TEXTUREACCESS_STREAMING,
+                                                  primary.GetWidth(), primary.GetHeight());
+            if (primary.texture_) {
+                SDL_SetTextureBlendMode(primary.texture_, SDL_BLENDMODE_NONE);
             } else {
-                SDL_Log("free-direct SDL_CreateTexture failed: %s", SDL_GetError());
+                SDL_Log("free-direct PresentPrimary: SDL_CreateTexture failed: %s", SDL_GetError());
+                return DDERR_GENERIC;
             }
         }
 
-        if (!source.texture_) {
-            return DDERR_GENERIC;
-        }
-
-        if (source.GetBPP() == 8) {
-            // Convert 8-bit to 32-bit using palette
-            std::vector<uint32_t> temp(static_cast<size_t>(source.GetWidth()) * static_cast<size_t>(source.GetHeight()));
+        // 2. Upload CPU pixel buffer to texture.
+        if (primary.GetBPP() == 8) {
+            const size_t pixelCount = static_cast<size_t>(primary.GetWidth()) * static_cast<size_t>(primary.GetHeight());
+            std::vector<uint32_t> temp(pixelCount);
             PALETTEENTRY entries[256];
             bool hasPalette = false;
-            if (source.palette_) {
-                source.palette_->GetEntries(0, 0, 256, entries);
+            if (primary.palette_) {
+                primary.palette_->GetEntries(0, 0, 256, entries);
                 hasPalette = true;
             }
-
-            for (size_t i = 0; i < temp.size(); ++i) {
-                uint8_t index = source.GetPixels()[i];
+            for (size_t i = 0; i < pixelCount; ++i) {
+                const uint8_t index = primary.GetPixels()[i];
                 if (hasPalette) {
-                    temp[i] = (static_cast<uint32_t>(entries[index].peRed) << 16) |
-                              (static_cast<uint32_t>(entries[index].peGreen) << 8) |
-                              (static_cast<uint32_t>(entries[index].peBlue)) |
-                              0xFF000000;
+                    temp[i] = (static_cast<uint32_t>(entries[index].peRed))
+                            | (static_cast<uint32_t>(entries[index].peGreen) << 8)
+                            | (static_cast<uint32_t>(entries[index].peBlue) << 16)
+                            | 0xFF000000u;
                 } else {
-                    temp[i] = (static_cast<uint32_t>(index) << 16) |
-                              (static_cast<uint32_t>(index) << 8) |
-                              (static_cast<uint32_t>(index)) |
-                              0xFF000000;
+                    temp[i] = static_cast<uint32_t>(index)
+                            | (static_cast<uint32_t>(index) << 8)
+                            | (static_cast<uint32_t>(index) << 16)
+                            | 0xFF000000u;
                 }
             }
-            SDL_Log("free-direct SDL_UpdateTexture: srcId=%llu mode=8to32 pitch=%d hasPalette=%s", 
-                    static_cast<unsigned long long>(source.GetDebugId()),
-                    source.GetWidth() * 4,
-                    BoolToText(hasPalette));
-            SDL_UpdateTexture(source.texture_, NULL, temp.data(), source.GetWidth() * 4);
+            PresentLog("free-direct PresentPrimary: uploading 8-bit→RGBA32 hasPalette=%s", BoolToText(hasPalette));
+            SDL_UpdateTexture(primary.texture_, NULL, temp.data(), primary.GetWidth() * 4);
         } else {
-            SDL_Log("free-direct SDL_UpdateTexture: srcId=%llu mode=32bit pitch=%d", 
-                    static_cast<unsigned long long>(source.GetDebugId()),
-                    source.GetWidth() * 4);
-            SDL_UpdateTexture(source.texture_, NULL, source.GetPixels().data(), source.GetWidth() * 4);
+            PresentLog("free-direct PresentPrimary: uploading 32-bit RGBA");
+            SDL_UpdateTexture(primary.texture_, NULL, primary.GetPixels().data(), primary.GetWidth() * 4);
         }
 
-        RECT src = srcRect ? ClampRect(*srcRect, source.GetWidth(), source.GetHeight()) : GetFullRect(source.GetWidth(), source.GetHeight());
-        if (RectWidth(src) <= 0 || RectHeight(src) <= 0) {
-            src = GetFullRect(source.GetWidth(), source.GetHeight());
-            SDL_Log("free-direct PresentSurface srcRect fallback: clamped rect collapsed, using full source=[%ld,%ld,%ld,%ld]", 
-                    static_cast<long>(src.left),
-                    static_cast<long>(src.top),
-                    static_cast<long>(src.right),
-                    static_cast<long>(src.bottom));
-        }
+        // 3. Clear renderer (immediately before drawing current content — no gap).
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+        SDL_RenderClear(renderer_);
 
-        int winW = 0;
-        int winH = 0;
-        SDL_GetRenderOutputSize(renderer_, &winW, &winH);
+        // 4. Render texture to full window.
+        SDL_RenderTexture(renderer_, primary.texture_, NULL, NULL);
 
-        RECT dstInput = destRect ? *destRect : GetFullRect(winW, winH);
-        RECT dstForRender = dstInput;
-
-        if (destRect && sdlWindow_) {
-            int windowX = 0;
-            int windowY = 0;
-            SDL_GetWindowPosition(sdlWindow_, &windowX, &windowY);
-
-            const bool outsideOutputBounds = dstInput.left >= winW
-                || dstInput.top >= winH
-                || dstInput.right > winW
-                || dstInput.bottom > winH;
-
-            if (outsideOutputBounds) {
-                dstForRender.left -= windowX;
-                dstForRender.top -= windowY;
-                dstForRender.right -= windowX;
-                dstForRender.bottom -= windowY;
-                SDL_Log("free-direct PresentSurface dstRect normalize: windowPos=(%d,%d) input=[%ld,%ld,%ld,%ld] normalized=[%ld,%ld,%ld,%ld]", 
-                        windowX,
-                        windowY,
-                        static_cast<long>(dstInput.left),
-                        static_cast<long>(dstInput.top),
-                        static_cast<long>(dstInput.right),
-                        static_cast<long>(dstInput.bottom),
-                        static_cast<long>(dstForRender.left),
-                        static_cast<long>(dstForRender.top),
-                        static_cast<long>(dstForRender.right),
-                        static_cast<long>(dstForRender.bottom));
-            }
-        }
-
-        RECT dst = ClampRect(dstForRender, winW, winH);
-        if (RectWidth(dst) <= 0 || RectHeight(dst) <= 0) {
-            dst = GetFullRect(winW, winH);
-            SDL_Log("free-direct PresentSurface dstRect fallback: clamped rect collapsed, using full renderer output=[%ld,%ld,%ld,%ld]", 
-                    static_cast<long>(dst.left),
-                    static_cast<long>(dst.top),
-                    static_cast<long>(dst.right),
-                    static_cast<long>(dst.bottom));
-        }
-
-        SDL_FRect srect = { (float)src.left, (float)src.top, (float)RectWidth(src), (float)RectHeight(src) };
-        SDL_FRect drect = { (float)dst.left, (float)dst.top, (float)RectWidth(dst), (float)RectHeight(dst) };
-
-        SDL_Log("free-direct PresentSurface render: srcRect=[%ld,%ld,%ld,%ld] dstRect=[%ld,%ld,%ld,%ld] angle=%.2f", 
-                static_cast<long>(src.left),
-                static_cast<long>(src.top),
-                static_cast<long>(src.right),
-                static_cast<long>(src.bottom),
-                static_cast<long>(dst.left),
-                static_cast<long>(dst.top),
-                static_cast<long>(dst.right),
-                static_cast<long>(dst.bottom),
-                static_cast<double>(rotationAngle));
-
-        if (rotationAngle != 0.0f) {
-            SDL_RenderTextureRotated(renderer_, source.texture_, &srect, &drect, (double)rotationAngle, NULL, SDL_FLIP_NONE);
-        } else {
-            SDL_RenderTexture(renderer_, source.texture_, &srect, &drect);
-        }
-
-        const bool firstPrimaryPresent = !primaryPresented_;
+        // 5. Present exactly once.
         SDL_RenderPresent(renderer_);
         presentCallCount_++;
         primaryPresented_ = true;
-        SDL_Log("free-direct PresentSurface implicit present: srcId=%llu first=%s primaryPresented=%s presentCalls=%llu", 
-                static_cast<unsigned long long>(source.GetDebugId()),
-                BoolToText(firstPrimaryPresent),
-                BoolToText(primaryPresented_),
+        primary.ConsumeAndClearDirty();
+
+        PresentLog("free-direct PresentPrimary: presented frame #%llu",
                 static_cast<unsigned long long>(presentCallCount_));
 
         return DD_OK;
