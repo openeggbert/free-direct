@@ -296,3 +296,62 @@ Focus first on:
 2. Correct window/message lifecycle
 3. Removing misleading stubs
 
+# Web and Android 
+
+a port to **Web + Android is feasible**, but it’s not just a matter of “switching CMake.” The effort is **medium to fairly high**.
+
+* The good news: the render backend already goes through `SDL3` (`free-direct/src/directdraw/DirectDraw.cpp`), so a path to WebGL/OpenGL ES exists.
+* The main issue is not rendering, but the **Win32 simulation layer and runtime model** in `free-api` (`winapi.cpp`, `winmain_bridge.cpp`).
+
+---
+
+### What is already in good shape
+
+* `free-direct` is internally SDL-based (`SDL_CreateRenderer`, textures, present) → that’s the right direction for Web/Android.
+* The project is already separated via `free-api` + `free-direct` backend in `CMakeLists.txt`, so changes can be made in the compatibility layer without refactoring game logic.
+
+---
+
+### Biggest blockers for Web/Android (without changing the game)
+
+* **Entrypoint and main loop:**
+  `free-api/src/winmain_bridge.cpp` + `GetMessageA` / `WaitMessage` in `winapi.cpp` use a desktop/blocking model (`SDL_Delay(1)` loop).
+  Web/Android require a non-blocking, callback-driven model (`SDL_main` / SDL app lifecycle).
+
+* **Input model:**
+  Win32 message emulation is primarily mouse/keyboard; Android needs touch → `WM_*` translation (`WM_LBUTTONDOWN`, `WM_MOUSEMOVE`, etc.).
+
+* **Assets / filesystem:**
+  Loading is based on local files/relative paths (`LoadImageA`, file fallback).
+  Web needs preloading into a virtual FS; Android needs asset packaging.
+
+* **Window semantics:**
+  Win32 styles and desktop coordinates (`CreateWindowExA`, `ShowWindow`, focus/raise) only partially map to fullscreen/rotation/resizing on mobile.
+
+* **Timers:**
+  Parts of the timer API are still simplified/stub-like (`SetTimer`, `KillTimer`, WinMM timers) — this can affect input and animation timing on mobile/web.
+
+---
+
+### Effort estimate (realistic)
+
+* **Web (Emscripten):** ~2–4 weeks to reach stable “menu + basic gameplay loop.”
+* **Android:** ~3–6 weeks (extra lifecycle handling, pause/resume, touch ergonomics, packaging).
+* For both platforms done properly and shared: about **4–8 weeks** iteratively (depending on runtime edge cases).
+
+---
+
+### Recommended order (best ROI)
+
+1. Convert runtime to a non-blocking SDL lifecycle in `free-api` (no game logic changes).
+2. Implement a platform abstraction for assets/path resolving (desktop/android/web).
+3. Add input translation (touch + keyboard/mouse fallback).
+4. Refine timers/message queue compatibility and lifecycle (pause/resume, visibility).
+
+---
+
+### Conclusion
+
+The hardest part is **emulating the WinAPI application runtime** (loop/input/assets), not the DirectDraw rendering itself.
+
+So: **yes, it’s doable**, but it’s more of a *runtime compatibility layer port* than a simple build task.
