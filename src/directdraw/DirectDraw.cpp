@@ -43,6 +43,11 @@ namespace {
         return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_PRESENTATION");
     }
 
+    bool IsColorKeyDebugEnabled()
+    {
+        return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_COLORKEY");
+    }
+
     void DirectDrawLog(const char* format, ...)
     {
         if (!IsDirectDrawDebugEnabled()) {
@@ -59,6 +64,19 @@ namespace {
     void PresentLog(const char* format, ...)
     {
         if (!IsPresentationDebugEnabled()) {
+            return;
+        }
+
+        va_list args;
+        va_start(args, format);
+        SDL_LogMessageV(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO, format, args);
+        va_end(args);
+    }
+
+    /** @brief Color-key specific debug log, controlled by FREE_DIRECT_DEBUG_COLORKEY env var. */
+    void ColorKeyLog(const char* format, ...)
+    {
+        if (!IsColorKeyDebugEnabled()) {
             return;
         }
 
@@ -211,7 +229,12 @@ namespace {
         [[nodiscard]] uint64_t GetDebugId() const { return debugId_; }
 
         HRESULT FillColor(const RECT* destRect, DWORD fillColor);
-        HRESULT BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, bool useSrcColorKey);
+        HRESULT BlitFrom(const DirectDrawSurfaceImpl& source,
+                        const RECT* destRect,
+                        const RECT* srcRect,
+                        bool useSrcColorKey,
+                        uint64_t* copiedPixelCount = nullptr,
+                        uint64_t* skippedPixelCount = nullptr);
 
         /** @brief Mark this surface as dirty (content changed, needs re-upload for presentation). */
         void MarkDirty() { dirty_ = true; }
@@ -235,6 +258,8 @@ namespace {
         bool dirty_ = false;
         uint64_t debugId_ = 0;
         HDC attachedDc_ = nullptr;
+        /// Temporary 32-bit RGBA buffer used by GetDC/ReleaseDC for 8-bit surfaces.
+        std::vector<uint8_t> dcTempBuffer_;
     };
 
     class DirectDrawImpl final : public IDirectDraw {
@@ -274,6 +299,8 @@ namespace {
         uint64_t presentCallCount_;
         bool debugPrimaryClearDone_;
         bool debugPrimaryClearEnabled_;
+        /// True once Flip has been called at least once; disables auto-present from Blt/BltFast.
+        bool usesFlip_ = false;
     };
 
     RECT GetFullRect(const int width, const int height)
@@ -425,7 +452,12 @@ namespace {
      *
      * @note Status: IMPLEMENTED
      */
-    HRESULT DirectDrawSurfaceImpl::BlitFrom(const DirectDrawSurfaceImpl& source, const RECT* destRect, const RECT* srcRect, bool useSrcColorKey)
+    HRESULT DirectDrawSurfaceImpl::BlitFrom(const DirectDrawSurfaceImpl& source,
+                                            const RECT* destRect,
+                                            const RECT* srcRect,
+                                            const bool useSrcColorKey,
+                                            uint64_t* copiedPixelCount,
+                                            uint64_t* skippedPixelCount)
     {
 
         const RECT sourceClamped = ClampRect(srcRect ? *srcRect : GetFullRect(source.GetWidth(), source.GetHeight()), source.GetWidth(), source.GetHeight());
@@ -438,6 +470,9 @@ namespace {
         if (srcWidth <= 0 || srcHeight <= 0 || dstWidth <= 0 || dstHeight <= 0) {
             return DD_OK;
         }
+
+        uint64_t copied = 0;
+        uint64_t skipped = 0;
 
         for (int y = 0; y < dstHeight; ++y) {
             const int srcY = sourceClamped.top + (y * srcHeight) / dstHeight;
@@ -454,10 +489,12 @@ namespace {
                         const auto srcKeyLow = static_cast<uint8_t>(source.colorKey_.dwColorSpaceLowValue & 0xFFu);
                         const auto srcKeyHigh = static_cast<uint8_t>(source.colorKey_.dwColorSpaceHighValue & 0xFFu);
                         if (index >= srcKeyLow && index <= srcKeyHigh) {
+                            ++skipped;
                             continue;
                         }
                     }
                     pixels_[dstOffset] = index;
+                    ++copied;
                     continue;
                 }
 
@@ -469,11 +506,20 @@ namespace {
                     const uint8_t g = source.GetPixels()[srcOffset + 1u];
                     const uint8_t b = source.GetPixels()[srcOffset + 2u];
                     if (useSrcColorKey && source.hasSrcColorKey_) {
-                        // Assuming color key is in the same format as pixels (simplified)
-                        const uint32_t pixelColor = (static_cast<uint32_t>(r) << 16) | (static_cast<uint32_t>(g) << 8) | static_cast<uint32_t>(b);
-                        const uint32_t srcKeyLow = source.colorKey_.dwColorSpaceLowValue;
-                        const uint32_t srcKeyHigh = source.colorKey_.dwColorSpaceHighValue;
-                        if (pixelColor >= srcKeyLow && pixelColor <= srcKeyHigh) {
+                        const uint32_t pixelRaw = static_cast<uint32_t>(source.GetPixels()[srcOffset + 0u])
+                            | (static_cast<uint32_t>(source.GetPixels()[srcOffset + 1u]) << 8u)
+                            | (static_cast<uint32_t>(source.GetPixels()[srcOffset + 2u]) << 16u)
+                            | (static_cast<uint32_t>(source.GetPixels()[srcOffset + 3u]) << 24u);
+                        const uint32_t srcKeyLowRaw = source.colorKey_.dwColorSpaceLowValue;
+                        const uint32_t srcKeyHighRaw = source.colorKey_.dwColorSpaceHighValue;
+                        const bool rawRangeMatch = pixelRaw >= srcKeyLowRaw && pixelRaw <= srcKeyHighRaw;
+
+                        const uint32_t pixelRgb = pixelRaw & 0x00FFFFFFu;
+                        const uint32_t srcKeyLowRgb = srcKeyLowRaw & 0x00FFFFFFu;
+                        const uint32_t srcKeyHighRgb = srcKeyHighRaw & 0x00FFFFFFu;
+                        const bool rgbRangeMatch = pixelRgb >= srcKeyLowRgb && pixelRgb <= srcKeyHighRgb;
+                        if (rawRangeMatch || rgbRangeMatch) {
+                            ++skipped;
                             continue;
                         }
                     }
@@ -484,8 +530,16 @@ namespace {
                     // PARTIAL: DirectDraw blits are opaque by default; avoid transparent
                     // desktop-window output when legacy assets have undefined alpha bytes.
                     pixels_[dstOffset + 3u] = 255;
+                    ++copied;
                 }
             }
+        }
+
+        if (copiedPixelCount) {
+            *copiedPixelCount = copied;
+        }
+        if (skippedPixelCount) {
+            *skippedPixelCount = skipped;
         }
 
         if (type_ == SurfaceType::Primary) {
@@ -501,6 +555,7 @@ namespace {
                                               LPDDBLTFX lpDDBltFx)
     {
         auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
+        const bool requestSrcColorKey = (dwFlags & DDBLT_KEYSRC) != 0;
         SDL_Log("free-direct Blt: dstId=%llu dstType=%s srcId=%llu src=%p flags=0x%08lx hasPalette=%s hasSrcColorKey=%s", 
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
@@ -509,6 +564,12 @@ namespace {
                 static_cast<unsigned long>(dwFlags),
                 BoolToText(HasPalette()),
                 BoolToText(hasSrcColorKey_));
+        ColorKeyLog("free-direct Blt colorkey: dstId=%llu srcId=%llu flags=0x%08lx useKeysrc=%s srcHasColorKey=%s",
+                    static_cast<unsigned long long>(debugId_),
+                    sourceSurface ? static_cast<unsigned long long>(sourceSurface->GetDebugId()) : 0ULL,
+                    static_cast<unsigned long>(dwFlags),
+                    BoolToText(requestSrcColorKey),
+                    BoolToText(sourceSurface && sourceSurface->hasSrcColorKey_));
 
         if (lpDestRect) {
             SDL_Log("free-direct Blt: dstRect=[%ld,%ld,%ld,%ld]", 
@@ -562,7 +623,7 @@ namespace {
                     (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                     static_cast<unsigned long>(lpDDBltFx->dwFillColor));
             const HRESULT hr = FillColor(effectiveDestRect, lpDDBltFx->dwFillColor);
-            if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_) {
+            if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_ && !owner_->usesFlip_) {
                 owner_->PresentPrimary(*this);
             }
             return hr;
@@ -573,13 +634,25 @@ namespace {
                 SDL_Log("free-direct Blt: source surface type mismatch");
                 return DDERR_INVALIDPARAMS;
             }
-            const HRESULT hr = BlitFrom(*sourceSurface, effectiveDestRect, lpSrcRect, false);
+            uint64_t copiedPixels = 0;
+            uint64_t skippedPixels = 0;
+            const HRESULT hr = BlitFrom(*sourceSurface,
+                                        effectiveDestRect,
+                                        lpSrcRect,
+                                        requestSrcColorKey,
+                                        &copiedPixels,
+                                        &skippedPixels);
+            ColorKeyLog("free-direct Blt colorkey result: dstId=%llu srcId=%llu copied=%llu skipped=%llu",
+                        static_cast<unsigned long long>(debugId_),
+                        static_cast<unsigned long long>(sourceSurface->GetDebugId()),
+                        static_cast<unsigned long long>(copiedPixels),
+                        static_cast<unsigned long long>(skippedPixels));
             PresentLog("free-direct Blt: dstId=%llu srcId=%llu type=%s hr=0x%08lx",
                     static_cast<unsigned long long>(debugId_),
                     static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                     (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                     static_cast<unsigned long>(hr));
-            if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_) {
+            if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_ && !owner_->usesFlip_) {
                 owner_->PresentPrimary(*this);
             }
             return hr;
@@ -612,7 +685,7 @@ namespace {
             destRect.bottom = destRect.top + sourceSurface->GetHeight();
         }
 
-        bool useKey = (dwTrans & DDBLTFAST_SRCCOLORKEY) != 0;
+        const bool useKey = (dwTrans & DDBLTFAST_SRCCOLORKEY) != 0;
         SDL_Log("free-direct BltFast: dstId=%llu srcId=%llu xy=(%lu,%lu) trans=0x%08lx useSrcColorKey=%s", 
                 static_cast<unsigned long long>(debugId_),
                 static_cast<unsigned long long>(sourceSurface->GetDebugId()),
@@ -620,13 +693,26 @@ namespace {
                 static_cast<unsigned long>(dwY),
                 static_cast<unsigned long>(dwTrans),
                 BoolToText(useKey));
+        ColorKeyLog("free-direct BltFast colorkey: dstId=%llu srcId=%llu trans=0x%08lx useSrcColorKey=%s srcHasColorKey=%s",
+                    static_cast<unsigned long long>(debugId_),
+                    static_cast<unsigned long long>(sourceSurface->GetDebugId()),
+                    static_cast<unsigned long>(dwTrans),
+                    BoolToText(useKey),
+                    BoolToText(sourceSurface->hasSrcColorKey_));
 
-        const HRESULT hr = BlitFrom(*sourceSurface, &destRect, lpSrcRect, useKey);
+        uint64_t copiedPixels = 0;
+        uint64_t skippedPixels = 0;
+        const HRESULT hr = BlitFrom(*sourceSurface, &destRect, lpSrcRect, useKey, &copiedPixels, &skippedPixels);
+        ColorKeyLog("free-direct BltFast colorkey result: dstId=%llu srcId=%llu copied=%llu skipped=%llu",
+                    static_cast<unsigned long long>(debugId_),
+                    static_cast<unsigned long long>(sourceSurface->GetDebugId()),
+                    static_cast<unsigned long long>(copiedPixels),
+                    static_cast<unsigned long long>(skippedPixels));
         SDL_Log("free-direct BltFast result: dstId=%llu srcId=%llu hr=0x%08lx", 
                 static_cast<unsigned long long>(debugId_),
                 static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                 static_cast<unsigned long>(hr));
-        if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_) {
+        if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_ && !owner_->usesFlip_) {
             owner_->PresentPrimary(*this);
         }
         return hr;
@@ -665,26 +751,53 @@ namespace {
         return DD_OK;
     }
 
-    /** @note Status: PARTIAL - Provides a compatibility DC for 32-bit offscreen system-memory surfaces. */
+    /**
+     * @brief Provides a compatibility DC for surface pixel access via GDI functions.
+     *
+     * For 32-bit surfaces the DC points directly to the pixel buffer.
+     * For 8-bit paletted surfaces a temporary 32-bit RGBA buffer is allocated,
+     * palette-expanded from the native 8-bit pixels, and the DC is created over
+     * that temp buffer.  ReleaseDC converts the temp buffer back to palette indices.
+     * This is needed so that DDColorMatch (SetPixel/GetPixel -> Lock -> read back)
+     * works correctly for palette-index color key matching.
+     *
+     * @note Status: IMPLEMENTED
+     */
     HRESULT WINAPI DirectDrawSurfaceImpl::GetDC(HDC* lphDC)
     {
         if (!lphDC) {
             return DDERR_INVALIDPARAMS;
         }
 
-        if (type_ != SurfaceType::Offscreen || bpp_ != 32 || pixels_.empty()) {
+        if (pixels_.empty()) {
             *lphDC = nullptr;
-            SDL_Log("free-direct GetDC: unsupported surfaceId=%llu type=%s bpp=%d", 
-                    static_cast<unsigned long long>(debugId_),
-                    (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
-                    bpp_);
+            SDL_Log("free-direct GetDC: no pixel buffer surfaceId=%llu", static_cast<unsigned long long>(debugId_));
             return DDERR_UNSUPPORTED;
         }
 
         if (!attachedDc_) {
-            attachedDc_ = FreeApiCreateSurfaceDC(pixels_.data(), width_, height_, static_cast<int>(GetPitch()), bpp_);
+            if (bpp_ == 8) {
+                // Expand 8-bit palette indices to a temporary 32-bit RGBA buffer.
+                const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+                dcTempBuffer_.resize(pixelCount * 4u);
+                PALETTEENTRY entries[256] = {};
+                if (palette_) {
+                    palette_->GetEntries(0, 0, 256, entries);
+                }
+                for (size_t i = 0; i < pixelCount; ++i) {
+                    const uint8_t idx = pixels_[i];
+                    dcTempBuffer_[i * 4u + 0u] = entries[idx].peRed;
+                    dcTempBuffer_[i * 4u + 1u] = entries[idx].peGreen;
+                    dcTempBuffer_[i * 4u + 2u] = entries[idx].peBlue;
+                    dcTempBuffer_[i * 4u + 3u] = 255;
+                }
+                attachedDc_ = FreeApiCreateSurfaceDC(dcTempBuffer_.data(), width_, height_, width_ * 4, 32);
+            } else {
+                attachedDc_ = FreeApiCreateSurfaceDC(pixels_.data(), width_, height_, static_cast<int>(GetPitch()), bpp_);
+            }
             if (!attachedDc_) {
                 *lphDC = nullptr;
+                dcTempBuffer_.clear();
                 SDL_Log("free-direct GetDC: FreeApiCreateSurfaceDC failed for surfaceId=%llu", static_cast<unsigned long long>(debugId_));
                 return DDERR_GENERIC;
             }
@@ -701,7 +814,15 @@ namespace {
         return DD_OK;
     }
 
-    /** @note Status: PARTIAL - Validates compatibility DC handle and keeps it cached on the surface. */
+    /**
+     * @brief Release the DC obtained from GetDC.
+     *
+     * For 8-bit paletted surfaces the temporary 32-bit RGBA buffer is converted
+     * back to palette indices using nearest-match, then the temp buffer is freed.
+     * The DC is destroyed so a fresh one is created on the next GetDC call.
+     *
+     * @note Status: IMPLEMENTED
+     */
     HRESULT WINAPI DirectDrawSurfaceImpl::ReleaseDC(HDC hDC)
     {
         if (hDC != attachedDc_) {
@@ -712,9 +833,44 @@ namespace {
             return DDERR_INVALIDPARAMS;
         }
 
-        SDL_Log("free-direct ReleaseDC: surfaceId=%llu dc=%p", 
+        // For 8-bit surfaces, convert the temp 32-bit buffer back to palette indices.
+        if (bpp_ == 8 && !dcTempBuffer_.empty()) {
+            PALETTEENTRY entries[256] = {};
+            if (palette_) {
+                palette_->GetEntries(0, 0, 256, entries);
+            }
+            const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+            for (size_t i = 0; i < pixelCount; ++i) {
+                const uint8_t r = dcTempBuffer_[i * 4u + 0u];
+                const uint8_t g = dcTempBuffer_[i * 4u + 1u];
+                const uint8_t b = dcTempBuffer_[i * 4u + 2u];
+                // Find the nearest palette entry (minimise squared RGB distance).
+                int bestIdx = 0;
+                int bestDist = INT_MAX;
+                for (int j = 0; j < 256; ++j) {
+                    const int dr = static_cast<int>(r) - static_cast<int>(entries[j].peRed);
+                    const int dg = static_cast<int>(g) - static_cast<int>(entries[j].peGreen);
+                    const int db = static_cast<int>(b) - static_cast<int>(entries[j].peBlue);
+                    const int dist = dr * dr + dg * dg + db * db;
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestIdx = j;
+                        if (dist == 0) break;
+                    }
+                }
+                pixels_[i] = static_cast<uint8_t>(bestIdx);
+            }
+            dcTempBuffer_.clear();
+        }
+
+        // Destroy the DC so the next GetDC creates a fresh one.
+        FreeApiDestroySurfaceDC(attachedDc_);
+        attachedDc_ = nullptr;
+
+        SDL_Log("free-direct ReleaseDC: surfaceId=%llu dc=%p bpp=%d", 
                 static_cast<unsigned long long>(debugId_),
-                reinterpret_cast<void*>(hDC));
+                reinterpret_cast<void*>(hDC),
+                bpp_);
         return DD_OK;
     }
 
@@ -782,6 +938,16 @@ namespace {
         return DD_OK;
     }
 
+    /**
+     * @brief Store source blit color key on this surface.
+     *
+     * The stored values are kept exactly as provided by DirectDraw callers.
+     * During blits with source-key flags, 8-bit surfaces compare palette index values
+     * while 32-bit surfaces compare both raw packed pixel value and RGB-masked value
+     * for compatibility with DDColorMatch-based keys.
+     *
+     * @note Status: IMPLEMENTED (range compare supported; legacy key-generation quirks handled)
+     */
     HRESULT WINAPI DirectDrawSurfaceImpl::SetColorKey(DWORD dwFlags, LPDDCOLORKEY lpDDColorKey)
     {
         if (dwFlags & DDCKEY_SRCBLT) {
@@ -798,6 +964,12 @@ namespace {
                     BoolToText(hasSrcColorKey_),
                     static_cast<unsigned long>(hasSrcColorKey_ ? colorKey_.dwColorSpaceLowValue : 0),
                     static_cast<unsigned long>(hasSrcColorKey_ ? colorKey_.dwColorSpaceHighValue : 0));
+            ColorKeyLog("free-direct SetColorKey detail: surfaceId=%llu bpp=%d pitch=%ld low=0x%08lx high=0x%08lx",
+                        static_cast<unsigned long long>(debugId_),
+                        bpp_,
+                        static_cast<long>(GetPitch()),
+                        static_cast<unsigned long>(hasSrcColorKey_ ? colorKey_.dwColorSpaceLowValue : 0),
+                        static_cast<unsigned long>(hasSrcColorKey_ ? colorKey_.dwColorSpaceHighValue : 0));
             return DD_OK;
         }
         SDL_Log("free-direct SetColorKey: unsupported flags=0x%08lx on surfaceId=%llu", 
@@ -825,6 +997,11 @@ namespace {
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 BoolToText(dirty_),
                 static_cast<unsigned long>(dwFlags));
+
+        // Mark that this game uses Flip for presentation — disables auto-present from Blt/BltFast.
+        if (owner_) {
+            owner_->usesFlip_ = true;
+        }
 
         if (type_ != SurfaceType::Primary || !owner_ || !owner_->renderer_) {
             SDL_Log("free-direct Flip: unsupported state (type=%s owner=%p renderer=%p)",

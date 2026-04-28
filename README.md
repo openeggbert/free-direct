@@ -104,12 +104,23 @@ Current known limitations:
 * Some compatibility paths are intentionally minimal (`SetDisplayMode`, `IsLost`, `Restore`).
 * `GetDC` support is minimal and intended for compatibility helpers.
 * 8-bit rendering is supported through palette conversion on present; full hardware-era semantics are not replicated.
+* Source color-key range handling is implemented for the used subset; broader legacy edge cases are still partial.
 
 Debug logging:
 
 * DirectDraw debug logs can be enabled with `FREE_DIRECT_DEBUG_DDRAW=1`.
 * Presentation-path debug logs can be enabled with `FREE_DIRECT_DEBUG_PRESENTATION=1`.
+* Color-key diagnostics can be enabled with `FREE_DIRECT_DEBUG_COLORKEY=1`.
 * Optional one-time primary clear diagnostic can be enabled with `FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1`.
+
+Color-key behavior (subset):
+
+* `SetColorKey(DDCKEY_SRCBLT, ...)` stores low/high values per source surface.
+* `BltFast` uses source color key when `DDBLTFAST_SRCCOLORKEY` is set.
+* `Blt` uses source color key when `DDBLT_KEYSRC` is set.
+* For 8-bit surfaces, comparisons are made against palette index values.
+* For 32-bit surfaces, comparisons use packed source pixel values with RGB-masked compatibility fallback.
+* `NOCOLORKEY` blits copy all pixels, including blue.
 
 Presentation model:
 
