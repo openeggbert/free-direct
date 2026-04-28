@@ -106,12 +106,13 @@ Current known limitations:
 * 8-bit rendering is supported through palette conversion on present; full hardware-era semantics are not replicated.
 * Source color-key range handling is implemented for the used subset; broader legacy edge cases are still partial.
 
-Debug logging:
+Debug logging and performance options:
 
 * DirectDraw debug logs can be enabled with `FREE_DIRECT_DEBUG_DDRAW=1`.
 * Presentation-path debug logs can be enabled with `FREE_DIRECT_DEBUG_PRESENTATION=1`.
 * Color-key diagnostics can be enabled with `FREE_DIRECT_DEBUG_COLORKEY=1`.
 * Optional one-time primary clear diagnostic can be enabled with `FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1`.
+* Performance counters (presents/s, uploads/s, blts/s) can be enabled with `FREE_DIRECT_DEBUG_PERF=1`.
 
 Color-key behavior (subset):
 
@@ -122,16 +123,20 @@ Color-key behavior (subset):
 * For 32-bit surfaces, comparisons use packed source pixel values with RGB-masked compatibility fallback.
 * `NOCOLORKEY` blits copy all pixels, including blue.
 
-Presentation model:
+Presentation model and frame pacing:
 
 * All surfaces (primary and offscreen) store CPU pixel buffers.
-* `Blt` / `BltFast` write to CPU buffers only — no direct SDL rendering.
-* `Flip` is the single presentation entry point:
-  1. Uploads the primary surface buffer to a cached streaming `SDL_Texture`.
-  2. Clears the renderer immediately before drawing.
-  3. Renders the texture to the full window.
-  4. Calls `SDL_RenderPresent` exactly once.
-* This avoids flickering caused by clearing after drawing or presenting before upload.
+* `Blt` / `BltFast` write to CPU buffers and mark the primary surface dirty.
+* `Flip` or a Blt-to-primary call triggers `PresentPrimary`:
+  1. **Throttle check**: skips upload+present if called within the frame interval (default 60 FPS / ~16.7 ms). Override with `FREE_DIRECT_TARGET_FPS=<n>`.
+  2. **Dirty check**: skips upload+present if the primary surface has not changed since the last present.
+  3. Uploads the primary surface buffer to a cached streaming `SDL_Texture`.
+  4. Clears the renderer immediately before drawing.
+  5. Renders the texture to the full window.
+  6. Calls `SDL_RenderPresent` exactly once.
+* VSync is enabled by default via `SDL_SetRenderVSync`. Disable with `FREE_DIRECT_ENABLE_VSYNC=0`.
+* `PeekMessageA` yields CPU with `SDL_Delay(1)` when the message queue is empty, preventing busy-spin in the game's main loop.
+* These changes collectively eliminate the busy-loop CPU overhead that caused ~6% CPU usage.
 
 ---
 

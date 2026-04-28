@@ -93,7 +93,23 @@ namespace {
         return value ? "yes" : "no";
     }
 
-    bool IsDebugPrimaryClearEnabled()
+    bool IsPerfDebugEnabled()
+        {
+            static int v = -1;
+            if (v < 0) v = IsEnvFlagEnabled("FREE_DIRECT_DEBUG_PERF") ? 1 : 0;
+            return v != 0;
+        }
+
+        void PerfLog(const char* format, ...)
+        {
+            if (!IsPerfDebugEnabled()) return;
+            va_list args;
+            va_start(args, format);
+            SDL_LogMessageV(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_INFO, format, args);
+            va_end(args);
+        }
+
+        bool IsDebugPrimaryClearEnabled()
     {
         const char* env = SDL_getenv("FREE_DIRECT_DEBUG_PRIMARY_CLEAR");
         if (!env) {
@@ -301,6 +317,16 @@ namespace {
         bool debugPrimaryClearEnabled_;
         /// True once Flip has been called at least once; disables auto-present from Blt/BltFast.
         bool usesFlip_ = false;
+        /// Timestamp of the last successful SDL_RenderPresent (nanoseconds from SDL_GetTicksNS).
+        uint64_t lastPresentNs_ = 0;
+        /// Minimum nanoseconds between presents (default = 1s/60 ≈ 16.67 ms).
+        uint64_t presentIntervalNs_ = 1000000000ULL / 60ULL;
+        /// Perf counters (per-second summary when FREE_DIRECT_DEBUG_PERF=1).
+        uint64_t perfWindowStart_ = 0;
+        uint64_t perfBltCalls_ = 0;
+        uint64_t perfPresentAttempts_ = 0;
+        uint64_t perfPresentThrottled_ = 0;
+        uint64_t perfTextureUploads_ = 0;
     };
 
     RECT GetFullRect(const int width, const int height)
@@ -653,6 +679,7 @@ namespace {
                     (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                     static_cast<unsigned long>(hr));
             if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_ && !owner_->usesFlip_) {
+                if (owner_) owner_->perfBltCalls_++;
                 owner_->PresentPrimary(*this);
             }
             return hr;
@@ -713,6 +740,7 @@ namespace {
                 static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                 static_cast<unsigned long>(hr));
         if (SUCCEEDED(hr) && type_ == SurfaceType::Primary && owner_ && owner_->renderer_ && !owner_->usesFlip_) {
+            owner_->perfBltCalls_++;
             owner_->PresentPrimary(*this);
         }
         return hr;
@@ -1024,6 +1052,15 @@ namespace {
           debugPrimaryClearDone_(false),
           debugPrimaryClearEnabled_(IsDebugPrimaryClearEnabled())
     {
+        // Allow overriding target FPS via env var FREE_DIRECT_TARGET_FPS.
+        const char* fpsCStr = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_TARGET_FPS");
+        if (fpsCStr) {
+            const int fps = static_cast<int>(SDL_strtol(fpsCStr, nullptr, 10));
+            if (fps > 0 && fps <= 1000) {
+                presentIntervalNs_ = 1000000000ULL / static_cast<uint64_t>(fps);
+            }
+        }
+        perfWindowStart_ = SDL_GetTicksNS();
         SDL_Log("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s", BoolToText(debugPrimaryClearEnabled_));
     }
 
@@ -1085,9 +1122,16 @@ namespace {
             renderer_ = nullptr;
         }
 
+        // Enable vsync by default to limit frame rate at the driver level.
+        // Can be disabled via FREE_DIRECT_ENABLE_VSYNC=0.
+        const char* vsyncEnv = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_ENABLE_VSYNC");
+        const bool enableVsync = (vsyncEnv == nullptr) || SDL_strcasecmp(vsyncEnv, "0") != 0;
         renderer_ = SDL_CreateRenderer(sdlWindow_, NULL);
         if (renderer_) {
-            SDL_Log("free-direct SDL_CreateRenderer: window=%p renderer=%p backend=default", static_cast<void*>(sdlWindow_), static_cast<void*>(renderer_));
+            if (enableVsync) {
+                SDL_SetRenderVSync(renderer_, 1);
+            }
+            SDL_Log("free-direct SDL_CreateRenderer: window=%p renderer=%p backend=default vsync=%s", static_cast<void*>(sdlWindow_), static_cast<void*>(renderer_), BoolToText(enableVsync));
         }
         if (!renderer_) {
             // PARTIAL: Legacy compatibility fallback for environments where
@@ -1270,6 +1314,21 @@ namespace {
             return DDERR_UNSUPPORTED;
         }
 
+        perfPresentAttempts_++;
+
+        // Throttle: skip present if called too soon after the last frame.
+        const uint64_t nowNs = SDL_GetTicksNS();
+        if (lastPresentNs_ != 0 && (nowNs - lastPresentNs_) < presentIntervalNs_) {
+            perfPresentThrottled_++;
+            return DD_OK;
+        }
+
+        // Also skip upload+present when surface has not changed since last present.
+        if (!primary.dirty_ && lastPresentNs_ != 0) {
+            perfPresentThrottled_++;
+            return DD_OK;
+        }
+
         PresentLog("free-direct PresentPrimary: id=%llu size=%dx%d bpp=%d dirty=%s presentCalls=%llu",
                 static_cast<unsigned long long>(primary.GetDebugId()),
                 primary.GetWidth(),
@@ -1323,6 +1382,7 @@ namespace {
             PresentLog("free-direct PresentPrimary: uploading 32-bit RGBA");
             SDL_UpdateTexture(primary.texture_, NULL, primary.GetPixels().data(), primary.GetWidth() * 4);
         }
+        perfTextureUploads_++;
 
         // 3. Clear renderer (immediately before drawing current content — no gap).
         SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
@@ -1333,12 +1393,31 @@ namespace {
 
         // 5. Present exactly once.
         SDL_RenderPresent(renderer_);
+        lastPresentNs_ = SDL_GetTicksNS();
         presentCallCount_++;
         primaryPresented_ = true;
         primary.ConsumeAndClearDirty();
 
         PresentLog("free-direct PresentPrimary: presented frame #%llu",
                 static_cast<unsigned long long>(presentCallCount_));
+
+        // Perf summary: print once per second when FREE_DIRECT_DEBUG_PERF=1.
+        if (IsPerfDebugEnabled()) {
+            const uint64_t elapsed = lastPresentNs_ - perfWindowStart_;
+            if (elapsed >= 1000000000ULL) {
+                PerfLog("[PERF] presents=%llu throttled=%llu uploads=%llu blts=%llu (window=%.2fs)",
+                        static_cast<unsigned long long>(presentCallCount_),
+                        static_cast<unsigned long long>(perfPresentThrottled_),
+                        static_cast<unsigned long long>(perfTextureUploads_),
+                        static_cast<unsigned long long>(perfBltCalls_),
+                        static_cast<double>(elapsed) / 1e9);
+                perfWindowStart_ = lastPresentNs_;
+                perfBltCalls_ = 0;
+                perfPresentAttempts_ = 0;
+                perfPresentThrottled_ = 0;
+                perfTextureUploads_ = 0;
+            }
+        }
 
         return DD_OK;
     }
