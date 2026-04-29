@@ -86,6 +86,16 @@ namespace {
         va_end(args);
     }
 
+    void GetDefault332Palette(PALETTEENTRY entries[256])
+    {
+        for (int i = 0; i < 256; ++i) {
+            entries[i].peRed   = static_cast<BYTE>(((i >> 5) & 0x07) * 255 / 7);
+            entries[i].peGreen = static_cast<BYTE>(((i >> 2) & 0x07) * 255 / 7);
+            entries[i].peBlue  = static_cast<BYTE>(((i >> 0) & 0x03) * 255 / 3);
+            entries[i].peFlags = 0;
+        }
+    }
+
 #define SDL_Log DirectDrawLog
 
     const char* BoolToText(const bool value)
@@ -811,6 +821,8 @@ namespace {
                 PALETTEENTRY entries[256] = {};
                 if (palette_) {
                     palette_->GetEntries(0, 0, 256, entries);
+                } else {
+                    GetDefault332Palette(entries);
                 }
                 for (size_t i = 0; i < pixelCount; ++i) {
                     const uint8_t idx = pixels_[i];
@@ -866,6 +878,8 @@ namespace {
             PALETTEENTRY entries[256] = {};
             if (palette_) {
                 palette_->GetEntries(0, 0, 256, entries);
+            } else {
+                GetDefault332Palette(entries);
             }
             const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
             for (size_t i = 0; i < pixelCount; ++i) {
@@ -1360,6 +1374,9 @@ namespace {
             bool hasPalette = false;
             if (primary.palette_) {
                 primary.palette_->GetEntries(0, 0, 256, entries);
+                hasPalette = true;
+            } else {
+                GetDefault332Palette(entries);
                 hasPalette = true;
             }
             for (size_t i = 0; i < pixelCount; ++i) {
