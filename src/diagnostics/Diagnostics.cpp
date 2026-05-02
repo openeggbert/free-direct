@@ -51,6 +51,17 @@ void OnObjectCreated(const char* kind, int64_t everCount)
     }
 }
 
+void AddLiveBytes(std::atomic<int64_t>& liveCounter, std::atomic<int64_t>& highWaterCounter, const int64_t delta)
+{
+    const int64_t value = liveCounter.fetch_add(delta, std::memory_order_relaxed) + delta;
+    if (delta <= 0) return;
+
+    int64_t highWater = highWaterCounter.load(std::memory_order_relaxed);
+    while (value > highWater &&
+           !highWaterCounter.compare_exchange_weak(highWater, value, std::memory_order_relaxed)) {
+    }
+}
+
 namespace {
 
 // Best-effort RSS read on Linux (returns 0 elsewhere). Heartbeat-only path.
@@ -81,6 +92,7 @@ void EmitLine(const char* tag)
     SDL_Log("[FREE_DIRECT_DIAG][%s] rss=%ldKB rssMB=%.1f "
             "live: dd=%lld ddSurf=%lld/%lld/%lld sdlSurf=%lld/%lld/%lld pal=%lld/%lld/%lld clip=%lld/%lld/%lld "
             "sdlTex=%lld/%lld/%lld ds=%lld dsBuf=%lld/%lld/%lld audioStream=%lld/%lld/%lld mixChunk=%lld/%lld/%lld "
+            "bytes: ddPixels=%lldKB(hw=%lldKB) ddDcTemp=%lldKB(hw=%lldKB) "
             "totals: createSurface=%lld surfaceFinalRelease=%lld lock=%lld unlock=%lld blt=%lld bltFast=%lld flip=%lld present=%lld textureUpdate=%lld "
             "win[present=%lld blt=%lld] cache: freeDirect=0 freeApi=see_FREE_API_DIAG",
         tag,
@@ -112,6 +124,10 @@ void EmitLine(const char* tag)
         (long long)c.mixChunks.load(),
         (long long)c.mixChunksEver.load(),
         (long long)c.mixChunksDestroyed.load(),
+        (long long)(c.ddSurfacePixelCapacityBytes.load() / 1024),
+        (long long)(c.ddSurfacePixelCapacityHighWaterBytes.load() / 1024),
+        (long long)(c.ddSurfaceDcTempCapacityBytes.load() / 1024),
+        (long long)(c.ddSurfaceDcTempCapacityHighWaterBytes.load() / 1024),
         (long long)c.ddSurfacesEver.load(),
         (long long)c.ddSurfaceFinalReleases.load(),
         (long long)c.lockCallsTotal.load(),

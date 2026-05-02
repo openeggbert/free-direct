@@ -304,6 +304,8 @@ namespace {
         HDC attachedDc_ = nullptr;
         /// Temporary 32-bit RGBA buffer used by GetDC/ReleaseDC for 8-bit surfaces.
         std::vector<uint8_t> dcTempBuffer_;
+        size_t diagPixelCapacityBytes_ = 0;
+        size_t diagDcTempCapacityBytes_ = 0;
     };
 
     class DirectDrawImpl final : public IDirectDraw {
@@ -403,6 +405,10 @@ namespace {
         // Both primary and offscreen surfaces own CPU pixel buffers.
         // Primary surface pixels are uploaded to SDL_Texture during presentation (Flip).
         pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * (bpp_ / 8u), 0);
+        diagPixelCapacityBytes_ = pixels_.capacity();
+        FREE_DIRECT_DIAG_ADD_BYTES(ddSurfacePixelCapacityBytes,
+                                   ddSurfacePixelCapacityHighWaterBytes,
+                                   static_cast<int64_t>(diagPixelCapacityBytes_));
 
         SDL_Log("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s", 
                 static_cast<unsigned long long>(debugId_),
@@ -434,6 +440,12 @@ namespace {
         }
         if (palette_) palette_->Release();
         if (clipper_) clipper_->Release();
+        FREE_DIRECT_DIAG_ADD_BYTES(ddSurfacePixelCapacityBytes,
+                                   ddSurfacePixelCapacityHighWaterBytes,
+                                   -static_cast<int64_t>(diagPixelCapacityBytes_));
+        FREE_DIRECT_DIAG_ADD_BYTES(ddSurfaceDcTempCapacityBytes,
+                                   ddSurfaceDcTempCapacityHighWaterBytes,
+                                   -static_cast<int64_t>(diagDcTempCapacityBytes_));
         FREE_DIRECT_DIAG_DEC(ddSurfaces);
         FREE_DIRECT_DIAG_INC_TOTAL(ddSurfaceFinalReleases);
     }
@@ -845,7 +857,15 @@ namespace {
             if (bpp_ == 8) {
                 // Expand 8-bit palette indices to a temporary 32-bit RGBA buffer.
                 const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+                const size_t oldCapacity = dcTempBuffer_.capacity();
                 dcTempBuffer_.resize(pixelCount * 4u);
+                if (dcTempBuffer_.capacity() != oldCapacity) {
+                    const auto delta = static_cast<int64_t>(dcTempBuffer_.capacity() - oldCapacity);
+                    diagDcTempCapacityBytes_ = dcTempBuffer_.capacity();
+                    FREE_DIRECT_DIAG_ADD_BYTES(ddSurfaceDcTempCapacityBytes,
+                                               ddSurfaceDcTempCapacityHighWaterBytes,
+                                               delta);
+                }
                 PALETTEENTRY entries[256] = {};
                 if (palette_) {
                     palette_->GetEntries(0, 0, 256, entries);

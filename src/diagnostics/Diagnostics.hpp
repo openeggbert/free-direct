@@ -69,6 +69,12 @@ struct Counters {
     // per-frame counters (reset by heartbeat)
     std::atomic<int64_t> presentsThisWindow{0};
     std::atomic<int64_t> bltCallsThisWindow{0};
+
+    // live retained std::vector capacities (bytes) for memory-growth triage
+    std::atomic<int64_t> ddSurfacePixelCapacityBytes{0};
+    std::atomic<int64_t> ddSurfacePixelCapacityHighWaterBytes{0};
+    std::atomic<int64_t> ddSurfaceDcTempCapacityBytes{0};
+    std::atomic<int64_t> ddSurfaceDcTempCapacityHighWaterBytes{0};
 };
 
 Counters& Get();
@@ -88,6 +94,9 @@ void Snapshot(const char* tag);
 // world-transition growth is observable without modifying game source.
 void OnObjectCreated(const char* kind, int64_t everCount);
 
+// Adjust a live byte counter and update its high-water mark after positive deltas.
+void AddLiveBytes(std::atomic<int64_t>& liveCounter, std::atomic<int64_t>& highWaterCounter, int64_t delta);
+
 } // namespace free_direct_diag
 
 #define FREE_DIRECT_DIAG_INC(field) \
@@ -104,6 +113,8 @@ void OnObjectCreated(const char* kind, int64_t everCount);
         const int64_t v_ = ::free_direct_diag::Get().field.fetch_add(1, std::memory_order_relaxed) + 1; \
         ::free_direct_diag::OnObjectCreated((kind), v_); \
     } while (0)
+#define FREE_DIRECT_DIAG_ADD_BYTES(field, highWaterField, delta) \
+    do { ::free_direct_diag::AddLiveBytes(::free_direct_diag::Get().field, ::free_direct_diag::Get().highWaterField, (delta)); } while (0)
 
 #else // !FREE_DIRECT_DIAGNOSTICS
 
@@ -113,5 +124,6 @@ void OnObjectCreated(const char* kind, int64_t everCount);
 #define FREE_DIRECT_DIAG_HEARTBEAT() do {} while (0)
 #define FREE_DIRECT_DIAG_SNAPSHOT(tag) do {} while (0)
 #define FREE_DIRECT_DIAG_INC_EVER(field, kind) do {} while (0)
+#define FREE_DIRECT_DIAG_ADD_BYTES(field, highWaterField, delta) do {} while (0)
 
 #endif
