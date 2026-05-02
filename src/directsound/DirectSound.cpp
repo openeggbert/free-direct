@@ -34,6 +34,7 @@
 #include "dsound.h"
 
 #include <SDL3/SDL.h>
+#include "../diagnostics/Diagnostics.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -231,6 +232,8 @@ public:
     explicit DirectSoundBufferImpl(const DSBUFFERDESC* desc)
         : refCount_(1)
     {
+        FREE_DIRECT_DIAG_INC(dsBuffers);
+        FREE_DIRECT_DIAG_INC_EVER(dsBuffersEver, "ds");
         if (!desc) return;
 
         bufferBytes_  = desc->dwBufferBytes;
@@ -276,6 +279,8 @@ public:
     ~DirectSoundBufferImpl() override
     {
         destroyStream();
+        FREE_DIRECT_DIAG_DEC(dsBuffers);
+        FREE_DIRECT_DIAG_INC_TOTAL(dsBuffersDestroyed);
     }
 
     // ------- IUnknown -------------------------------------------------------
@@ -544,11 +549,15 @@ private:
             SDL_Log("[dsound] SDL_CreateAudioStream failed: %s", SDL_GetError());
             return false;
         }
+        FREE_DIRECT_DIAG_INC(sdlAudioStreams);
+        FREE_DIRECT_DIAG_INC_EVER(sdlAudioStreamsEver, "astream");
 
         if (!SDL_BindAudioStream(dev, stream_)) {
             SDL_Log("[dsound] SDL_BindAudioStream failed: %s", SDL_GetError());
             SDL_DestroyAudioStream(stream_);
             stream_ = nullptr;
+            FREE_DIRECT_DIAG_DEC(sdlAudioStreams);
+            FREE_DIRECT_DIAG_INC_TOTAL(sdlAudioStreamsDestroyed);
             return false;
         }
 
@@ -567,6 +576,8 @@ private:
             SDL_UnbindAudioStream(stream_);
             SDL_DestroyAudioStream(stream_);
             stream_ = nullptr;
+            FREE_DIRECT_DIAG_DEC(sdlAudioStreams);
+            FREE_DIRECT_DIAG_INC_TOTAL(sdlAudioStreamsDestroyed);
         }
     }
 
@@ -626,11 +637,12 @@ private:
  */
 class DirectSoundImpl final : public IDirectSound {
 public:
-    DirectSoundImpl() : refCount_(1) {}
+    DirectSoundImpl() : refCount_(1) { FREE_DIRECT_DIAG_INC(dsInstances); }
 
     ~DirectSoundImpl() override
     {
         SharedAudioDevice::instance().release();
+        FREE_DIRECT_DIAG_DEC(dsInstances);
     }
 
     // ------- IUnknown -------------------------------------------------------

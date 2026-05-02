@@ -6,6 +6,7 @@
 #include <ddraw.h>
 
 #include <SDL3/SDL.h>
+#include "../diagnostics/Diagnostics.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -140,6 +141,8 @@ namespace {
     class DirectDrawPaletteImpl final : public IDirectDrawPalette {
     public:
         DirectDrawPaletteImpl(DWORD dwFlags, LPPALETTEENTRY lpColorTable) : refCount_(1), flags_(dwFlags) {
+            FREE_DIRECT_DIAG_INC(ddPalettes);
+            FREE_DIRECT_DIAG_INC_EVER(ddPalettesEver, "pal");
             if (lpColorTable) {
                 for (int i = 0; i < 256; ++i) {
                     entries_[i] = lpColorTable[i];
@@ -149,6 +152,12 @@ namespace {
                     entrie = {0, 0, 0, 0};
                 }
             }
+        }
+
+        ~DirectDrawPaletteImpl() override
+        {
+            FREE_DIRECT_DIAG_DEC(ddPalettes);
+            FREE_DIRECT_DIAG_INC_TOTAL(ddPalettesDestroyed);
         }
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
@@ -189,7 +198,16 @@ namespace {
 
     class DirectDrawClipperImpl final : public IDirectDrawClipper {
     public:
-        DirectDrawClipperImpl() : refCount_(1), hwnd_(NULL) {}
+        DirectDrawClipperImpl() : refCount_(1), hwnd_(NULL)
+        {
+            FREE_DIRECT_DIAG_INC(ddClippers);
+            FREE_DIRECT_DIAG_INC_EVER(ddClippersEver, "clip");
+        }
+        ~DirectDrawClipperImpl() override
+        {
+            FREE_DIRECT_DIAG_DEC(ddClippers);
+            FREE_DIRECT_DIAG_INC_TOTAL(ddClippersDestroyed);
+        }
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
             (void)riid; (void)ppvObject; return DDERR_UNSUPPORTED;
@@ -380,6 +398,8 @@ namespace {
           texture_(nullptr),
           debugId_(g_nextSurfaceId.fetch_add(1))
     {
+        FREE_DIRECT_DIAG_INC(ddSurfaces);
+        FREE_DIRECT_DIAG_INC_EVER(ddSurfacesEver, "surf");
         // Both primary and offscreen surfaces own CPU pixel buffers.
         // Primary surface pixels are uploaded to SDL_Texture during presentation (Flip).
         pixels_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * (bpp_ / 8u), 0);
@@ -409,9 +429,13 @@ namespace {
 
         if (texture_) {
             SDL_DestroyTexture(texture_);
+            FREE_DIRECT_DIAG_DEC(sdlTextures);
+            FREE_DIRECT_DIAG_INC_TOTAL(sdlTexturesDestroyed);
         }
         if (palette_) palette_->Release();
         if (clipper_) clipper_->Release();
+        FREE_DIRECT_DIAG_DEC(ddSurfaces);
+        FREE_DIRECT_DIAG_INC_TOTAL(ddSurfaceFinalReleases);
     }
 
     HRESULT WINAPI DirectDrawSurfaceImpl::QueryInterface(const GUID& riid, void** ppvObject)
@@ -590,6 +614,8 @@ namespace {
                                               DWORD dwFlags,
                                               LPDDBLTFX lpDDBltFx)
     {
+        FREE_DIRECT_DIAG_INC(bltCallsThisWindow);
+        FREE_DIRECT_DIAG_INC_TOTAL(bltCallsTotal);
         auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
         const bool requestSrcColorKey = (dwFlags & DDBLT_KEYSRC) != 0;
         SDL_Log("free-direct Blt: dstId=%llu dstType=%s srcId=%llu src=%p flags=0x%08lx hasPalette=%s hasSrcColorKey=%s", 
@@ -701,6 +727,8 @@ namespace {
 
     HRESULT WINAPI DirectDrawSurfaceImpl::BltFast(DWORD dwX, DWORD dwY, LPDIRECTDRAWSURFACE lpDDSrcSurface, LPRECT lpSrcRect, DWORD dwTrans)
     {
+        FREE_DIRECT_DIAG_INC(bltCallsThisWindow);
+        FREE_DIRECT_DIAG_INC_TOTAL(bltFastCallsTotal);
         if (!lpDDSrcSurface) {
             SDL_Log("free-direct BltFast: null source surface");
             return DDERR_INVALIDPARAMS;
@@ -947,6 +975,7 @@ namespace {
     HRESULT WINAPI DirectDrawSurfaceImpl::Lock(LPRECT lpDestRect, LPDDSURFACEDESC lpDDSurfaceDesc, DWORD dwFlags, HANDLE hEvent)
     {
         (void)hEvent;
+        FREE_DIRECT_DIAG_INC_TOTAL(lockCallsTotal);
 
         const HRESULT hr = GetSurfaceDesc(lpDDSurfaceDesc);
         SDL_Log("free-direct Lock: surfaceId=%llu type=%s flags=0x%08lx hr=0x%08lx pitch=%ld bpp=%d size=%dx%d hasPalette=%s", 
@@ -973,6 +1002,7 @@ namespace {
 
     HRESULT WINAPI DirectDrawSurfaceImpl::Unlock(LPVOID lpSurfaceData)
     {
+        FREE_DIRECT_DIAG_INC_TOTAL(unlockCallsTotal);
         SDL_Log("free-direct Unlock: surfaceId=%llu type=%s data=%p", 
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
@@ -1033,6 +1063,7 @@ namespace {
     {
         (void)lpDDSurfaceTargetOverride;
         (void)dwFlags;
+        FREE_DIRECT_DIAG_INC_TOTAL(flipCallsTotal);
 
         PresentLog("free-direct Flip: surfaceId=%llu type=%s dirty=%s flags=0x%08lx",
                 static_cast<unsigned long long>(debugId_),
@@ -1066,6 +1097,7 @@ namespace {
           debugPrimaryClearDone_(false),
           debugPrimaryClearEnabled_(IsDebugPrimaryClearEnabled())
     {
+        FREE_DIRECT_DIAG_INC(ddInstances);
         // Allow overriding target FPS via env var FREE_DIRECT_TARGET_FPS.
         const char* fpsCStr = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_TARGET_FPS");
         if (fpsCStr) {
@@ -1086,6 +1118,7 @@ namespace {
                 static_cast<void*>(renderer_),
                 static_cast<void*>(sdlWindow_));
         if (renderer_) SDL_DestroyRenderer(renderer_);
+        FREE_DIRECT_DIAG_DEC(ddInstances);
     }
 
     HRESULT WINAPI DirectDrawImpl::QueryInterface(const GUID& riid, void** ppvObject)
@@ -1359,6 +1392,8 @@ namespace {
                                                   SDL_TEXTUREACCESS_STREAMING,
                                                   primary.GetWidth(), primary.GetHeight());
             if (primary.texture_) {
+                FREE_DIRECT_DIAG_INC(sdlTextures);
+                FREE_DIRECT_DIAG_INC_EVER(sdlTexturesEver, "tex");
                 SDL_SetTextureBlendMode(primary.texture_, SDL_BLENDMODE_NONE);
             } else {
                 SDL_Log("free-direct PresentPrimary: SDL_CreateTexture failed: %s", SDL_GetError());
@@ -1395,9 +1430,11 @@ namespace {
             }
             PresentLog("free-direct PresentPrimary: uploading 8-bit→RGBA32 hasPalette=%s", BoolToText(hasPalette));
             SDL_UpdateTexture(primary.texture_, NULL, temp.data(), primary.GetWidth() * 4);
+            FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
         } else {
             PresentLog("free-direct PresentPrimary: uploading 32-bit RGBA");
             SDL_UpdateTexture(primary.texture_, NULL, primary.GetPixels().data(), primary.GetWidth() * 4);
+            FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
         }
         perfTextureUploads_++;
 
@@ -1412,8 +1449,11 @@ namespace {
         SDL_RenderPresent(renderer_);
         lastPresentNs_ = SDL_GetTicksNS();
         presentCallCount_++;
+        FREE_DIRECT_DIAG_INC_TOTAL(presentCallsTotal);
         primaryPresented_ = true;
         primary.ConsumeAndClearDirty();
+        FREE_DIRECT_DIAG_INC(presentsThisWindow);
+        FREE_DIRECT_DIAG_HEARTBEAT();
 
         PresentLog("free-direct PresentPrimary: presented frame #%llu",
                 static_cast<unsigned long long>(presentCallCount_));

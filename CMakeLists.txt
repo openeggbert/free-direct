@@ -23,7 +23,16 @@ target_sources(free-direct
         src/directdraw/DirectDraw.cpp
         src/directsound/DirectSound.cpp
         src/directplay/DirectPlay.cpp
+        src/diagnostics/Diagnostics.cpp
 )
+# Compile-time-gated diagnostics counters (off by default; zero overhead when off).
+# Enable from the parent project via:
+#   set(FREE_DIRECT_DIAGNOSTICS ON CACHE BOOL "Enable Free Direct diagnostics")
+option(FREE_DIRECT_DIAGNOSTICS "Enable Free Direct diagnostic counters" OFF)
+if(FREE_DIRECT_DIAGNOSTICS)
+    target_compile_definitions(free-direct PRIVATE FREE_DIRECT_DIAGNOSTICS=1)
+endif()
+target_include_directories(free-direct PRIVATE src)
 
 # Intentionally mirrors the legacy DirectX SDK include layout, e.g. #include <ddraw.h>.
 target_include_directories(free-direct
