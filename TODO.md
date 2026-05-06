@@ -6,30 +6,6 @@ This document lists current issues, limitations, and next steps for the **Free A
 
 ## 🔴 Critical Fixes (Do First)
 
-### 1. Calling Convention Macros (`__stdcall`, `__cdecl`)
-**Problem:**
-`windef.h` overrides `__stdcall` and `__cdecl` globally using `#undef` and `#define`.
-
-**Why it's bad:**
-- Breaks ABI compatibility on Windows
-- Can conflict with system headers
-- Unsafe for public headers
-
-**Fix:**
-Define them only if missing:
-
-```cpp
-#ifndef __stdcall
-#define __stdcall
-#endif
-
-#ifndef __cdecl
-#define __cdecl
-#endif
-````
-
----
-
 ### 2. Incorrect Window Close Flow (`WM_CLOSE`, `WM_DESTROY`)
 
 **Problem:**

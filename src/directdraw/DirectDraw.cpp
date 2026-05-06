@@ -19,6 +19,7 @@
 
 extern "C" HDC FreeApiCreateSurfaceDC(void* pixels, int width, int height, int pitch, int bitsPerPixel);
 extern "C" BOOL FreeApiDestroySurfaceDC(HDC hdc);
+extern "C" void FreeApiSetWindowFullscreen(HWND hwnd, bool fullscreen);
 
 namespace {
     bool IsEnvFlagEnabled(const char* envName)
@@ -1137,6 +1138,9 @@ namespace {
                 static_cast<unsigned long long>(presentCallCount_),
                 static_cast<void*>(renderer_),
                 static_cast<void*>(sdlWindow_));
+        if (hwnd_) {
+            FreeApiSetWindowFullscreen(hwnd_, false);
+        }
         if (renderer_) SDL_DestroyRenderer(renderer_);
         FREE_DIRECT_DIAG_DEC(ddInstances);
     }
@@ -1173,6 +1177,12 @@ namespace {
 
         hwnd_ = hWnd;
         sdlWindow_ = reinterpret_cast<SDL_Window*>(hwnd_);
+
+        if (dwFlags & DDSCL_FULLSCREEN) {
+            FreeApiSetWindowFullscreen(hwnd_, true);
+        } else if (dwFlags & DDSCL_NORMAL) {
+            FreeApiSetWindowFullscreen(hwnd_, false);
+        }
 
         SDL_Renderer* windowRenderer = SDL_GetRenderer(sdlWindow_);
         if (windowRenderer && windowRenderer != renderer_) {
@@ -1336,6 +1346,11 @@ namespace {
                 static_cast<unsigned long>(dwWidth),
                 static_cast<unsigned long>(dwHeight),
                 static_cast<unsigned long>(dwBPP));
+
+        if (hwnd_) {
+            FreeApiSetWindowFullscreen(hwnd_, true);
+        }
+
         return DD_OK;
     }
 
