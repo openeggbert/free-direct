@@ -39,6 +39,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <numbers>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -138,7 +139,7 @@ void dsPanToGains(LONG pan, float& left, float& right)
     // Constant-power pan law approximation
     // left  = cos( (p+1)/2 * π/2 )
     // right = sin( (p+1)/2 * π/2 )
-    float angle = (p + 1.0f) * 0.5f * static_cast<float>(M_PI) * 0.5f;
+    float angle = (p + 1.0f) * 0.5f * static_cast<float>(std::numbers::pi) * 0.5f;
     left  = std::cos(angle);
     right = std::sin(angle);
 }
