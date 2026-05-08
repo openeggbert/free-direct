@@ -53,4 +53,10 @@ target_link_libraries(free-direct
 )
 
 add_executable(FREE_DIRECT src/Main.cpp)
-target_link_libraries(FREE_DIRECT PRIVATE free-direct)
+target_link_libraries(FREE_DIRECT
+        PRIVATE
+        free-direct
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_mixer::SDL3_mixer
+)
