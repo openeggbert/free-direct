@@ -4,9 +4,6 @@ project(FREE_DIRECT LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
-find_package(SDL3 REQUIRED)
-find_package(SDL3_image REQUIRED)
-
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -16,7 +13,13 @@ if(NOT TARGET free-api)
     add_subdirectory(../free-api FREE_API)
 endif()
 
-add_library(free-direct)
+if(NOT TARGET SDL3::SDL3 OR NOT TARGET SDL3_image::SDL3_image OR NOT TARGET SDL3_mixer::SDL3_mixer)
+    message(FATAL_ERROR
+        "SDL targets are missing. Configure vendored SDL first (see free-eggbert/cmake/ThirdPartySDL.cmake), "
+        "or provide SDL targets from the parent project.")
+endif()
+
+add_library(free-direct STATIC)
 
 target_sources(free-direct
         PRIVATE
@@ -46,6 +49,7 @@ target_link_libraries(free-direct
         PRIVATE
         SDL3::SDL3
         SDL3_image::SDL3_image
+        SDL3_mixer::SDL3_mixer
 )
 
 add_executable(FREE_DIRECT src/Main.cpp)
