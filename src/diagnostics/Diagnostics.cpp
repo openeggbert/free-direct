@@ -14,6 +14,9 @@
 #include <cstring>
 #include <mutex>
 
+// Platform-neutral RSS reading (isolates __linux__ code into free-api)
+namespace FreeApi::Platform { long ReadRssKB(); }
+
 namespace free_direct_diag {
 
 Counters& Get()
@@ -64,25 +67,9 @@ void AddLiveBytes(std::atomic<int64_t>& liveCounter, std::atomic<int64_t>& highW
 
 namespace {
 
-// Best-effort RSS read on Linux (returns 0 elsewhere). Heartbeat-only path.
 long ReadRssKB()
 {
-#if defined(__linux__)
-    FILE* f = std::fopen("/proc/self/status", "r");
-    if (!f) return 0;
-    char line[256];
-    long rss = 0;
-    while (std::fgets(line, sizeof(line), f)) {
-        if (std::strncmp(line, "VmRSS:", 6) == 0) {
-            std::sscanf(line + 6, "%ld", &rss);
-            break;
-        }
-    }
-    std::fclose(f);
-    return rss;
-#else
-    return 0;
-#endif
+    return FreeApi::Platform::ReadRssKB();
 }
 
 void EmitLine(const char* tag)
