@@ -348,10 +348,15 @@ namespace {
         bool debugPrimaryClearEnabled_;
         /// True once Flip has been called at least once; disables auto-present from Blt/BltFast.
         bool usesFlip_ = false;
+        /// True once SDL_SetRenderLogicalPresentation has been configured for the primary surface size.
+        bool logicalPresentationSet_ = false;
         /// Timestamp of the last successful SDL_RenderPresent (nanoseconds from SDL_GetTicksNS).
         uint64_t lastPresentNs_ = 0;
         /// Minimum nanoseconds between presents (default = 1s/60 ≈ 16.67 ms).
         uint64_t presentIntervalNs_ = 1000000000ULL / 60ULL;
+        /// Display mode requested by SetDisplayMode (game logical resolution).
+        int displayModeWidth_ = 0;
+        int displayModeHeight_ = 0;
         /// Perf counters (per-second summary when FREE_DIRECT_DEBUG_PERF=1).
         uint64_t perfWindowStart_ = 0;
         uint64_t perfBltCalls_ = 0;
@@ -1300,8 +1305,20 @@ namespace {
         int bpp = 32;
 
         if (primary) {
-            if (sdlWindow_) {
-                SDL_GetWindowSize(sdlWindow_, &width, &height);
+            // Use the game's logical resolution from SetDisplayMode if available,
+            // NOT the physical window size. On Android the window is fullscreen
+            // (e.g. 2400x1080) but the game expects 640x480. Using window size
+            // makes SDL_SetRenderLogicalPresentation a no-op and stretches output.
+            //
+            // When SetDisplayMode was not called (non-fullscreen mode), keep the
+            // default 640x480 — do NOT fall back to SDL_GetWindowSize, because
+            // the game still renders at its fixed logical resolution.
+            if (displayModeWidth_ > 0 && displayModeHeight_ > 0) {
+                width = displayModeWidth_;
+                height = displayModeHeight_;
+                SDL_Log("free-direct CreateSurface: primary using display mode %dx%d", width, height);
+            } else {
+                SDL_Log("free-direct CreateSurface: primary using default %dx%d (no display mode set)", width, height);
             }
         } else {
             if ((lpDDSurfaceDesc->dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) == 0) {
@@ -1346,6 +1363,9 @@ namespace {
                 static_cast<unsigned long>(dwWidth),
                 static_cast<unsigned long>(dwHeight),
                 static_cast<unsigned long>(dwBPP));
+
+        displayModeWidth_ = static_cast<int>(dwWidth);
+        displayModeHeight_ = static_cast<int>(dwHeight);
 
         if (hwnd_) {
             FreeApiSetWindowFullscreen(hwnd_, true);
@@ -1477,7 +1497,16 @@ namespace {
         SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
         SDL_RenderClear(renderer_);
 
-        // 4. Render texture to full window.
+        // 4. Set SDL3 logical presentation (once) and render texture.
+        if (!logicalPresentationSet_) {
+            const int srcW = primary.GetWidth();
+            const int srcH = primary.GetHeight();
+            if (srcW > 0 && srcH > 0) {
+                SDL_SetRenderLogicalPresentation(renderer_, srcW, srcH, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+                logicalPresentationSet_ = true;
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "free-direct PresentPrimary: set logical presentation %dx%d LETTERBOX", srcW, srcH);
+            }
+        }
         SDL_RenderTexture(renderer_, primary.texture_, NULL, NULL);
 
         // 5. Present exactly once.
@@ -1508,6 +1537,34 @@ namespace {
                 perfPresentAttempts_ = 0;
                 perfPresentThrottled_ = 0;
                 perfTextureUploads_ = 0;
+            }
+        }
+
+        // Diagnostic: FREE_DIRECT_PRESENT log once per second (always enabled).
+        {
+            static uint64_t diagPerfStart = 0;
+            static uint64_t diagFrames = 0;
+            static bool diagRendererLogged = false;
+            diagFrames++;
+            if (diagPerfStart == 0) diagPerfStart = lastPresentNs_;
+            const uint64_t diagElapsed = lastPresentNs_ - diagPerfStart;
+            if (diagElapsed >= 1000000000ULL) {
+                int winW = 0, winH = 0;
+                if (sdlWindow_) SDL_GetWindowSize(sdlWindow_, &winW, &winH);
+                const double fps = static_cast<double>(diagFrames) * 1e9 / static_cast<double>(diagElapsed);
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "FREE_DIRECT_PRESENT: source/backbuffer=%dx%d window=%dx%d mode=letterbox present_count=%llu FPS=%.1f bpp=%d tex_recreated=no",
+                        primary.GetWidth(), primary.GetHeight(),
+                        winW, winH,
+                        static_cast<unsigned long long>(presentCallCount_),
+                        fps,
+                        primary.GetBPP());
+                diagPerfStart = lastPresentNs_;
+                diagFrames = 0;
+            }
+            if (!diagRendererLogged && renderer_) {
+                const char* name = SDL_GetRendererName(renderer_);
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "FREE_DIRECT_PRESENT: renderer=%s", name ? name : "unknown");
+                diagRendererLogged = true;
             }
         }
 
