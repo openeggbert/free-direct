@@ -305,6 +305,8 @@ namespace {
         HDC attachedDc_ = nullptr;
         /// Temporary 32-bit RGBA buffer used by GetDC/ReleaseDC for 8-bit surfaces.
         std::vector<uint8_t> dcTempBuffer_;
+        /// Cached RGBA32 conversion buffer for 8-bit palette surfaces — reused every frame to avoid per-frame heap allocation.
+        std::vector<uint32_t> paletteConvertBuffer_;
         size_t diagPixelCapacityBytes_ = 0;
         size_t diagDcTempCapacityBytes_ = 0;
     };
@@ -1459,7 +1461,8 @@ namespace {
         // 2. Upload CPU pixel buffer to texture.
         if (primary.GetBPP() == 8) {
             const size_t pixelCount = static_cast<size_t>(primary.GetWidth()) * static_cast<size_t>(primary.GetHeight());
-            std::vector<uint32_t> temp(pixelCount);
+            // Reuse cached buffer to avoid per-frame heap allocation (was: std::vector<uint32_t> temp(pixelCount)).
+            primary.paletteConvertBuffer_.resize(pixelCount);
             PALETTEENTRY entries[256];
             bool hasPalette = false;
             if (primary.palette_) {
@@ -1472,19 +1475,19 @@ namespace {
             for (size_t i = 0; i < pixelCount; ++i) {
                 const uint8_t index = primary.GetPixels()[i];
                 if (hasPalette) {
-                    temp[i] = (static_cast<uint32_t>(entries[index].peRed))
+                    primary.paletteConvertBuffer_[i] = (static_cast<uint32_t>(entries[index].peRed))
                             | (static_cast<uint32_t>(entries[index].peGreen) << 8)
                             | (static_cast<uint32_t>(entries[index].peBlue) << 16)
                             | 0xFF000000u;
                 } else {
-                    temp[i] = static_cast<uint32_t>(index)
+                    primary.paletteConvertBuffer_[i] = static_cast<uint32_t>(index)
                             | (static_cast<uint32_t>(index) << 8)
                             | (static_cast<uint32_t>(index) << 16)
                             | 0xFF000000u;
                 }
             }
             PresentLog("free-direct PresentPrimary: uploading 8-bit→RGBA32 hasPalette=%s", BoolToText(hasPalette));
-            SDL_UpdateTexture(primary.texture_, NULL, temp.data(), primary.GetWidth() * 4);
+            SDL_UpdateTexture(primary.texture_, NULL, primary.paletteConvertBuffer_.data(), primary.GetWidth() * 4);
             FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
         } else {
             PresentLog("free-direct PresentPrimary: uploading 32-bit RGBA");
@@ -1552,12 +1555,22 @@ namespace {
                 int winW = 0, winH = 0;
                 if (sdlWindow_) SDL_GetWindowSize(sdlWindow_, &winW, &winH);
                 const double fps = static_cast<double>(diagFrames) * 1e9 / static_cast<double>(diagElapsed);
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "FREE_DIRECT_PRESENT: source/backbuffer=%dx%d window=%dx%d mode=letterbox present_count=%llu FPS=%.1f bpp=%d tex_recreated=no",
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "FREE_DIRECT_PERF: source/backbuffer=%dx%d window=%dx%d mode=letterbox"
+                        " present_count=%llu FPS=%.1f bpp=%d tex_recreated=no"
+                        " uploads_per_sec=%llu build=%s",
                         primary.GetWidth(), primary.GetHeight(),
                         winW, winH,
                         static_cast<unsigned long long>(presentCallCount_),
                         fps,
-                        primary.GetBPP());
+                        primary.GetBPP(),
+                        static_cast<unsigned long long>(diagFrames),
+#ifdef NDEBUG
+                        "Release"
+#else
+                        "Debug"
+#endif
+                        );
                 diagPerfStart = lastPresentNs_;
                 diagFrames = 0;
             }
