@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project Overview — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / Overview</div>
+    <h1>Project Overview</h1>
+    <p>What free-direct is, why it exists, and how it fits into the open-source preservation of legacy 2D games.</p>
+  </div>
+
+  <h2>What is free-direct?</h2>
+  <p>
+    <strong>free-direct</strong> is a C++20 static library that reimplements a focused, game-driven
+    subset of the Microsoft DirectX&nbsp;3 API — specifically the 2D portions needed to run
+    <em>Speedy Blupi / Speedy Eggbert</em> and <em>Planet Blupi</em> on modern, non-Windows platforms.
+  </p>
+  <p>
+    It provides the same header-level API shapes as the original DirectDraw, DirectSound, and DirectPlay
+    interfaces so that legacy C++ game code can include <code>&lt;ddraw.h&gt;</code>,
+    <code>&lt;dsound.h&gt;</code>, and <code>&lt;dplay.h&gt;</code> and compile without any change.
+    Internally, the library delegates all rendering to <strong>SDL&nbsp;3</strong>, all audio to
+    <strong>SDL3 audio streams</strong>, and provides dummy stubs for network calls.
+  </p>
+
+  <h2>Why does it exist?</h2>
+  <p>
+    The original games were Windows-only and depend on the DirectX&nbsp;3 runtime, which is
+    a proprietary Microsoft technology. Making them run on Linux, macOS, Android, or the Web
+    requires either:
+  </p>
+  <ul>
+    <li>Running the Windows binary through a compatibility layer (Wine, etc.), or</li>
+    <li>Recompiling the game source against a portable reimplementation of the DirectX APIs.</li>
+  </ul>
+  <p>
+    free-direct takes the second approach. It lets the game source compile as portable C++20
+    and link against SDL&nbsp;3 for the actual platform-specific work. The original game logic
+    is untouched.
+  </p>
+
+  <h2>Relationship to Speedy Blupi / Speedy Eggbert and Planet Blupi</h2>
+  <p>
+    <em>Speedy Blupi</em> (also known as <em>Speedy Eggbert</em>) and <em>Planet Blupi</em>
+    are classic 2D games that use a fixed, well-known subset of DirectDraw for 2D blitting,
+    palette management, and surface operations. They use DirectSound for PCM sound effects,
+    and they reference DirectPlay for (optional) multiplayer networking.
+  </p>
+  <p>
+    free-direct is explicitly scoped to the call sites present in those games. Methods and
+    flags that the games never invoke are either stubbed or left unimplemented — the goal is
+    a correct, minimal, and maintainable subset rather than a complete DirectX clone.
+  </p>
+  <div class="callout callout-note">
+    <div class="callout-label">Scope note</div>
+    <p>
+      Compatibility behavior is driven by real call sites in the target game code, not by
+      the DirectX&nbsp;3 specification. If a feature is not exercised by those games, it is
+      likely missing.
+    </p>
+  </div>
+
+  <h2>Difference from the original Microsoft DirectX runtime</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Aspect</th><th>Original DirectX 3</th><th>free-direct</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Platform</td>
+        <td>Windows only</td>
+        <td>Linux, macOS, Windows, Android (partial), Web (planned)</td>
+      </tr>
+      <tr>
+        <td>Rendering</td>
+        <td>Hardware-accelerated (HAL / HEL)</td>
+        <td>SDL3 renderer + CPU pixel buffers (software path)</td>
+      </tr>
+      <tr>
+        <td>Pixel format</td>
+        <td>Matches physical device</td>
+        <td>Fixed internally to 8-bit paletted or 32-bit RGBA</td>
+      </tr>
+      <tr>
+        <td>Flip chain</td>
+        <td>Real page-flip with back buffers</td>
+        <td>Simplified: CPU buffer upload + SDL_RenderPresent</td>
+      </tr>
+      <tr>
+        <td>COM</td>
+        <td>Full IUnknown / QueryInterface support</td>
+        <td>Minimal: AddRef/Release work; QueryInterface returns DDERR_UNSUPPORTED</td>
+      </tr>
+      <tr>
+        <td>DirectPlay</td>
+        <td>Real UDP/IPX/modem networking</td>
+        <td>All stubs; returns success but performs no I/O</td>
+      </tr>
+      <tr>
+        <td>DirectInput</td>
+        <td>Keyboard, mouse, joystick</td>
+        <td>Not implemented; input goes through the free-api WinAPI layer</td>
+      </tr>
+      <tr>
+        <td>Direct3D</td>
+        <td>Full 3D pipeline (D3D 5-era)</td>
+        <td>Not implemented; out of scope</td>
+      </tr>
+      <tr>
+        <td>License</td>
+        <td>Proprietary</td>
+        <td>MIT</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Difference from free-api</h2>
+  <p>
+    The project depends on a companion library called <strong>free-api</strong>, which is a
+    separate repository. The two libraries have complementary roles:
+  </p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Library</th><th>What it reimplements</th><th>Typical headers</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>free-api</strong></td>
+        <td>WinAPI subset: window creation, message loop, GDI basics, WinMM timers, wide/ANSI string helpers, registry stubs</td>
+        <td><code>windows.h</code>, <code>mmsystem.h</code>, <code>winuser.h</code></td>
+      </tr>
+      <tr>
+        <td><strong>free-direct</strong></td>
+        <td>DirectX 3 2D subset: DirectDraw, DirectSound, DirectPlay</td>
+        <td><code>ddraw.h</code>, <code>dsound.h</code>, <code>dplay.h</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    free-direct is built on top of free-api: its public headers include
+    <code>&lt;windows.h&gt;</code> from free-api (for <code>HWND</code>, <code>HRESULT</code>,
+    <code>DWORD</code>, etc.) and link against <code>free-api::free-api</code>. Game code that
+    uses both DirectX and WinAPI includes both sets of headers.
+  </p>
+
+  <h2>Design principles</h2>
+  <ul>
+    <li><strong>Minimal by design</strong> — only implement what the target games actually call.</li>
+    <li><strong>SDL3 as the only backend</strong> — SDL&nbsp;3 is used internally and never exposed in public headers.</li>
+    <li><strong>CPU pixel buffers everywhere</strong> — all surfaces are backed by <code>std::vector&lt;uint8_t&gt;</code> for simplicity and portability.</li>
+    <li><strong>No COM correctness</strong> — <code>QueryInterface</code> is stubbed; reference counting works for memory management, not for COM aggregation.</li>
+    <li><strong>Honest limitations</strong> — partial or stub behavior is documented and flagged in code rather than silently misbehaving.</li>
+  </ul>
+
+  <h2>Non-goals</h2>
+  <ul>
+    <li>Full DirectX&nbsp;3 API coverage.</li>
+    <li>Hardware-accurate frame timing or color depth emulation.</li>
+    <li>Direct3D (3D pipeline) support.</li>
+    <li>DirectInput support (handled by free-api instead).</li>
+    <li>Real DirectPlay networking.</li>
+    <li>Expanding the implementation beyond what the target games require.</li>
+  </ul>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

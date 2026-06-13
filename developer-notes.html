@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Developer Notes — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / Developer Notes</div>
+    <h1>Developer Notes</h1>
+    <p>Internal architecture, debug tools, how to extend the implementation, and testing strategy.</p>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Internal architecture</h2>
+
+  <h3>DirectDraw (src/directdraw/DirectDraw.cpp)</h3>
+  <p>
+    All implementation classes live in an anonymous namespace and are never exposed
+    in public headers. The public API shape (virtual class declarations in <code>ddraw.h</code>)
+    is satisfied by concrete private subclasses:
+  </p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Public interface</th><th>Implementation class</th><th>Key members</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>IDirectDraw</code></td>
+        <td><code>DirectDrawImpl</code></td>
+        <td><code>hwnd_</code>, <code>sdlWindow_</code>, <code>renderer_</code>, frame throttle state</td>
+      </tr>
+      <tr>
+        <td><code>IDirectDrawSurface</code></td>
+        <td><code>DirectDrawSurfaceImpl</code></td>
+        <td><code>pixels_</code> (CPU buffer), <code>texture_</code> (SDL_Texture, primary only), <code>palette_</code>, <code>clipper_</code>, color key</td>
+      </tr>
+      <tr>
+        <td><code>IDirectDrawPalette</code></td>
+        <td><code>DirectDrawPaletteImpl</code></td>
+        <td><code>entries_[256]</code> (PALETTEENTRY array)</td>
+      </tr>
+      <tr>
+        <td><code>IDirectDrawClipper</code></td>
+        <td><code>DirectDrawClipperImpl</code></td>
+        <td><code>hwnd_</code> (stored, not actively clipping)</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h3>Surface pixel buffer model</h3>
+  <p>
+    Every surface — primary or offscreen — owns a <code>std::vector&lt;uint8_t&gt;</code>
+    allocated immediately on creation. Size = <code>width × height × (bpp / 8)</code>.
+  </p>
+  <ul>
+    <li><strong>8-bit surfaces</strong>: one byte per pixel = palette index.</li>
+    <li><strong>32-bit surfaces</strong>: four bytes per pixel in R, G, B, A order.</li>
+    <li><strong>Primary surface</strong>: also owns one <code>SDL_Texture</code> (streaming,
+      RGBA32) that is created lazily on the first present and reused every frame.</li>
+    <li><strong>Dirty flag</strong>: <code>dirty_</code> is set whenever <code>Blt</code>,
+      <code>BltFast</code>, or <code>FillColor</code> writes to the primary surface.
+      <code>PresentPrimary</code> skips upload if the flag is clear.</li>
+  </ul>
+
+  <h3>Presentation pipeline (PresentPrimary)</h3>
+  <p>
+    <code>DirectDrawImpl::PresentPrimary</code> is the single code path for all frame output.
+    It is called either from <code>Flip()</code> or automatically from <code>Blt</code>/
+    <code>BltFast</code> when the destination is the primary surface (and Flip has never been used).
+  </p>
+  <ol>
+    <li>Frame throttle: compares <code>SDL_GetTicksNS()</code> against <code>lastPresentNs_</code>.</li>
+    <li>Dirty check: skips if <code>primary.dirty_ == false</code>.</li>
+    <li>Palette expansion: for 8-bit surfaces, palette indices → RGBA32 into <code>paletteConvertBuffer_</code> (reused each frame, no heap allocation).</li>
+    <li><code>SDL_UpdateTexture</code> uploads to the streaming texture.</li>
+    <li><code>SDL_RenderClear</code> + <code>SDL_RenderTexture</code> + <code>SDL_RenderPresent</code>.</li>
+    <li>Logical presentation (letterbox) is set once on the first present via <code>SDL_SetRenderLogicalPresentation</code>.</li>
+  </ol>
+
+  <h3>DirectSound (src/directsound/DirectSound.cpp)</h3>
+  <p>
+    A singleton <code>SharedAudioDevice</code> opens the SDL audio device once and reference-counts it.
+    Each <code>DirectSoundBufferImpl</code> creates one <code>SDL_AudioStream</code> (lazily on first
+    <code>Play()</code>) with the source format from <code>PCMWAVEFORMAT</code> and the device format
+    from <code>SDL_GetAudioDeviceFormat</code>. SDL3 handles sample rate and format conversion.
+  </p>
+
+  <h3>DirectPlay (src/directplay/DirectPlay.cpp)</h3>
+  <p>
+    Minimal stub classes only. <code>DirectPlayImpl::QueryInterface</code> allocates a new
+    <code>DirectPlay2AImpl</code> regardless of the requested IID — this is a known hack to
+    satisfy code that queries for <code>IID_IDirectPlay2A</code> without implementing proper
+    COM dispatch.
+  </p>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Diagnostics system</h2>
+
+  <p>
+    The file <code>src/diagnostics/Diagnostics.hpp</code> declares a compile-time-gated
+    counter system. When <code>FREE_DIRECT_DIAGNOSTICS</code> is defined (CMake option),
+    atomic counters track live object counts, cumulative creates/destroys, pixel buffer
+    capacities, and per-second blit/present rates.
+  </p>
+
+  <h3>Enabling diagnostics</h3>
+  <pre><code># CMake
+set(FREE_DIRECT_DIAGNOSTICS ON CACHE BOOL "")
+
+# Environment (runtime enable of heartbeat output)
+export FREE_DIRECT_DIAGNOSTICS=1</code></pre>
+
+  <h3>Available counters</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Counter name</th><th>What it tracks</th></tr></thead>
+    <tbody>
+      <tr><td><code>ddInstances</code></td><td>Live IDirectDraw objects</td></tr>
+      <tr><td><code>ddSurfaces</code></td><td>Live IDirectDrawSurface objects</td></tr>
+      <tr><td><code>ddPalettes</code></td><td>Live IDirectDrawPalette objects</td></tr>
+      <tr><td><code>ddClippers</code></td><td>Live IDirectDrawClipper objects</td></tr>
+      <tr><td><code>sdlTextures</code></td><td>Live SDL_Texture handles</td></tr>
+      <tr><td><code>sdlAudioStreams</code></td><td>Live SDL_AudioStream handles</td></tr>
+      <tr><td><code>dsBuffers</code></td><td>Live IDirectSoundBuffer objects</td></tr>
+      <tr><td><code>bltCallsTotal</code></td><td>Cumulative Blt() calls</td></tr>
+      <tr><td><code>bltFastCallsTotal</code></td><td>Cumulative BltFast() calls</td></tr>
+      <tr><td><code>flipCallsTotal</code></td><td>Cumulative Flip() calls</td></tr>
+      <tr><td><code>presentCallsTotal</code></td><td>Cumulative PresentPrimary() calls</td></tr>
+      <tr><td><code>ddSurfacePixelCapacityBytes</code></td><td>Total live pixel buffer capacity (bytes)</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>
+    The heartbeat emits a one-line SDL_Log summary approximately once per second when
+    <code>FREE_DIRECT_DIAGNOSTICS=1</code> is set in the environment. It is triggered from
+    <code>PresentPrimary</code> via <code>FREE_DIRECT_DIAG_HEARTBEAT()</code>.
+  </p>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Debug environment flags reference</h2>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>Variable</th><th>Effect</th><th>Typical use</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_DDRAW=1</code></td>
+        <td>Logs every DirectDraw API call (surface create/destroy, Blt, Lock, etc.)</td>
+        <td>Tracing initialization problems</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_PRESENTATION=1</code></td>
+        <td>Logs every PresentPrimary call including throttle/dirty outcomes</td>
+        <td>Frame pacing and visual output debugging</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_COLORKEY=1</code></td>
+        <td>Logs color key values and per-blit copied/skipped pixel counts</td>
+        <td>Transparency not working as expected</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_PERF=1</code></td>
+        <td>Prints per-second summary: presents/s, throttled, uploads, blts</td>
+        <td>Performance profiling</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_DSOUND=1</code></td>
+        <td>Logs DirectSound buffer create, play, stop, lock operations</td>
+        <td>Audio not playing</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_DSOUND_FORMAT=1</code></td>
+        <td>Detailed PCM format dump (bits, channels, rate, SDL format code)</td>
+        <td>Wrong audio format / silence despite no errors</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1</code></td>
+        <td>Renders a solid blue clear on startup to confirm the SDL renderer is alive</td>
+        <td>Black screen — is it a renderer problem or a game rendering problem?</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_TARGET_FPS=N</code></td>
+        <td>Sets the frame throttle target (default 60)</td>
+        <td>Reduce throttling for benchmarking; increase for slow machines</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_ENABLE_VSYNC=0</code></td>
+        <td>Disables SDL_SetRenderVSync</td>
+        <td>Benchmarking; measuring raw blit throughput</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>How to extend free-direct</h2>
+
+  <h3>Adding a missing DirectDraw method</h3>
+  <ol>
+    <li>Add the method signature to the appropriate virtual class in <code>include/ddraw.h</code>.</li>
+    <li>Add the override declaration in the corresponding <code>Impl</code> class inside
+      <code>src/directdraw/DirectDraw.cpp</code>.</li>
+    <li>Implement the method. All SDL3 calls must stay inside <code>.cpp</code> files —
+      never include SDL headers in <code>ddraw.h</code>.</li>
+    <li>Document the status (<code>IMPLEMENTED</code>, <code>PARTIAL</code>, or <code>STUB</code>)
+      in a <code>@note</code> comment.</li>
+  </ol>
+
+  <h3>Adding audio looping</h3>
+  <p>
+    The <code>Play()</code> stub checks <code>dwFlags &amp; 0x1</code> (DSBPLAY_LOOPING).
+    To implement looping:
+  </p>
+  <ol>
+    <li>Store a <code>bool looping_</code> flag in <code>DirectSoundBufferImpl</code>.</li>
+    <li>After <code>SDL_PutAudioStreamData</code>, set up an SDL audio callback or a monitor
+      thread that checks <code>SDL_GetAudioStreamQueued() == 0</code> and re-feeds the buffer.</li>
+    <li>Alternatively, pre-duplicate the PCM data (e.g. N repetitions) before feeding it,
+      accepting a fixed loop duration.</li>
+  </ol>
+
+  <h3>Adding accurate stereo panning</h3>
+  <p>
+    The pan gain is already calculated in <code>dsPanToGains()</code> but the
+    <code>applyGain()</code> function currently voids the left/right values. To apply them:
+  </p>
+  <ol>
+    <li>Implement a per-sample callback using <code>SDL_SetAudioStreamPutCallback</code>.</li>
+    <li>In the callback, scale channel 0 by <code>left</code> and channel 1 by <code>right</code>
+      before writing output samples.</li>
+    <li>Remove the <code>(void)left; (void)right;</code> no-ops in <code>applyGain()</code>.</li>
+  </ol>
+
+  <h3>Adding real DirectPlay networking</h3>
+  <p>
+    Replace the stub classes in <code>src/directplay/DirectPlay.cpp</code> with real
+    implementations backed by a networking library (SDL_Net, ENet, raw POSIX sockets, etc.).
+    The public interface in <code>include/dplay.h</code> is already correct; only the
+    <code>.cpp</code> file needs to change.
+  </p>
+
+  <h3>Adding a new surface type</h3>
+  <p>
+    Add a new value to the <code>DirectDrawSurfaceImpl::SurfaceType</code> enum and handle
+    it in <code>CreateSurface</code>, <code>PresentPrimary</code>, and anywhere else
+    surface type affects behavior.
+  </p>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Testing strategy</h2>
+
+  <h3>Observational testing against the target game</h3>
+  <p>
+    The primary test is running <em>Speedy Blupi</em> or <em>Planet Blupi</em> and observing:
+  </p>
+  <ul>
+    <li>Correct visual output (sprites, backgrounds, UI).</li>
+    <li>Correct transparency (color key).</li>
+    <li>Correct palette colors on 8-bit surfaces.</li>
+    <li>Audio playback on expected events.</li>
+    <li>No crashes over multiple game sessions.</li>
+  </ul>
+
+  <h3>Demo application (src/Main.cpp)</h3>
+  <p>
+    The included demo exercises the key code paths: primary + offscreen + 8-bit surfaces,
+    palette, color key, Lock/Unlock pixel writing, Blt color fill, BltFast, Blt scaling,
+    clipper, and Flip. Run it after any change to verify no regressions in the core paths.
+  </p>
+
+  <h3>Comparing against original DirectX behavior</h3>
+  <p>
+    For behavior comparison, run the same game binary:
+  </p>
+  <ol>
+    <li>On original Windows with real DirectX — the reference.</li>
+    <li>Under Wine (which implements its own DirectDraw) — a secondary reference.</li>
+    <li>Under free-direct — the target.</li>
+  </ol>
+  <p>
+    Enable <code>FREE_DIRECT_DEBUG_COLORKEY=1</code> and compare skipped pixel counts.
+    Enable <code>FREE_DIRECT_DEBUG_PERF=1</code> and compare frame rates.
+  </p>
+
+  <h3>Known issues to watch for</h3>
+  <ul>
+    <li>
+      <strong>Black screen</strong>: set <code>FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1</code>
+      to confirm the renderer works, then check whether <code>PresentPrimary</code>
+      is being called (<code>FREE_DIRECT_DEBUG_PRESENTATION=1</code>).
+    </li>
+    <li>
+      <strong>Wrong colors</strong>: check that the surface BPP matches the pixel data
+      (use <code>FREE_DIRECT_DEBUG_DDRAW=1</code> to see BPP at surface creation).
+      For 8-bit surfaces, verify the palette is attached before present.
+    </li>
+    <li>
+      <strong>Transparent areas showing background color</strong>: check color key values
+      via <code>FREE_DIRECT_DEBUG_COLORKEY=1</code> and confirm the key was set on the
+      source surface (not the destination).
+    </li>
+    <li>
+      <strong>No audio</strong>: enable <code>FREE_DIRECT_DEBUG_DSOUND_FORMAT=1</code> to
+      confirm the buffer format was parsed correctly. Check that
+      <code>SDL_OpenAudioDevice</code> succeeded (look for <code>DSERR_NODRIVER</code>).
+    </li>
+    <li>
+      <strong>CPU spinning at 100%</strong>: the <code>PeekMessageA</code> implementation
+      in free-api calls <code>SDL_Delay(1)</code> when the queue is empty to prevent busy-spin.
+      If you see high CPU, check the game's main loop for a tight spin without yielding.
+    </li>
+  </ul>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Code style and conventions</h2>
+  <ul>
+    <li>C++20, no extensions (<code>CMAKE_CXX_EXTENSIONS OFF</code>).</li>
+    <li>SDL3 headers are only included in <code>.cpp</code> files, never in public headers.</li>
+    <li>All implementation classes are in anonymous namespaces in their respective <code>.cpp</code> files.</li>
+    <li>Use <code>std::atomic&lt;ULONG&gt;</code> for reference counts to be safe with any threading model.</li>
+    <li>Status annotations in comments: <code>@note Status: IMPLEMENTED / PARTIAL / STUB</code>.</li>
+    <li>Debug logs use the <code>SDL_Log</code> redirect defined inside each <code>.cpp</code> file;
+      do not use <code>printf</code> or <code>std::cout</code> in implementation code.</li>
+  </ul>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Known issues and TODOs (from source)</h2>
+  <ul>
+    <li>Looping audio (<code>DSBPLAY_LOOPING</code>) — TODO in <code>DirectSound.cpp</code>.</li>
+    <li>Accurate stereo panning — TODO in <code>applyGain()</code>.</li>
+    <li><code>DDBLT_ROTATIONANGLE</code> — flag accepted, rotation not performed.</li>
+    <li><code>WM_CLOSE</code> → <code>DestroyWindow</code> → <code>WM_DESTROY</code> → <code>PostQuitMessage</code>
+      flow is not fully correct in the demo's window proc (calls <code>PostQuitMessage</code> directly on
+      <code>WM_CLOSE</code>); noted in <code>TODO.md</code>.</li>
+    <li><code>QueryInterface</code> on all objects always returns <code>DDERR_UNSUPPORTED</code> /
+      <code>E_NOINTERFACE</code>; COM aggregation is not planned.</li>
+    <li>Pan centibel-to-channel-map conversion is calculated but not applied; requires SDL3
+      per-channel gain API or a custom callback.</li>
+  </ul>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

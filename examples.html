@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Examples — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / Code Examples</div>
+    <h1>Code Examples</h1>
+    <p>Practical snippets covering all major operations supported by free-direct.</p>
+  </div>
+
+  <div class="callout callout-note">
+    <div class="callout-label">Note</div>
+    <p>
+      All examples assume you have set up the CMake integration described in the
+      <a href="integration.html">Integration Guide</a> and that the include paths
+      are correctly configured. Error handling is kept minimal for readability;
+      production code should check every <code>HRESULT</code>.
+    </p>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>1. Initialization</h2>
+  <p>
+    The initialization follows the same pattern as original DirectX 3 code.
+    The <code>WinMain</code> entry point is provided by the free-api layer.
+  </p>
+
+  <pre><code>#include &lt;windows.h&gt;
+#include &lt;ddraw.h&gt;
+
+LRESULT CALLBACK MyWindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_CLOSE)   { DestroyWindow(hWnd); return 0; }
+    if (msg == WM_DESTROY) { PostQuitMessage(0);  return 0; }
+    return DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+int WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
+    // Register window class
+    WNDCLASSA wc = {};
+    wc.lpfnWndProc   = MyWindowProc;
+    wc.lpszClassName = "MyApp";
+    RegisterClassA(&wc);
+
+    // Create window
+    HWND hwnd = CreateWindowExA(0, "MyApp", "My Game",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        100, 100, 640, 480,
+        NULL, NULL, hInst, NULL);
+
+    // Create DirectDraw object
+    LPDIRECTDRAW dd = nullptr;
+    if (FAILED(DirectDrawCreate(nullptr, &dd, nullptr)))
+        return 1;
+
+    // Set cooperative level (windowed)
+    if (FAILED(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL)))
+        return 1;
+
+    // ... setup surfaces, run loop ...
+
+    dd->Release();
+    return 0;
+}</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>2. Creating a primary and offscreen surface</h2>
+
+  <pre><code>// Primary surface (what gets shown on screen)
+DDSURFACEDESC desc = {};
+desc.dwSize  = sizeof(DDSURFACEDESC);
+desc.dwFlags = DDSD_CAPS;
+desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+
+LPDIRECTDRAWSURFACE primary = nullptr;
+dd->CreateSurface(&desc, &primary, nullptr);
+
+// Offscreen back buffer (draw here, then blit to primary)
+desc = {};
+desc.dwSize   = sizeof(DDSURFACEDESC);
+desc.dwFlags  = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+desc.dwWidth  = 640;
+desc.dwHeight = 480;
+desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+
+LPDIRECTDRAWSURFACE back = nullptr;
+dd->CreateSurface(&desc, &back, nullptr);</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>3. Creating an 8-bit paletted offscreen surface</h2>
+
+  <pre><code>// Create an 8-bit paletted offscreen surface (sprite sheet)
+DDSURFACEDESC desc = {};
+desc.dwSize   = sizeof(DDSURFACEDESC);
+desc.dwFlags  = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+desc.dwWidth  = 64;
+desc.dwHeight = 64;
+desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+desc.ddpfPixelFormat.dwSize     = sizeof(DDPIXELFORMAT);
+desc.ddpfPixelFormat.dwFlags    = DDPF_PALETTEINDEXED8;
+desc.ddpfPixelFormat.dwRGBBitCount = 8;
+
+LPDIRECTDRAWSURFACE sprite = nullptr;
+dd->CreateSurface(&desc, &sprite, nullptr);
+
+// Create a 256-entry palette
+PALETTEENTRY pal[256] = {};
+pal[0] = {255, 0, 255, 0}; // index 0 = magenta (will be transparent)
+for (int i = 1; i &lt; 256; ++i) {
+    pal[i].peRed   = (BYTE)i;
+    pal[i].peGreen = (BYTE)(255 - i);
+    pal[i].peBlue  = 128;
+}
+
+LPDIRECTDRAWPALETTE ddPal = nullptr;
+dd->CreatePalette(DDPCAPS_8BIT, pal, &ddPal, nullptr);
+sprite->SetPalette(ddPal);
+ddPal->Release(); // surface holds its own reference
+
+// Set color key (index 0 = transparent)
+DDCOLORKEY ck = {0, 0};
+sprite->SetColorKey(DDCKEY_SRCBLT, &ck);</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>4. Writing pixels via Lock/Unlock</h2>
+
+  <pre><code>// Fill an 8-bit surface with a circular gradient
+DDSURFACEDESC lock = {};
+lock.dwSize = sizeof(DDSURFACEDESC);
+if (SUCCEEDED(sprite->Lock(nullptr, &lock, 0, nullptr))) {
+    BYTE* pixels = static_cast&lt;BYTE*&gt;(lock.lpSurface);
+    for (int y = 0; y &lt; 64; ++y) {
+        for (int x = 0; x &lt; 64; ++x) {
+            float dx = x - 32.0f, dy = y - 32.0f;
+            float dist = std::sqrt(dx*dx + dy*dy);
+            pixels[y * lock.lPitch + x] = (dist &lt; 28.f)
+                ? (BYTE)(dist * 8 + 10)
+                : 0; // index 0 = transparent
+        }
+    }
+    sprite->Unlock(nullptr);
+}</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>5. Loading a bitmap into a surface</h2>
+  <p>
+    free-direct does not include a bitmap loader. The demo uses <code>SDL3_image</code>
+    and then copies the pixels via Lock/Unlock:
+  </p>
+
+  <pre><code>#include &lt;SDL3_image/SDL_image.h&gt;
+
+LPDIRECTDRAWSURFACE LoadSurface(LPDIRECTDRAW dd, const char* path) {
+    SDL_Surface* img = IMG_Load(path);
+    if (!img) return nullptr;
+
+    SDL_Surface* rgba = SDL_ConvertSurface(img, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(img);
+    if (!rgba) return nullptr;
+
+    DDSURFACEDESC desc = {};
+    desc.dwSize   = sizeof(DDSURFACEDESC);
+    desc.dwFlags  = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    desc.dwWidth  = (DWORD)rgba->w;
+    desc.dwHeight = (DWORD)rgba->h;
+    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+    desc.ddpfPixelFormat.dwSize        = sizeof(DDPIXELFORMAT);
+    desc.ddpfPixelFormat.dwFlags       = DDPF_RGB;
+    desc.ddpfPixelFormat.dwRGBBitCount = 32;
+
+    LPDIRECTDRAWSURFACE dds = nullptr;
+    if (FAILED(dd->CreateSurface(&desc, &dds, nullptr))) {
+        SDL_DestroySurface(rgba);
+        return nullptr;
+    }
+
+    DDSURFACEDESC lock = {};
+    lock.dwSize = sizeof(DDSURFACEDESC);
+    if (SUCCEEDED(dds->Lock(nullptr, &lock, 0, nullptr))) {
+        for (int y = 0; y &lt; rgba->h; ++y)
+            memcpy((BYTE*)lock.lpSurface + y * lock.lPitch,
+                   (BYTE*)rgba->pixels  + y * rgba->pitch,
+                   rgba->w * 4);
+        dds->Unlock(nullptr);
+    }
+
+    SDL_DestroySurface(rgba);
+    return dds;
+}</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>6. Blitting and color fill</h2>
+
+  <pre><code>// Clear the back buffer with a dark gray color
+DDBLTFX fx = {};
+fx.dwSize      = sizeof(DDBLTFX);
+fx.dwFillColor = 0x00202020; // 0x00RRGGBB
+back->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx);
+
+// Fill a rectangle with a specific color
+RECT r = {100, 100, 200, 200};
+fx.dwFillColor = 0x00FF0000; // red
+back->Blt(&r, nullptr, nullptr, DDBLT_COLORFILL, &fx);
+
+// Copy a sprite to the back buffer at (10, 10), no transparency
+RECT src = {0, 0, 64, 64};
+RECT dst = {10, 10, 74, 74};
+back->Blt(&dst, sprite, &src, DDBLT_WAIT, nullptr);
+
+// Copy with source color key (transparent pixels skipped)
+back->BltFast(300, 200, sprite, &src, DDBLTFAST_SRCCOLORKEY);</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>7. Presenting a frame</h2>
+
+  <p>Two patterns are used by legacy games:</p>
+
+  <h3>Pattern A: Blt-to-primary (auto-present)</h3>
+  <pre><code>// Copy the back buffer to the primary surface
+// PresentPrimary is called automatically because Flip has not been called
+primary->Blt(nullptr, back, nullptr, DDBLT_WAIT, nullptr);</code></pre>
+
+  <h3>Pattern B: Flip</h3>
+  <pre><code>// Copy back buffer to primary, then Flip to present
+primary->Blt(nullptr, back, nullptr, DDBLT_WAIT, nullptr);
+primary->Flip(nullptr, 0);
+// After the first Flip(), auto-present from Blt is disabled
+// and Flip() is the only way to update the screen</code></pre>
+
+  <div class="callout callout-note">
+    <div class="callout-label">Which pattern to use</div>
+    <p>
+      Use whichever pattern the original game used. free-direct detects the first
+      <code>Flip()</code> call and switches from auto-present to Flip-based presentation
+      automatically. Do not mix both patterns.
+    </p>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>8. Main loop</h2>
+
+  <pre><code>// Typical Windows-style message loop
+bool running = true;
+MSG msg = {};
+while (running) {
+    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) { running = false; break; }
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    if (!running) break;
+
+    // --- render frame ---
+    DDBLTFX fx = {};
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = 0;
+    back->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx);
+
+    // draw sprites, UI, etc. ...
+
+    // present
+    primary->Blt(nullptr, back, nullptr, DDBLT_WAIT, nullptr);
+    // (or primary->Flip(nullptr, 0) if using Flip pattern)
+}</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>9. DirectSound — loading and playing a PCM sound</h2>
+
+  <pre><code>#include &lt;dsound.h&gt;
+
+// Initialize DirectSound
+LPDIRECTSOUND ds = nullptr;
+if (SUCCEEDED(DirectSoundCreate(nullptr, &ds, nullptr))) {
+    ds->SetCooperativeLevel(hwnd, DSSCL_NORMAL);
+}
+
+// Describe a mono 16-bit 22050 Hz buffer
+PCMWAVEFORMAT pcm = {};
+pcm.wf.wFormatTag      = 1; // WAVE_FORMAT_PCM
+pcm.wf.nChannels       = 1;
+pcm.wf.nSamplesPerSec  = 22050;
+pcm.wf.nBlockAlign     = 2;
+pcm.wf.nAvgBytesPerSec = 44100;
+pcm.wBitsPerSample     = 16;
+
+const DWORD bufSize = 44100 * 2; // 1 second
+DSBUFFERDESC bufDesc = {};
+bufDesc.dwSize        = sizeof(DSBUFFERDESC);
+bufDesc.dwFlags       = DSBCAPS_CTRLVOLUME;
+bufDesc.dwBufferBytes = bufSize;
+bufDesc.lpwfxFormat   = &pcm;
+
+LPDIRECTSOUNDBUFFER buf = nullptr;
+ds->CreateSoundBuffer(&bufDesc, &buf, nullptr);
+
+// Write PCM data via Lock
+LPVOID ptr1; DWORD bytes1;
+LPVOID ptr2; DWORD bytes2;
+if (SUCCEEDED(buf->Lock(0, bufSize,
+                        &ptr1, &bytes1, &ptr2, &bytes2,
+                        DSBLOCK_FROMWRITECURSOR))) {
+    // fill ptr1 with your PCM samples (e.g. a sine wave)
+    short* samples = static_cast&lt;short*&gt;(ptr1);
+    for (DWORD i = 0; i &lt; bytes1 / 2; ++i)
+        samples[i] = (short)(32767.0 * sin(2.0 * 3.14159 * 440.0 * i / 22050.0));
+
+    buf->Unlock(ptr1, bytes1, ptr2, 0);
+}
+
+// Play once (no looping)
+buf->SetVolume(-1000); // -10 dB
+buf->Play(0, 0, 0);
+
+// ... later, stop and release
+buf->Stop();
+buf->Release();
+ds->Release();</code></pre>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>10. Shutdown sequence</h2>
+
+  <pre><code>// Release in reverse creation order
+if (sprite)  sprite->Release();
+if (back)    back->Release();
+if (primary) primary->Release();
+if (dd)      dd->Release();
+if (ds)      ds->Release();
+DestroyWindow(hwnd);</code></pre>
+
+  <div class="callout callout-tip">
+    <div class="callout-label">Reference counting</div>
+    <p>
+      free-direct uses simple reference counting (AddRef/Release). Objects are deleted
+      when their reference count reaches zero. Palettes and clippers attached to surfaces
+      are AddRef'd by the surface and released when the surface is destroyed or detached.
+      You can safely release your own reference to a palette immediately after attaching it
+      to a surface.
+    </p>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Complete minimal example</h2>
+  <p>
+    The repository's <code>src/Main.cpp</code> contains a full working demo that exercises:
+    primary surface, offscreen back buffer, 8-bit paletted sprite surface, palette creation,
+    color key, Lock/Unlock pixel writing, color fill, surface-to-surface Blt and BltFast,
+    clipper attachment, and Flip-based presentation. Refer to it as the canonical working
+    reference.
+  </p>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>
