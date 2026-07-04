@@ -120,7 +120,9 @@ HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID l
 
 HRESULT WINAPI DirectPlayCreate(LPGUID lpGUID, LPDIRECTPLAY* lplpDP, IUnknown* pUnkOuter) {
     (void)lpGUID;
-    if (!lplpDP || pUnkOuter) return DPERR_INVALIDPARAMS;
+    if (!lplpDP) return DPERR_INVALIDPARAMS;
+    *lplpDP = nullptr;
+    if (pUnkOuter) return DPERR_NOAGGREGATION;
     *lplpDP = new (std::nothrow) DirectPlayImpl();
     return (*lplpDP) ? DP_OK : DPERR_OUTOFMEMORY;
 }

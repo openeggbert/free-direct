@@ -245,12 +245,22 @@ behavior.
       added — nothing calls for it. Runtime-verified with a throwaway scratch harness: self-QI
       returns the same pointer with a balanced `AddRef()`/`Release()`, an unknown GUID is rejected
       without fabricating an object, and null `ppvObject` is still rejected.
-- [ ] Ensure `DirectPlayCreate` initializes `*lplpDP = nullptr` before any failure return path, so
-      callers never observe an uninitialized pointer on error.
-- [ ] Ensure `DirectPlayCreate` rejects `pUnkOuter != nullptr` consistently, returning
+- [x] Ensure `DirectPlayCreate` initializes `*lplpDP = nullptr` before any failure return path, so
+      callers never observe an uninitialized pointer on error. **Done:** `*lplpDP = nullptr` is now
+      set immediately after the `!lplpDP` null-pointer check, before the `pUnkOuter` check, so every
+      failure path after that point returns a caller-visible `nullptr` rather than an untouched or
+      garbage value.
+- [x] Ensure `DirectPlayCreate` rejects `pUnkOuter != nullptr` consistently, returning
       `DPERR_NOAGGREGATION` (matching the existing `DSERR_NOAGGREGATION` naming convention already
       used in `dsound.h`) instead of today's `DPERR_INVALIDPARAMS`; add `DPERR_NOAGGREGATION` to
-      `include/dplay.h` if it is not already defined.
+      `include/dplay.h` if it is not already defined. **Done:** added
+      `DPERR_NOAGGREGATION ((HRESULT)0x88770033L)` to `include/dplay.h` (next unused value after
+      the existing `DPERR_*` sequence, which tops out at `DPERR_UNSUPPORTED = 0x88770032`) and
+      changed `DirectPlayCreate` to return it for `pUnkOuter != nullptr`, separately from the
+      `!lplpDP` case (which still returns `DPERR_INVALIDPARAMS`). Runtime-verified with a
+      throwaway scratch harness: null `lplpDP` rejected, non-null `pUnkOuter` rejected with
+      `*lplpDP` correctly reset to `nullptr` (checked against a poison pointer value), and the
+      normal success path still works.
 - [ ] Add a `@note Status:` comment to `DirectPlayEnumerateA` documenting its current behavior
       (returns `DP_OK`, invokes the callback zero times) as an intentional interim stub pending
       Phase 8.
