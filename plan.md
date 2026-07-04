@@ -468,8 +468,23 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       `DPERR_ALREADYINITIALIZED` (proving `state` left `Open`), and a player created after that
       re-`Open()` gets DPID `1` again (proving the allocator and player list were actually reset,
       not just the top-level `state` flag).
-- [ ] Make `Release()` on `DirectPlay2AImpl` tear down any transport resources safely (via
-      `IDirectPlayTransport::Shutdown()` or equivalent) before `delete this`.
+- [x] Make `Release()` on `DirectPlay2AImpl` tear down any transport resources safely (via
+      `IDirectPlayTransport::Shutdown()` or equivalent) before `delete this`. **Done, ahead of a
+      real transport existing:** added a `std::unique_ptr<IDirectPlayTransport> transport` field
+      to `DirectPlaySession` (always null today — no concrete backend exists until
+      `LoopbackDirectPlayTransport` in Phase 4 / `EnetDirectPlayTransport` in Phase 5).
+      `Release()` now calls `session_.transport->Shutdown()` when non-null, before `delete this`.
+      Since nothing ever assigns a transport yet, this is currently a no-op in practice, but the
+      safe, correct shutdown call is now in place and will activate automatically once Phase 4/5
+      construct and assign a real transport during `Open()` — no further change to `Release()`
+      itself should be needed then. **Verification is split in two, honestly, since there is no
+      way yet to inject a transport into a real `DirectPlay2AImpl`** (that capability doesn't
+      exist until Phase 4/5 give `Open()` logic to construct one): (1) runtime-verified that
+      `Release()`'s refcounting/deletion still works correctly with the always-null transport
+      (`AddRef`/`Release` balance, deletion on reaching 0); (2) separately runtime-verified, using
+      a standalone mock `IDirectPlayTransport` attached directly to a bare `DirectPlaySession`
+      (not through `DirectPlay2AImpl`), that the null-check-then-`Shutdown()` pattern itself is
+      correct. This closes out Phase 2 in its entirety.
 
 **Acceptance criteria:** a unit test opens a session (`DPOPEN_CREATE`), closes it, and asserts
 `dwCurrentPlayers` and the session-open flag both reset to their pre-open baseline; a second call

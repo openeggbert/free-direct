@@ -4,15 +4,16 @@
  *
  * This header is intentionally private to the DirectPlay implementation: it
  * must never be included from `include/dplay.h` and must never be installed.
- * `DirectPlay2AImpl` (`DirectPlay.cpp`) owns one instance and wires `Open`/
- * `CreatePlayer`/`Close` to it; `EnumSessions`/`Send`/`Receive` do not use it
- * yet (later `plan.md` Phase 2 tasks).
+ * `DirectPlay2AImpl` (`DirectPlay.cpp`) owns one instance and wires
+ * `Open`/`CreatePlayer`/`Close`/`EnumSessions`/`Send`/`Receive`/`Release` to it.
  * @note Status: PARTIAL
  */
 #pragma once
 
 #include "dplay.h"
+#include "DirectPlayTransport.hpp"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -63,6 +64,11 @@ public:
     GUID applicationGuid{};
     DWORD maxPlayers = 0;
     DWORD currentPlayers = 0;
+
+    /// Owned transport backend, if one has been assigned. Always null today - nothing
+    /// constructs a concrete `IDirectPlayTransport` yet (that starts with
+    /// `LoopbackDirectPlayTransport` in Phase 4 and `EnetDirectPlayTransport` in Phase 5).
+    std::unique_ptr<IDirectPlayTransport> transport;
 };
 
 } // namespace free_direct_directplay

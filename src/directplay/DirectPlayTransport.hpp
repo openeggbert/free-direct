@@ -12,8 +12,9 @@
  *
  * The method set and signatures below are a first pass, not final - they
  * are expected to be refined once Phase 4 implements the first concrete
- * backend (loopback) against this interface. This header is not yet used
- * by `DirectPlay.cpp`.
+ * backend (loopback) against this interface. `DirectPlaySession` (and
+ * transitively `DirectPlay.cpp`) now holds an (always-null today) owning
+ * pointer to this interface; no concrete implementation exists yet.
  * @note Status: STUB
  */
 #pragma once

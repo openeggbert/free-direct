@@ -35,7 +35,13 @@ namespace {
 
         ULONG WINAPI Release() override {
             ULONG val = --refCount_;
-            if (val == 0) delete this;
+            if (val == 0) {
+                // session_.transport is always null today (no concrete IDirectPlayTransport
+                // exists until Phase 4/5), so this is currently a no-op in practice, but it is
+                // the correct, safe shutdown call once a real transport is ever assigned.
+                if (session_.transport) session_.transport->Shutdown();
+                delete this;
+            }
             return val;
         }
 
