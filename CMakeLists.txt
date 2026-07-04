@@ -26,6 +26,9 @@ target_sources(free-direct
         src/directdraw/DirectDraw.cpp
         src/directsound/DirectSound.cpp
         src/directplay/DirectPlay.cpp
+        src/directplay/DirectPlaySession.cpp
+        src/directplay/DirectPlayPlayer.cpp
+        src/directplay/DirectPlayMessageQueue.cpp
         src/diagnostics/Diagnostics.cpp
 )
 # Compile-time-gated diagnostics counters (off by default; zero overhead when off).

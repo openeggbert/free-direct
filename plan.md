@@ -285,23 +285,43 @@ behavior.
 - [ ] Add a follow-up task (tracked here, executed once the enumeration decision above is
       implemented) to test enumeration behavior against `free-eggbert`'s real provider-selection UI
       flow in `event.cpp`.
-- [ ] Create `src/directplay/DirectPlaySession.hpp` and `src/directplay/DirectPlaySession.cpp`
+- [x] Create `src/directplay/DirectPlaySession.hpp` and `src/directplay/DirectPlaySession.cpp`
       declaring an empty `DirectPlaySession` class (no members yet) that will own session/host/
-      player-count state starting in Phase 2.
-- [ ] Create `src/directplay/DirectPlayPlayer.hpp` and `src/directplay/DirectPlayPlayer.cpp`
+      player-count state starting in Phase 2. **Done:** both files created, class has only a
+      defaulted constructor/destructor, namespaced `free_direct_directplay` (matching the existing
+      flat, project-prefixed namespace convention already used by `free_direct_diag` in
+      `Diagnostics.hpp`). Not yet included/used anywhere. Syntax-checked with
+      `-Wall -Wextra -Wpedantic`, zero warnings.
+- [x] Create `src/directplay/DirectPlayPlayer.hpp` and `src/directplay/DirectPlayPlayer.cpp`
       declaring an empty `DirectPlayPlayer` type that will own one player's DPID/names/data
-      starting in Phase 2/9.
-- [ ] Create `src/directplay/DirectPlayMessageQueue.hpp` and
+      starting in Phase 2/9. **Done:** same pattern as `DirectPlaySession` above; not yet
+      included/used anywhere.
+- [x] Create `src/directplay/DirectPlayMessageQueue.hpp` and
       `src/directplay/DirectPlayMessageQueue.cpp` declaring an empty `DirectPlayMessageQueue` type
-      that will back `Receive` starting in Phase 3.
-- [ ] Create `src/directplay/DirectPlayTransport.hpp` declaring the internal `IDirectPlayTransport`
+      that will back `Receive` starting in Phase 3. **Done:** same pattern as the two files above;
+      not yet included/used anywhere.
+- [x] Create `src/directplay/DirectPlayTransport.hpp` declaring the internal `IDirectPlayTransport`
       abstract interface (pure virtual `Connect`/`Listen`/`Send`/`Receive`/`Shutdown`-style methods;
-      exact signature finalized when Phase 4 implements the first concrete backend).
-- [ ] Add the four new `src/directplay/*.cpp` files to the `free-direct` target's sources in
-      `CMakeLists.txt`.
+      exact signature finalized when Phase 4 implements the first concrete backend). **Done:**
+      header-only (pure abstract interface, nothing to compile into a `.cpp`), explicitly
+      documented as a first pass whose signatures may change in Phase 4, and explicitly documented
+      as never including any backend header. Verified with a throwaway mock implementation
+      (compiled and run outside the repo, not committed) confirming the interface is actually
+      implementable and callable through a base-class reference.
+- [x] Add the four new `src/directplay/*.cpp` files to the `free-direct` target's sources in
+      `CMakeLists.txt`. **Done, with a correction to this task's own premise:** only three of the
+      four new files have a `.cpp` — `DirectPlayTransport` is header-only by design (a pure
+      abstract interface has nothing to compile). Added
+      `DirectPlaySession.cpp`/`DirectPlayPlayer.cpp`/`DirectPlayMessageQueue.cpp` to
+      `target_sources(free-direct PRIVATE ...)`; `DirectPlayTransport.hpp` is not listed there,
+      matching this file's existing convention of only listing `.cpp` files (e.g.
+      `Diagnostics.hpp` isn't listed either, only `Diagnostics.cpp` is). Verified all three new
+      object files compile and link into a static library together with no ODR conflicts.
 - [ ] Move `DirectPlay2AImpl`/`DirectPlayImpl` out of `src/directplay/DirectPlay.cpp` and into
       dedicated files only once they hold real state (Phase 2+) — do not split the file while it
-      remains a pure stub, to avoid empty-file churn.
+      remains a pure stub, to avoid empty-file churn. **Intentionally still unchecked:** this
+      task's own wording defers it to Phase 2+; it is not part of Phase 1's completable scope and
+      will be picked up naturally when Phase 2 gives these classes real state.
 
 **Acceptance criteria:** a unit test constructs a `DirectPlayImpl`, calls `QueryInterface` with
 `ppvObject == nullptr` and asserts `DPERR_INVALIDPARAMS`/`E_INVALIDARG`; calls it with an
