@@ -77,6 +77,11 @@ if(FREE_DIRECT_ENABLE_ENET)
                 "target. Its upstream CMakeLists.txt target name may have changed since this "
                 "was written - update the ALIAS below to match.")
         endif()
+        # Upstream ENet's own CMakeLists.txt adds its include directory via the old
+        # directory-scoped include_directories(), not target_include_directories(), so it is
+        # not carried as a usage requirement of the "enet" target - callers outside ENet's own
+        # directory scope (i.e. us) would not see enet/enet.h without this.
+        target_include_directories(enet PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet/include)
         add_library(FreeDirect::ENet ALIAS enet)
     endif()
 endif()

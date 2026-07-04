@@ -5,97 +5,94 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
 ## Current state
 
 - Branch: `develop`.
-- Last commit pushed to `develop`: `474b78f` ("Fix SDL3 CMake target visibility so the full build
-  actually works").
-- On top of that, one more change is now made and **not yet committed**: the `FREE_DIRECT_ENABLE_ENET`
-  CMake infrastructure exists and is verified via three real configurations. See "Completed this
-  batch" below.
-- `plan.md` Phase 0-4 are complete (Phase 1 modulo two intentionally-deferred tasks). **Phase 5
-  (ENet integration planning) has started**: 5 of its 24 tasks are done (the CMake option/
-  detection/policy cluster). Not started: the `EnetDirectPlayTransport` class skeleton and
-  everything that depends on it (host/client creation, send/receive, the wire packet header).
-- No DirectPlay behavior changed in this batch (no `.cpp`/`.hpp` DirectPlay source touched) —
-  this was pure CMake/build-infrastructure work.
-- No DirectDraw/DirectSound code has been touched. No game source in `../free-eggbert` or
-  `../planetblupi` has been touched.
+- Last commit pushed to `develop`: `2e17265` ("Add FREE_DIRECT_ENABLE_ENET CMake infrastructure
+  (plan.md Phase 5, partial)").
+- On top of that, one more change is now made and **not yet committed**: a real ENet copy is now
+  vendored as a git submodule, and the vendored-ENet build path is genuinely verified end-to-end
+  (not just its failure path, as in the prior batch). See "Completed this batch" below.
+- `plan.md` Phase 0-4 are complete (Phase 1 modulo two intentionally-deferred tasks). Phase 5 has
+  5 of its 24 tasks done, but the ENet-availability question that blocked full verification of
+  those 5 is now resolved (real ENet is vendored and builds/links/functions correctly).
+- No DirectPlay behavior changed in this batch. No DirectDraw/DirectSound code touched. No game
+  source in `../free-eggbert` or `../planetblupi` touched.
 
-## Completed this batch (Phase 5 — ENet CMake option/detection/policy cluster)
+## Completed this batch (real ENet vendored; Phase 5's CMake tasks now fully verified)
 
-- **Added `FREE_DIRECT_ENABLE_ENET`** (default `OFF`) and **`FREE_DIRECT_USE_SYSTEM_ENET`**
-  (default `OFF`) options to `CMakeLists.txt`.
-- **Vendored-ENet detection**: when enabled without the system flag, checks for
-  `third_party/enet/CMakeLists.txt` and fails with a specific, actionable message (naming the
-  expected path and `https://github.com/lsalzman/enet`) rather than a generic CMake error if
-  missing — matching the existing `ThirdPartySDL.cmake` convention already used elsewhere in this
-  ecosystem, rather than `FetchContent`.
-- **System-ENet detection**: `pkg_check_modules(... REQUIRED IMPORTED_TARGET libenet)` — ENet has
-  no upstream CMake config package, only a pkg-config module (`libenet`, the name Debian/Ubuntu's
-  `libenet-dev` ships).
-- Both detection paths converge on one internal `FreeDirect::ENet` ALIAS target, linked as
-  `PRIVATE` to `free-direct` — its include directories/usage requirements never propagate to
-  anything linking against `free-direct` (`CLAUDE.md`'s Internal Backend Policy).
-- **Confirmed via `grep -rliE "enet" include/`** (zero matches) that no header under `include/`
-  references ENet in any way — the "review-time check" task.
-- **Verified all three reachable configurations for real**, in fresh temporary build directories,
-  not just reasoned about: (1) default (`FREE_DIRECT_ENABLE_ENET=OFF`) configures and builds
-  end-to-end exactly as before; (2) `ENET=ON` with no vendored copy and no system flag fails with
-  exactly the intended custom error message; (3) `ENET=ON` + `USE_SYSTEM_ENET=ON` with no
-  `libenet` installed in this environment fails cleanly via CMake's own `FindPkgConfig` error.
-  Also re-confirmed the actual `cmake-build-debug/` directory used all session still configures
-  and builds cleanly after these changes.
-- **Honestly could not verify**: no real ENet copy (vendored or system) exists anywhere in this
-  environment, so neither detection method's *success* path (actually finding and linking real
-  ENet) was verified end-to-end — only their failure paths, and the default-off path. Fetching a
-  real ENet would require network access (git submodule / `FetchContent`) not attempted
-  speculatively — see "Recommended next tasks."
-- **Deliberately deferred**: the `EnetDirectPlayTransport` class skeleton and its `target_sources()`
-  wiring — writing code that calls real `enet_*` functions can't be compile-verified without ENet
-  headers actually present, so it's left for a later batch (see next tasks below for an
-  ENet-independent alternative to work on meanwhile).
-- Updated `plan.md`: checked all 5 tasks in this cluster with detailed verification notes and an
-  explicit statement of what wasn't (and couldn't be) verified.
+- **Asked the user** whether to vendor a real ENet for full build verification, since the prior
+  batch could only verify the two *failure* paths of the ENet CMake detection logic (no real ENet
+  existed anywhere in this environment). The user chose: vendor as a git submodule.
+- **Added `third_party/enet` as a real git submodule** (`git submodule add
+  https://github.com/lsalzman/enet third_party/enet`), pinned at `v1.3.18-17-g5a9c537`. Confirmed
+  network access to GitHub first (`git ls-remote`) before attempting the clone.
+- **Found and fixed a real bug during verification, not before:** upstream ENet's own
+  `CMakeLists.txt` adds its include directory via the old directory-scoped
+  `include_directories()`, not `target_include_directories()`, so it was **not** carried as a
+  usage requirement of the `enet` CMake target — `free-direct` (a consumer outside ENet's own
+  directory scope) would not have seen `enet/enet.h` without an explicit fix. Added
+  `target_include_directories(enet PUBLIC .../third_party/enet/include)` immediately after
+  `add_subdirectory(third_party/enet EXCLUDE_FROM_ALL)` to correct this.
+- **Verified the vendored path completely end-to-end**, for real: configured a fresh build
+  directory with `-DFREE_DIRECT_ENABLE_ENET=ON` (and `-DFREE_USE_SYSTEM_SDL=ON` for SDL) —
+  succeeded. Built it — ENet's own C sources compiled and linked into `libenet.a`, and
+  `free-api`/`free-direct`/`FREE_DIRECT` all built on top of it, all four targets linking
+  successfully.
+- **Went one step further than "it links"**: wrote a standalone smoke test (compiled and run
+  outside the repository, not committed) that calls `enet_initialize()`, `enet_host_create()`,
+  `enet_host_destroy()`, and `enet_deinitialize()` against the vendored copy — all succeeded,
+  confirming real ENet *functionality*, not just successful linkage.
+- **What remains unverified, honestly**: the *system*-ENet success path (`-DFREE_DIRECT_USE_SYSTEM_ENET=ON`
+  actually finding a real `libenet` package) is still unverified, since no such system package was
+  installed in this environment — the user's choice was specifically to vendor, not install
+  system-wide. Only that one path was pursued.
+- Updated `plan.md`'s existing notes for the CMake detection tasks with this follow-up
+  verification, rather than opening new duplicate checkboxes for already-checked tasks.
 
 ## Blocked / incomplete
 
 - Carried over from Phase 0 (still unresolved, still relevant): the DPID-size decision
   (`docs/directplay-callsite-audit.md` §5) and the `free-eggbert` UI-reachability caveats (§2.3).
-- **Decision needed from the user, not yet made**: should a real ENet copy actually be vendored
-  (e.g. `git submodule add https://github.com/lsalzman/enet third_party/enet`, requiring network
-  access) or installed as a system package, so the `EnetDirectPlayTransport` skeleton and its
-  ENet-calling code can be genuinely compile- and run-verified in this environment? Without this,
-  all future ENet-calling code in this phase can only be reasoned about, not built.
-- The remaining ~19 Phase 5 tasks (skeleton class, init/shutdown, host/client creation, peer
-  connect/disconnect, reliable send, channel layout decision, and the entire wire packet header)
-  have not been started.
+- The remaining ~19 Phase 5 tasks (the `EnetDirectPlayTransport` class skeleton, init/shutdown,
+  host/client creation, peer connect/disconnect, reliable send, channel layout decision, and the
+  entire wire packet header) have not been started — but are now genuinely buildable/testable
+  against real ENet, removing the main uncertainty from the prior batch.
+- The system-ENet success path remains unverified (see above) — not currently a blocker, since the
+  vendored path is now the proven, working default for this environment.
 
 ## Files inspected/changed this batch
 
-- Changed: `CMakeLists.txt` (ENet option/detection/linkage block), `plan.md` (checkboxes).
-- No new source files created this batch (the `EnetDirectPlayTransport` skeleton is deferred).
+- New: `.gitmodules`, `third_party/enet` (git submodule, pinned commit).
+- Changed: `CMakeLists.txt` (added the missing `target_include_directories(enet PUBLIC ...)`
+  fix), `plan.md` (follow-up verification notes on already-checked tasks).
+- Scratch-only, not committed: a standalone ENet host-creation smoke test under the session
+  scratchpad directory, deleted after use.
 
 ## Build/test status
 
-- The full CMake build (from the SDL3 fix in the prior batch) continues to work. This batch added
-  three more real, verified configurations on top of it (see "Completed this batch"). All
-  temporary test build directories were cleaned up after verification.
+- **The full CMake build now works with `FREE_DIRECT_ENABLE_ENET=ON` and a real ENet present**,
+  verified from a fresh build directory: `enet`, `free-api`, `free-direct`, and `FREE_DIRECT` all
+  build and link successfully.
+- The default (`FREE_DIRECT_ENABLE_ENET=OFF`) build continues to work unaffected (re-confirmed
+  implicitly — the ENet block is entirely skipped when the option is off, and no other
+  `CMakeLists.txt` code changed outside that block in this batch).
 - `tests/directplay_tests.cpp` was not re-run this batch (no DirectPlay logic changed); its last
   confirmed state is 7/7 passing, from the Phase 4 batch.
 
 ## Recommended next tasks
 
-1. **Ask the user** whether to actually vendor/install a real ENet for full build verification of
-   upcoming ENet-calling code, or continue reasoning-only for now.
-2. **Independent of that decision**, start the internal wire packet header (protocol version,
-   magic number, application GUID, session GUID, sender/recipient player ID, payload length,
-   defensive size validation on receive) as a pure data structure — this needs no real ENet at
-   all to implement and test, similar to how `DirectPlayMessagePacket` was built and tested before
-   any transport existed. This also directly satisfies the phase's acceptance criteria ("a unit
-   test serializes and deserializes the internal packet header and asserts round-trip equality").
-3. Decide the default ENet channel layout (also independent of ENet actually being present —
-   it's a design decision to document, not code to compile).
-4. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
+1. Add the `EnetDirectPlayTransport` class skeleton (`src/directplay/EnetDirectPlayTransport.hpp`/
+   `.cpp`), implementing `IDirectPlayTransport` with method bodies to be filled in by later tasks —
+   now fully buildable and testable against the real vendored ENet.
+2. Add ENet initialization/shutdown handling (`enet_initialize`/`enet_deinitialize`, once per
+   process) as the skeleton's first real behavior.
+3. Independent of ENet: start the internal wire packet header (protocol version, magic number,
+   application GUID, session GUID, sender/recipient player ID, payload length, defensive size
+   validation) as a pure data structure — still needs no ENet at all, and directly satisfies the
+   phase's "packet header round-trip" acceptance criterion.
+4. Decide the default ENet channel layout (a design decision, not code).
+5. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
    `docs/directplay-callsite-audit.md` §5.
-5. Commit this batch's changes (`CMakeLists.txt`, `plan.md`, this `NEXT.md`).
+6. Commit this batch's changes (`.gitmodules`, `third_party/enet`, `CMakeLists.txt`, `plan.md`,
+   this `NEXT.md`).
 
 ---
 
@@ -127,5 +124,9 @@ queue; `Receive()`/`Close()` wired to the real queue; size/oversize bounds; perm
 **SDL3 build blocker resolved (commit `474b78f`):** fixed CMake target-visibility bug preventing
 any full build in this environment; documented `-DFREE_USE_SYSTEM_SDL=ON` in `README.md`.
 
-**Phase 5 — ENet CMake option/detection/policy (this batch, not yet committed):** see "Completed
-this batch" above.
+**Phase 5 — ENet CMake option/detection/policy (commit `2e17265`):** `FREE_DIRECT_ENABLE_ENET`/
+`FREE_DIRECT_USE_SYSTEM_ENET` options added; both failure paths and the default-off path verified
+(no real ENet available yet at that point).
+
+**Real ENet vendored; vendored path fully verified (this batch, not yet committed):** see
+"Completed this batch" above.

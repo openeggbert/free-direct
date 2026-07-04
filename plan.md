@@ -752,16 +752,25 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       in this environment: configure fails cleanly via CMake's own `FindPkgConfig` error, naming
       the missing `libenet` package.
 
-      **What was not done, and why, honestly:** no real ENet copy (vendored or system-installed)
-      exists anywhere in this environment, so the "success" path of *either* detection method
-      (actually finding and linking against real ENet) could not be verified end-to-end in this
-      batch — only the two failure paths and the default-off path were. Actually vendoring a real
-      ENet copy would require either a network fetch (git submodule / `FetchContent`, not
-      attempted without asking first) or a system package install, neither of which was done
-      speculatively. The `EnetDirectPlayTransport` class skeleton and its `.cpp` wiring into
-      `target_sources()` are deliberately deferred to a later task/batch in this same phase, since
-      writing code that calls real `enet_*` functions cannot be compile-verified without ENet
-      headers actually being available.
+      **Follow-up, same session, after asking the user:** the user was asked whether to actually
+      vendor a real ENet for full build verification and chose to do so. `third_party/enet` is
+      now a real git submodule (`git submodule add https://github.com/lsalzman/enet
+      third_party/enet`, pinned at `v1.3.18-17-g5a9c537`), and the vendored-detection success path
+      is now genuinely verified: (4) `FREE_DIRECT_ENABLE_ENET=ON` with the real submodule present
+      configures and **builds completely end-to-end** — `enet`'s own C sources compile, link into
+      `libenet.a`, and `free-api`/`free-direct`/`FREE_DIRECT` all build on top of it unaffected.
+      One real bug was found and fixed during this verification: upstream ENet's own
+      `CMakeLists.txt` adds its include directory via the old directory-scoped
+      `include_directories()`, not `target_include_directories()`, so it is **not** carried as a
+      usage requirement of the `enet` target — a consumer outside ENet's own directory scope
+      (i.e. `free-direct`) would not see `enet/enet.h` without an explicit fix. Added
+      `target_include_directories(enet PUBLIC .../third_party/enet/include)` right after
+      `add_subdirectory(third_party/enet ...)` to correct this. Beyond the CMake build itself, a
+      standalone smoke test (compiled and run outside the repo, not committed) confirmed real
+      ENet *functionality*, not just linkage: `enet_initialize()`, `enet_host_create()`,
+      `enet_host_destroy()`, and `enet_deinitialize()` all succeed against the vendored copy.
+      The system-ENet success path (option 2 above) remains unverified, since no `libenet` system
+      package was installed — only the vendored path was pursued, per the user's explicit choice.
 - [ ] Add an `EnetDirectPlayTransport` class skeleton in `src/directplay/EnetDirectPlayTransport.hpp`/
       `.cpp`, implementing `IDirectPlayTransport` with method bodies to be filled in by later tasks
       in this phase.
