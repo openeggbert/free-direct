@@ -223,18 +223,28 @@ behavior.
       further `AddRef()` there would double-count and leak a reference, so it was deliberately
       **not** added; this was verified at runtime too (a single `Release()` on the returned
       `IDirectPlay2A*` correctly drops it to 0). `DirectPlay2AImpl::QueryInterface` itself still
-      always returns `E_NOINTERFACE` (no self-`riid` success path exists yet), so there is currently
-      no success path in it to attach an `AddRef()` call to — that remains open pending a future
-      task giving `DirectPlay2AImpl::QueryInterface` its own self-identity/`IUnknown`-style success
-      path, which is not yet specified elsewhere in this plan and should be added as a new task if
-      needed rather than assumed here.
-- [ ] **(New task, discovered while implementing the two tasks above, not in the original Phase 1
+      always returns `E_NOINTERFACE` (no self-`riid` success path exists yet at the time this note
+      was first written), so there was initially no success path in it to attach an `AddRef()`
+      call to. **Update:** the next task below has since closed this gap — see it for the
+      completed fix. With that fix in place, "`AddRef()` in both `DirectPlayImpl` and
+      `DirectPlay2AImpl`" is now genuinely true of both classes' only success paths
+      (`IID_IDirectPlay`/`IID_IDirectPlay2A` self-QI in `DirectPlayImpl`, `IID_IDirectPlay2A`
+      self-QI in `DirectPlay2AImpl`); the still-not-`AddRef()`'d path
+      (`DirectPlayImpl::QueryInterface(IID_IDirectPlay2A, ...)` constructing a brand-new object)
+      remains deliberately excluded, as explained above.
+- [x] **(New task, discovered while implementing the two tasks above, not in the original Phase 1
       list.)** Give `DirectPlay2AImpl::QueryInterface` a self-identity success path: return `this`
       (as `IDirectPlay2A*`, and optionally also for a `IID_IUnknown`-equivalent if one is ever
       defined) with an `AddRef()` call when `riid` matches `IID_IDirectPlay2A`, instead of always
       returning `E_NOINTERFACE` as it does today. Once this exists, revisit the previous task's
       "AddRef() in both" wording, since only then will `DirectPlay2AImpl` have a success path to
-      attach it to.
+      attach it to. **Done:** `DirectPlay2AImpl::QueryInterface` now returns `this` with `AddRef()`
+      for `IID_IDirectPlay2A`, and still `E_NOINTERFACE` + `*ppvObject = nullptr` for anything
+      else (including `IID_IDirectPlay`, which this class does not implement). No
+      `IID_IUnknown`-equivalent exists anywhere in this codebase, so that optional part was not
+      added — nothing calls for it. Runtime-verified with a throwaway scratch harness: self-QI
+      returns the same pointer with a balanced `AddRef()`/`Release()`, an unknown GUID is rejected
+      without fabricating an object, and null `ppvObject` is still rejected.
 - [ ] Ensure `DirectPlayCreate` initializes `*lplpDP = nullptr` before any failure return path, so
       callers never observe an uninitialized pointer on error.
 - [ ] Ensure `DirectPlayCreate` rejects `pUnkOuter != nullptr` consistently, returning

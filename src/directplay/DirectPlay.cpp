@@ -18,8 +18,15 @@ namespace {
         DirectPlay2AImpl() : refCount_(1) {}
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
-            (void)riid;
             if (!ppvObject) return DPERR_INVALIDPARAMS;
+
+            if (IsEqualGuid(riid, IID_IDirectPlay2A)) {
+                AddRef();
+                *ppvObject = static_cast<IDirectPlay2A*>(this);
+                return DP_OK;
+            }
+
+            *ppvObject = nullptr;
             return E_NOINTERFACE;
         }
 
