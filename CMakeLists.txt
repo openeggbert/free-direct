@@ -48,6 +48,39 @@ if(NOT TARGET SDL3::SDL3 OR NOT TARGET SDL3_image::SDL3_image OR NOT TARGET SDL3
         "or provide SDL targets from the parent project.")
 endif()
 
+# ENet-backed DirectPlay transport (plan.md Phase 5). OFF by default: the default build has
+# zero ENet dependency, and no header under include/ may ever transitively include an ENet
+# header regardless of this option's state (CLAUDE.md's Internal Backend Policy).
+option(FREE_DIRECT_ENABLE_ENET "Enable the ENet-backed DirectPlay transport (EnetDirectPlayTransport)" OFF)
+option(FREE_DIRECT_USE_SYSTEM_ENET "Find a system-installed ENet instead of a vendored copy under third_party/enet" OFF)
+
+if(FREE_DIRECT_ENABLE_ENET)
+    if(FREE_DIRECT_USE_SYSTEM_ENET)
+        # Debian/Ubuntu's libenet-dev (and most other distros) ship a "libenet" pkg-config
+        # module; ENet has no upstream CMake config package, only this pkg-config file.
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(FREE_DIRECT_ENET REQUIRED IMPORTED_TARGET libenet)
+        add_library(FreeDirect::ENet ALIAS PkgConfig::FREE_DIRECT_ENET)
+    else()
+        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet/CMakeLists.txt")
+            message(FATAL_ERROR
+                "FREE_DIRECT_ENABLE_ENET is ON but no vendored ENet was found at "
+                "${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet/CMakeLists.txt. Either vendor "
+                "ENet there (e.g. as a git submodule pointing at "
+                "https://github.com/lsalzman/enet), or configure with "
+                "-DFREE_DIRECT_USE_SYSTEM_ENET=ON to use a system-installed libenet instead.")
+        endif()
+        add_subdirectory(third_party/enet EXCLUDE_FROM_ALL)
+        if(NOT TARGET enet)
+            message(FATAL_ERROR
+                "third_party/enet was found but did not define the expected 'enet' CMake "
+                "target. Its upstream CMakeLists.txt target name may have changed since this "
+                "was written - update the ALIAS below to match.")
+        endif()
+        add_library(FreeDirect::ENet ALIAS enet)
+    endif()
+endif()
+
 add_library(free-direct STATIC)
 
 target_sources(free-direct
@@ -84,6 +117,14 @@ target_link_libraries(free-direct
         SDL3_image::SDL3_image
         SDL3_mixer::SDL3_mixer
 )
+
+if(FREE_DIRECT_ENABLE_ENET)
+    # PRIVATE: ENet's include directories and link requirements must never propagate to
+    # consumers of the free-direct target (CLAUDE.md's Internal Backend Policy). The actual
+    # EnetDirectPlayTransport.cpp source file is added to target_sources() once it exists
+    # (a later plan.md Phase 5 task) - this only wires up the dependency itself.
+    target_link_libraries(free-direct PRIVATE FreeDirect::ENet)
+endif()
 
 add_executable(FREE_DIRECT src/Main.cpp)
 target_link_libraries(FREE_DIRECT

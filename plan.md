@@ -715,14 +715,53 @@ strings are in doc comments explaining the *policy* of not needing them, not act
 Goal: stand up the ENet-backed transport skeleton and the internal wire protocol it will use,
 entirely gated behind a CMake option so the default build has no ENet dependency.
 
-- [ ] Add a CMake option `FREE_DIRECT_ENABLE_ENET` (default `OFF`) to `CMakeLists.txt`.
-- [ ] Add CMake detection for a vendored ENet (submodule or `FetchContent`), gated behind
-      `FREE_DIRECT_ENABLE_ENET`.
-- [ ] Add optional CMake detection for a system-installed ENet (`find_package`/
+- [x] Add a CMake option `FREE_DIRECT_ENABLE_ENET` (default `OFF`) to `CMakeLists.txt`. **Done.**
+- [x] Add CMake detection for a vendored ENet (submodule or `FetchContent`), gated behind
+      `FREE_DIRECT_ENABLE_ENET`. **Done** as a vendored-directory check (matching the existing
+      `ThirdPartySDL.cmake` convention already used elsewhere in this ecosystem, rather than
+      `FetchContent`): when `FREE_DIRECT_ENABLE_ENET=ON` and `FREE_DIRECT_USE_SYSTEM_ENET=OFF`
+      (the default), it checks for `third_party/enet/CMakeLists.txt` and fails with a specific,
+      actionable message naming the expected path and the upstream repo
+      (`https://github.com/lsalzman/enet`) if missing, rather than a generic CMake error.
+      **`third_party/enet` does not exist in this repository or environment** — no real ENet
+      vendoring was performed in this batch; see the note at the end of this task cluster.
+- [x] Add optional CMake detection for a system-installed ENet (`find_package`/
       `pkg_check_modules`) as an alternative to the vendored copy, gated behind the same option.
-- [ ] Keep ENet's include directories `PRIVATE` to the `free-direct` CMake target.
-- [ ] Add a review-time (or build-time) check confirming no header under `include/` transitively
-      includes any ENet header.
+      **Done:** a second option, `FREE_DIRECT_USE_SYSTEM_ENET` (default `OFF`), switches to
+      `pkg_check_modules(... REQUIRED IMPORTED_TARGET libenet)` — ENet has no upstream CMake
+      config package, only a `libenet` pkg-config module (the name Debian/Ubuntu's `libenet-dev`
+      ships). Both paths converge on a single internal `FreeDirect::ENet` ALIAS target, so the
+      rest of the build doesn't need to know which source was used.
+- [x] Keep ENet's include directories `PRIVATE` to the `free-direct` CMake target. **Done:**
+      `target_link_libraries(free-direct PRIVATE FreeDirect::ENet)` — `PRIVATE` linkage means
+      `FreeDirect::ENet`'s include directories and other usage requirements never propagate to
+      anything that links against `free-direct`.
+- [x] Add a review-time (or build-time) check confirming no header under `include/` transitively
+      includes any ENet header. **Done as a review-time check:** `grep -rliE "enet" include/`
+      returns no matches (confirmed by actually running it). No build-time check was added since
+      nothing under `include/` has any path to reach an ENet header today (no ENet-aware code
+      exists yet in this batch) — the grep is the honest, sufficient check for the current state.
+
+      **Verified for real, in three separate fresh configurations, not just reasoned about:**
+      (1) `FREE_DIRECT_ENABLE_ENET=OFF` (default): configured and built successfully end-to-end,
+      identical to before this batch — zero ENet dependency, confirmed by the option simply never
+      being evaluated as true. (2) `FREE_DIRECT_ENABLE_ENET=ON` with no vendored copy and no
+      system flag: configure fails with exactly the intended custom error message naming the
+      expected `third_party/enet/CMakeLists.txt` path and the upstream repo URL. (3)
+      `FREE_DIRECT_ENABLE_ENET=ON` + `FREE_DIRECT_USE_SYSTEM_ENET=ON` with no `libenet` installed
+      in this environment: configure fails cleanly via CMake's own `FindPkgConfig` error, naming
+      the missing `libenet` package.
+
+      **What was not done, and why, honestly:** no real ENet copy (vendored or system-installed)
+      exists anywhere in this environment, so the "success" path of *either* detection method
+      (actually finding and linking against real ENet) could not be verified end-to-end in this
+      batch — only the two failure paths and the default-off path were. Actually vendoring a real
+      ENet copy would require either a network fetch (git submodule / `FetchContent`, not
+      attempted without asking first) or a system package install, neither of which was done
+      speculatively. The `EnetDirectPlayTransport` class skeleton and its `.cpp` wiring into
+      `target_sources()` are deliberately deferred to a later task/batch in this same phase, since
+      writing code that calls real `enet_*` functions cannot be compile-verified without ENet
+      headers actually being available.
 - [ ] Add an `EnetDirectPlayTransport` class skeleton in `src/directplay/EnetDirectPlayTransport.hpp`/
       `.cpp`, implementing `IDirectPlayTransport` with method bodies to be filled in by later tasks
       in this phase.
