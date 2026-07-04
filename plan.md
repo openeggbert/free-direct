@@ -641,28 +641,72 @@ zero-transport-dependency check passes (`DirectPlayMessageQueue.hpp`/`.cpp` incl
 Goal: a fully in-process `IDirectPlayTransport` implementation, used as the default backend for
 every subsequent DirectPlay test so tests stay deterministic and hermetic.
 
-- [ ] Implement `LoopbackDirectPlayTransport` in `src/directplay/LoopbackDirectPlayTransport.hpp`/
+- [x] Implement `LoopbackDirectPlayTransport` in `src/directplay/LoopbackDirectPlayTransport.hpp`/
       `.cpp`, implementing `IDirectPlayTransport` entirely in-process with no real sockets.
-- [ ] Allow creating a local session without real networking: `Open(..., DPOPEN_CREATE)` against a
+      **Done:** a plain in-memory `std::deque<std::vector<std::uint8_t>>` byte-buffer queue.
+      `Send()` appends a byte-copy; `Receive()` pops the front entry into the caller's buffer
+      (returning `false` if the caller's buffer is too small, without popping);
+      `Listen()`/`Connect()` trivially return `true` (no real connection setup needed for
+      same-process loopback); `Shutdown()` clears the buffer.
+- [x] Allow creating a local session without real networking: `Open(..., DPOPEN_CREATE)` against a
       `DirectPlaySession` configured with `LoopbackDirectPlayTransport` succeeds with zero network
-      I/O.
-- [ ] Allow creating one local player via `CreatePlayer` on a loopback-backed session.
-- [ ] Allow sending a packet to self: `Send(idFrom, idFrom, ...)` on a loopback-backed session
-      enqueues directly into that same session's receive queue.
-- [ ] Allow receiving the self-sent packet via `Receive` immediately after the `Send` above, with
-      no thread or event wait required.
-- [ ] Use `LoopbackDirectPlayTransport` as the default transport for all new DirectPlay unit tests
-      from this phase onward.
-- [ ] Add a unit test for `CreatePlayer` against a loopback session, asserting a non-zero DPID is
-      returned and is unique among players already created in that session.
-- [ ] Add a unit test for `Send` to self over loopback, asserting `DP_OK`.
-- [ ] Add a unit test for `Receive` after a loopback self-send, asserting the received payload
-      matches the sent payload byte-for-byte.
-- [ ] Add a unit test for `Close` on a loopback-backed session, asserting a subsequent `Send`/
+      I/O. **Done:** `Open()` now unconditionally assigns a fresh
+      `std::make_unique<LoopbackDirectPlayTransport>()` to `session_.transport` on success, since
+      loopback is the only backend that exists today (no provider/backend-selection mechanism
+      exists yet — that is Phase 5/6/8's job). `Close()` now also calls
+      `session_.transport->Shutdown()` and resets it to `nullptr`, so a `Release()` without a
+      prior `Close()` is the only case where `Release()`'s own `Shutdown()` call (added in Phase
+      2, previously dead code since `transport` was always null then) actually does something —
+      confirmed by the new tests exercising exactly that path.
+- [x] Allow creating one local player via `CreatePlayer` on a loopback-backed session. **Done —
+      required no code change:** `CreatePlayer()` (Phase 2) never referenced `session_.transport`
+      at all, so it already worked identically regardless of transport; re-verified with a
+      dedicated test rather than just assumed.
+- [x] Allow sending a packet to self: `Send(idFrom, idFrom, ...)` on a loopback-backed session
+      enqueues directly into that same session's receive queue. **Done, with a specific design
+      choice:** rather than enqueuing directly, `Send()` round-trips the payload through
+      `session_.transport->Send()`/`Receive()` first, then wraps the result into a
+      `DirectPlayMessagePacket` and calls `session_.messageQueue.Enqueue()`. This was a deliberate
+      choice over a more direct "just call `Enqueue()`" implementation, so
+      `LoopbackDirectPlayTransport`'s own `Send()`/`Receive()` are genuinely exercised by this
+      path (matching the eventual shape of a real backend) rather than being assigned and left
+      idle. Only the literal `idTo == idFrom` case is handled; any other recipient is currently a
+      silent no-op (`DP_OK`), matching the existing Phase 2 comment that general routing,
+      player-ID validation, and payload validation are Phase 10's job. A failed `Enqueue()` (queue
+      full or oversize payload) returns `DPERR_SENDTOOBIG` — imprecise for the "queue full" case
+      specifically (that should arguably be a different code), but the queue starts empty and
+      this narrow self-send scenario is unlikely to fill it; Phase 10 should refine this mapping
+      when it implements full routing.
+- [x] Allow receiving the self-sent packet via `Receive` immediately after the `Send` above, with
+      no thread or event wait required. **Done — required no additional code change:** `Receive()`
+      (Phase 3) already reads from `session_.messageQueue` synchronously; once `Send()` enqueues a
+      packet (previous task), `Receive()` finds it immediately, same call stack, no waiting.
+- [x] Use `LoopbackDirectPlayTransport` as the default transport for all new DirectPlay unit tests
+      from this phase onward. **Done:** since `Open()` now assigns it unconditionally, every test
+      that calls the real `Open()` automatically uses it — no test needs to configure anything
+      explicitly.
+- [x] Add a unit test for `CreatePlayer` against a loopback session, asserting a non-zero DPID is
+      returned and is unique among players already created in that session. **Done:**
+      `tests/directplay_tests.cpp`, `Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids`.
+- [x] Add a unit test for `Send` to self over loopback, asserting `DP_OK`. **Done:**
+      `Test_LoopbackSendToSelf_ReturnsOk`.
+- [x] Add a unit test for `Receive` after a loopback self-send, asserting the received payload
+      matches the sent payload byte-for-byte. **Done:**
+      `Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload`.
+- [x] Add a unit test for `Close` on a loopback-backed session, asserting a subsequent `Send`/
       `Receive` returns `DPERR_NOCONNECTION` (Phase 11) rather than crashing or silently succeeding.
+      **Done:** `Test_LoopbackClose_SendAndReceiveReportNoConnection`. All four tests go through
+      the real, public `IDirectPlay2A` interface end-to-end (via a shared `OpenLoopbackSession`
+      helper) — no injection workaround was needed for this phase, since `Open()` itself now
+      creates real, usable loopback state.
 
 **Acceptance criteria:** the four loopback tests pass with zero real socket usage; no `ENet*`/
-`SDL_net*` symbol appears anywhere in `LoopbackDirectPlayTransport`'s translation unit.
+`SDL_net*` symbol appears anywhere in `LoopbackDirectPlayTransport`'s translation unit. **Met:**
+all four (plus the three carried-over Phase 3 tests, seven total) pass — actually built and run
+per `tests/directplay_tests.cpp`'s own documented command from the repository root
+(`OK: all DirectPlay tests passed.`, exit code 0). Confirmed no `ENet`/`SDL_net`/`SDL3_net`
+*identifier* appears in `LoopbackDirectPlayTransport.hpp`/`.cpp` — the only matches for those
+strings are in doc comments explaining the *policy* of not needing them, not actual code.
 
 ---
 

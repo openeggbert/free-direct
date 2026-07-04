@@ -5,9 +5,12 @@
  */
 #include "dplay.h"
 #include "DirectPlaySession.hpp"
+#include "LoopbackDirectPlayTransport.hpp"
 #include <atomic>
 #include <cstring>
+#include <memory>
 #include <new>
+#include <vector>
 
 namespace {
     bool IsEqualGuid(const GUID& a, const GUID& b) {
@@ -36,9 +39,9 @@ namespace {
         ULONG WINAPI Release() override {
             ULONG val = --refCount_;
             if (val == 0) {
-                // session_.transport is always null today (no concrete IDirectPlayTransport
-                // exists until Phase 4/5), so this is currently a no-op in practice, but it is
-                // the correct, safe shutdown call once a real transport is ever assigned.
+                // Covers the case where Release() is called without a prior Close() - Open()
+                // (Phase 4) now assigns a real LoopbackDirectPlayTransport, and Close() already
+                // shuts it down and clears session_.transport itself, so this is a no-op then.
                 if (session_.transport) session_.transport->Shutdown();
                 delete this;
             }
@@ -74,6 +77,10 @@ namespace {
             if (lpSessionDesc->lpszSessionNameA) session_.sessionName = lpSessionDesc->lpszSessionNameA;
             session_.password.clear();
             if (lpSessionDesc->lpszPasswordA) session_.password = lpSessionDesc->lpszPasswordA;
+            // Loopback is the only transport backend that exists today (EnetDirectPlayTransport
+            // lands in Phase 5), so it is assigned unconditionally - there is no
+            // provider/backend selection mechanism yet (that's Phase 5/6/8's job).
+            session_.transport = std::make_unique<free_direct_directplay::LoopbackDirectPlayTransport>();
             session_.state = free_direct_directplay::DirectPlayObjectState::Open;
             return DP_OK;
         }
@@ -95,10 +102,34 @@ namespace {
         }
 
         HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) override {
-            (void)idFrom; (void)idTo; (void)dwFlags; (void)lpData; (void)dwDataSize;
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
-            // Sender/recipient player ID validation, payload validation, and actual delivery
-            // all land in Phase 10.
+
+            // Only the self-send loopback path (Phase 4) is implemented so far. Sender/recipient
+            // player ID validation, payload validation, host routing, and broadcast all land in
+            // Phase 10; a non-self idTo is currently a silent no-op, matching the pre-Phase-4
+            // stub behavior for anything this phase doesn't cover.
+            if (idTo == idFrom && session_.transport) {
+                // Round-trip through the transport rather than enqueuing directly, so
+                // LoopbackDirectPlayTransport's own Send()/Receive() are genuinely exercised
+                // (matching the eventual shape of a real backend), even though for loopback the
+                // round-trip is synchronous and same-process.
+                if (!session_.transport->Send(lpData, dwDataSize)) return DPERR_GENERIC;
+
+                std::vector<std::uint8_t> received(dwDataSize);
+                std::size_t receivedSize = 0;
+                if (!session_.transport->Receive(received.empty() ? nullptr : received.data(),
+                                                  received.size(), &receivedSize)) {
+                    return DPERR_GENERIC;
+                }
+                received.resize(receivedSize);
+
+                free_direct_directplay::DirectPlayMessagePacket packet;
+                packet.idFrom = idFrom;
+                packet.idTo = idTo;
+                packet.flags = dwFlags;
+                packet.payload = std::move(received);
+                if (!session_.messageQueue.Enqueue(std::move(packet))) return DPERR_SENDTOOBIG;
+            }
             return DP_OK;
         }
 
@@ -113,6 +144,10 @@ namespace {
         }
 
         HRESULT WINAPI Close() override {
+            if (session_.transport) {
+                session_.transport->Shutdown();
+                session_.transport.reset();
+            }
             session_.messageQueue.Clear();
             session_.localPlayerIds.clear();
             session_.remotePlayerIds.clear();

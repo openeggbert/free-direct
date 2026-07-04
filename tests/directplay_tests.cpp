@@ -1,6 +1,6 @@
 /**
  * @file directplay_tests.cpp
- * @brief Standalone DirectPlay unit tests (`plan.md` Phase 3).
+ * @brief Standalone DirectPlay unit tests (`plan.md` Phase 3 and Phase 4).
  *
  * Not yet wired into CMake/CTest - that is `plan.md` Phase 15's job ("Add a
  * DirectPlay unit test executable"). Until then, build and run this file
@@ -9,7 +9,8 @@
  *   g++ -std=c++20 -Wall -Wextra \
  *       -I include -I ../free-api/include -I ../free-api/include_non_windows \
  *       -I src/directplay \
- *       src/directplay/DirectPlay.cpp tests/directplay_tests.cpp \
+ *       src/directplay/DirectPlay.cpp src/directplay/LoopbackDirectPlayTransport.cpp \
+ *       tests/directplay_tests.cpp \
  *       -o directplay_tests
  *   ./directplay_tests
  *
@@ -68,9 +69,10 @@ void Test_ReceiveOnEmptyQueue_ReturnsNoMessages() {
 //
 // Exercises DirectPlayMessageQueue::TryReceive() directly - the exact method
 // DirectPlay2AImpl::Receive() (src/directplay/DirectPlay.cpp) delegates to after its own
-// session-open check - since nothing in the codebase can yet enqueue a message into a live
-// IDirectPlay2A object (Send() doesn't enqueue - Phase 10; no transport delivers one either -
-// Phase 4). This is not a re-implementation of Receive()'s logic: it is the same method.
+// session-open check. Written before Phase 4 added a real (self-send-only) delivery path, and
+// kept this way since it tests TryReceive() itself in isolation rather than the full Send/Open
+// lifecycle the Phase 4 loopback tests below exercise. This is not a re-implementation of
+// Receive()'s logic: it is the same method.
 void Test_ReceiveWithTooSmallBuffer_PreservesPacket() {
     using namespace free_direct_directplay;
 
@@ -116,12 +118,115 @@ void Test_ReceiveSuccessfulCopy_MatchesQueuedPacket() {
     CHECK(queue.IsEmpty()); // a successful receive must dequeue
 }
 
+// Shared helper for the Phase 4 loopback tests below: opens a fresh DirectPlay2AImpl session
+// (DPOPEN_CREATE assigns it a LoopbackDirectPlayTransport - see DirectPlay.cpp's Open()).
+// Caller owns the returned pointers and must Release() both.
+void OpenLoopbackSession(LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2) {
+    CHECK(DirectPlayCreate(nullptr, outDp, nullptr) == DP_OK);
+    CHECK((*outDp)->QueryInterface(IID_IDirectPlay2A, (void**)outDp2) == DP_OK);
+
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    desc.dwMaxPlayers = 4;
+    CHECK((*outDp2)->Open(&desc, DPOPEN_CREATE) == DP_OK);
+}
+
+// plan.md Phase 4: "Add a unit test for CreatePlayer against a loopback session, asserting a
+// non-zero DPID is returned and is unique among players already created in that session."
+void Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID p1 = 0, p2 = 0;
+    CHECK(dp2->CreatePlayer(&p1, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(p1 != 0);
+    CHECK(dp2->CreatePlayer(&p2, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(p2 != 0);
+    CHECK(p1 != p2);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// plan.md Phase 4: "Add a unit test for Send to self over loopback, asserting DP_OK."
+void Test_LoopbackSendToSelf_ReturnsOk() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "loopback";
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// plan.md Phase 4: "Add a unit test for Receive after a loopback self-send, asserting the
+// received payload matches the sent payload byte-for-byte."
+void Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "byte-for-byte";
+    const DWORD msgLen = sizeof(msg);
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, (LPVOID)msg, msgLen) == DP_OK);
+
+    char buf[32] = {};
+    DPID from = 0, to = 0;
+    DWORD size = sizeof(buf);
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(size == msgLen);
+    CHECK(from == player);
+    CHECK(to == player);
+    CHECK(std::memcmp(buf, msg, msgLen) == 0);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// plan.md Phase 4: "Add a unit test for Close on a loopback-backed session, asserting a
+// subsequent Send/Receive returns DPERR_NOCONNECTION (Phase 11) rather than crashing or
+// silently succeeding."
+void Test_LoopbackClose_SendAndReceiveReportNoConnection() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(dp2->Close() == DP_OK);
+
+    const char msg[] = "x";
+    CHECK(dp2->Send(player, player, 0, (LPVOID)msg, sizeof(msg)) == DPERR_NOCONNECTION);
+
+    char buf[8];
+    DPID from = 0, to = 0;
+    DWORD size = sizeof(buf);
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DPERR_NOCONNECTION);
+
+    dp2->Release();
+    dp->Release();
+}
+
 } // namespace
 
 int main() {
     Test_ReceiveOnEmptyQueue_ReturnsNoMessages();
     Test_ReceiveWithTooSmallBuffer_PreservesPacket();
     Test_ReceiveSuccessfulCopy_MatchesQueuedPacket();
+    Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids();
+    Test_LoopbackSendToSelf_ReturnsOk();
+    Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();
+    Test_LoopbackClose_SendAndReceiveReportNoConnection();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectPlay tests passed.\n");
