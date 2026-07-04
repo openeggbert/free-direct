@@ -4,9 +4,9 @@
  *
  * This header is intentionally private to the DirectPlay implementation: it
  * must never be included from `include/dplay.h` and must never be installed.
- * Not yet wired into `DirectPlay.cpp` - that starts once `Open`/`Close`/
- * `CreatePlayer`/`Send`/`Receive` are rewritten to use this state (later
- * `plan.md` Phase 2 tasks).
+ * `DirectPlay2AImpl` (`DirectPlay.cpp`) owns one instance and wires `Open`/
+ * `CreatePlayer`/`Close` to it; `EnumSessions`/`Send`/`Receive` do not use it
+ * yet (later `plan.md` Phase 2 tasks).
  * @note Status: PARTIAL
  */
 #pragma once
@@ -53,6 +53,10 @@ public:
 
     std::vector<DPID> localPlayerIds;
     std::vector<DPID> remotePlayerIds;
+
+    /// Placeholder DPID allocator (starts at 1, skipping the real-DirectPlay-reserved 0);
+    /// `plan.md` Phase 9 revisits this against the Phase 0 DPID-vs-array-index finding.
+    DPID nextPlayerId = 1;
 
     std::string sessionName;
     std::string password;

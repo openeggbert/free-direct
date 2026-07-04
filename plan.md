@@ -404,15 +404,34 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
 - [ ] Replace `EnumSessions()`'s unconditional `DP_OK` return with behavior driven by the
       enumeration decision recorded in Phase 1 (full discovery logic still lands in Phase 8; this
       task only wires the method to real state instead of an unconditional stub).
-- [ ] Replace `CreatePlayer()`'s hardcoded `*lpidPlayer = 1` with a DPID allocated per the strategy
+- [x] Replace `CreatePlayer()`'s hardcoded `*lpidPlayer = 1` with a DPID allocated per the strategy
       to be finalized in Phase 9 (a simple incrementing counter is an acceptable placeholder here;
-      Phase 9 revisits correctness against the Phase 0 DPID-vs-index finding).
+      Phase 9 revisits correctness against the Phase 0 DPID-vs-index finding). **Done:** added a
+      new `DPID nextPlayerId = 1` field to `DirectPlaySession` (not one of the originally-enumerated
+      Phase 2 data-model fields, but necessary to implement this task — noted here rather than
+      silently added). `CreatePlayer()` now allocates `session_.nextPlayerId++`, appends it to
+      `localPlayerIds`, increments `currentPlayers`, and writes it to `*lpidPlayer` only if that
+      output pointer is non-null (preserving the original stub's tolerance of a null
+      `lpidPlayer`). Does **not** yet check whether the session is open first — that kind of
+      precondition check is not named by this task and is left for a later validation sweep if
+      needed. Runtime-verified: sequential `CreatePlayer` calls yield distinct, incrementing DPIDs
+      starting at 1.
 - [ ] Replace `Send()`'s unconditional `DP_OK` return with parameter/state validation only (full
       routing/delivery lands in Phase 10).
 - [ ] Replace `Receive()`'s unconditional `DP_OK` return with `DPERR_NOMESSAGES` once the message
       queue (Phase 3) reports empty.
-- [ ] Make `Close()` clear all session/player/message state on `DirectPlaySession` and transition
-      to the `Closed` state.
+- [x] Make `Close()` clear all session/player/message state on `DirectPlaySession` and transition
+      to the `Closed` state. **Done for session/player state; message state is not applicable
+      yet:** `Close()` now clears `localPlayerIds`, `remotePlayerIds`, and resets `nextPlayerId`
+      back to `1` (so a session that is closed and later re-`Open()`ed starts a fresh DPID
+      sequence, not a continuation of the old one), clears `sessionName`/`password`, zeroes
+      `applicationGuid`/`maxPlayers`/`currentPlayers`, resets `isHost` to `false`, and transitions
+      `state` to `Closed`. Message-queue clearing is explicitly deferred and documented as such in
+      the header comment, since `DirectPlaySession` has no message-queue member until Phase 3.
+      Runtime-verified: after `Close()`, a subsequent `Open()` no longer returns
+      `DPERR_ALREADYINITIALIZED` (proving `state` left `Open`), and a player created after that
+      re-`Open()` gets DPID `1` again (proving the allocator and player list were actually reset,
+      not just the top-level `state` flag).
 - [ ] Make `Release()` on `DirectPlay2AImpl` tear down any transport resources safely (via
       `IDirectPlayTransport::Shutdown()` or equivalent) before `delete this`.
 

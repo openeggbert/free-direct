@@ -69,7 +69,14 @@ namespace {
             // lpPlayerName is optional (a player may be created without a display name); only
             // its size is validated when one is actually provided.
             if (lpPlayerName && lpPlayerName->dwSize != sizeof(DPNAME)) return DPERR_INVALIDPARAMS;
-            if (lpidPlayer) *lpidPlayer = 1;
+
+            // Placeholder allocation strategy: a simple incrementing counter starting at 1
+            // (0 is left unassigned, matching real DirectPlay's DPID_SYSMSG/DPID_ALLPLAYERS
+            // convention). Phase 9 revisits this against the Phase 0 DPID-vs-array-index finding.
+            const DPID newId = session_.nextPlayerId++;
+            session_.localPlayerIds.push_back(newId);
+            session_.currentPlayers++;
+            if (lpidPlayer) *lpidPlayer = newId;
             return DP_OK;
         }
 
@@ -83,7 +90,21 @@ namespace {
             return DP_OK; // No messages
         }
 
-        HRESULT WINAPI Close() override { return DP_OK; }
+        HRESULT WINAPI Close() override {
+            // Message-queue state is not cleared here yet - DirectPlaySession has no message
+            // queue member until Phase 3 gives it one.
+            session_.localPlayerIds.clear();
+            session_.remotePlayerIds.clear();
+            session_.nextPlayerId = 1;
+            session_.sessionName.clear();
+            session_.password.clear();
+            session_.applicationGuid = GUID{};
+            session_.maxPlayers = 0;
+            session_.currentPlayers = 0;
+            session_.isHost = false;
+            session_.state = free_direct_directplay::DirectPlayObjectState::Closed;
+            return DP_OK;
+        }
 
     private:
         std::atomic<ULONG> refCount_;
