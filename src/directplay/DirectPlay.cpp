@@ -13,7 +13,9 @@ namespace {
         DirectPlay2AImpl() : refCount_(1) {}
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
-            (void)riid; (void)ppvObject; return E_NOINTERFACE;
+            (void)riid;
+            if (!ppvObject) return DPERR_INVALIDPARAMS;
+            return E_NOINTERFACE;
         }
 
         ULONG WINAPI AddRef() override { return ++refCount_; }
@@ -66,6 +68,7 @@ namespace {
             // For now, let's just return a stub if it's requested or if anything is requested.
             // Since we don't have IIDs defined yet, we'll just return our DirectPlay2AImpl for now as a hack.
             // Or better, we define a dummy IID_IDirectPlay2A.
+            if (!ppvObject) return DPERR_INVALIDPARAMS;
             *ppvObject = new (std::nothrow) DirectPlay2AImpl();
             return (*ppvObject) ? DP_OK : DPERR_OUTOFMEMORY;
         }

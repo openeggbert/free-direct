@@ -189,10 +189,16 @@ Goal: make the existing `IDirectPlay`/`IDirectPlay2A` stub in `src/directplay/Di
 COM-correct and ready to host real state, without yet implementing real session/player/message
 behavior.
 
-- [ ] Fix `QueryInterface` null-pointer handling in `DirectPlayImpl::QueryInterface` and
+- [x] Fix `QueryInterface` null-pointer handling in `DirectPlayImpl::QueryInterface` and
       `DirectPlay2AImpl::QueryInterface` (`src/directplay/DirectPlay.cpp`): return
       `DPERR_INVALIDPARAMS` (or `E_INVALIDARG`) when `ppvObject == nullptr`, instead of
-      dereferencing it unconditionally.
+      dereferencing it unconditionally. **Done:** both methods now return `DPERR_INVALIDPARAMS`
+      when `ppvObject == nullptr` before touching it. Verified by a standalone
+      `g++ -fsyntax-only` type-check against the project's real `include/dplay.h`
+      (the full linked CMake build could not be run in this environment — the vendored SDL3
+      submodule under `third_party/` is not checked out here, unrelated to this change). No
+      automated unit test exists yet for this (test infrastructure is `plan.md` Phase 15, not
+      started), so this is verified by compilation only, not by a passing test.
 - [ ] Define a real internal `IID_IDirectPlay` constant in `include/dplay.h`, distinct from the
       current placeholder `IID_IDirectPlay2A = {0}`, so `QueryInterface` can compare against a real
       GUID value instead of accepting anything.
