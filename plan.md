@@ -565,10 +565,29 @@ transport backend.
       `DirectPlay2AImpl::Receive()`'s literal code path for those three cases end-to-end, since
       there is no way to get a message into a live object yet. That gap closes naturally once
       Phase 4/10 delivery exists.
-- [ ] Implement a maximum queued-message count on `DirectPlayMessageQueue` to bound memory growth
-      when a peer stops calling `Receive`.
-- [ ] Implement oversize-packet rejection before a packet is ever queued (see Phase 11's
+- [x] Implement a maximum queued-message count on `DirectPlayMessageQueue` to bound memory growth
+      when a peer stops calling `Receive`. **Done:** `static constexpr std::size_t
+      kMaxQueuedMessages = 256` (a round, generous placeholder — no real-DirectPlay or
+      `free-eggbert` call site implies a specific required capacity). `Enqueue()`'s signature
+      changed from `void` to `bool`, returning `false` without enqueuing once the queue is at
+      capacity; this has zero call-site impact today since nothing calls `Enqueue()` yet. The
+      exact `DPERR_*` code `Send()` should map a full-queue rejection to is left for Phase 10 to
+      decide (this task only implements the bound itself, in the queue).
+- [x] Implement oversize-packet rejection before a packet is ever queued (see Phase 11's
       `DPERR_SENDTOOBIG`), sized to comfortably exceed the largest observed `free-eggbert` payload.
+      **Done:** `static constexpr std::size_t kMaxPayloadBytes = 4096`, checked first in
+      `Enqueue()` (before the queue-full check). 4096 bytes was chosen as a round number that
+      comfortably exceeds every `free-eggbert` payload size found in the Phase 0 audit (a fixed
+      500-byte receive buffer, with actual payloads observed in the low hundreds of bytes) —
+      not tied to an exact real-DirectPlay constant, since none applies here. Mapping an oversize
+      rejection to `DPERR_SENDTOOBIG` specifically is Phase 10's job, once `Send()` actually calls
+      `Enqueue()`; this task only implements the size guard itself.
+      **Verification (both tasks together):** runtime-verified with a throwaway scratch harness:
+      a payload one byte over `kMaxPayloadBytes` is rejected and not queued; a payload exactly at
+      the limit is accepted; filling the queue to exactly `kMaxQueuedMessages` succeeds, a
+      `kMaxQueuedMessages + 1`th enqueue is rejected without disturbing what's already queued
+      (confirmed the original front-of-queue packet is unchanged), and after draining one slot,
+      exactly one more enqueue succeeds.
 - [ ] Add a unit test for `Receive` on an empty queue, asserting `DPERR_NOMESSAGES`.
 - [ ] Add a unit test for `Receive` with a too-small caller-provided buffer, asserting the queued
       packet is preserved (not dequeued) and a meaningful error is returned.

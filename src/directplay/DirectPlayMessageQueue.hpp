@@ -14,6 +14,7 @@
 
 #include "dplay.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <utility>
@@ -38,13 +39,30 @@ struct DirectPlayMessagePacket {
  */
 class DirectPlayMessageQueue {
 public:
+    /// Bounds memory growth if a peer stops calling Receive(). `plan.md` Phase 10 decides the
+    /// exact `DPERR_*` code `Send()` maps a full queue to once it actually calls `Enqueue()`;
+    /// this class just refuses to grow past this count.
+    static constexpr std::size_t kMaxQueuedMessages = 256;
+
+    /// Generously exceeds every payload size observed in the Phase 0 `free-eggbert` audit (a
+    /// fixed 500-byte receive buffer, with actual payloads in the low hundreds of bytes).
+    /// `plan.md` Phase 10 maps a rejection here to `DPERR_SENDTOOBIG` once `Send()` calls
+    /// `Enqueue()`.
+    static constexpr std::size_t kMaxPayloadBytes = 4096;
+
     DirectPlayMessageQueue() = default;
     ~DirectPlayMessageQueue() = default;
 
     bool IsEmpty() const { return packets_.empty(); }
 
-    /// Appends a packet to the back of the queue.
-    void Enqueue(DirectPlayMessagePacket packet) { packets_.push_back(std::move(packet)); }
+    /// Appends a packet to the back of the queue. Returns false, without enqueuing, if the
+    /// payload exceeds `kMaxPayloadBytes` or the queue is already at `kMaxQueuedMessages`.
+    bool Enqueue(DirectPlayMessagePacket packet) {
+        if (packet.payload.size() > kMaxPayloadBytes) return false;
+        if (packets_.size() >= kMaxQueuedMessages) return false;
+        packets_.push_back(std::move(packet));
+        return true;
+    }
 
     /// Returns the packet at the front of the queue without removing it, or nullptr if empty.
     const DirectPlayMessagePacket* Front() const {
