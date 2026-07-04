@@ -179,11 +179,24 @@ HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID l
  */
 HRESULT WINAPI DirectPlayCreate(LPGUID lpGUID, LPDIRECTPLAY* lplpDP, IUnknown* pUnkOuter);
 
+/**
+ * @brief Internal identity constants for `QueryInterface`.
+ *
+ * These are FreeDirect-internal placeholder values, not the real Microsoft
+ * DirectPlay IIDs (this project does not target Microsoft DirectPlay wire/binary
+ * compatibility). They only need to be distinct from each other so
+ * `QueryInterface` can tell `IDirectPlay` and `IDirectPlay2A` apart.
+ * @note Status: PARTIAL
+ */
+/** @{ */
 #ifdef __cplusplus
+inline const GUID IID_IDirectPlay = {1};
 inline const GUID IID_IDirectPlay2A = {0};
 #else
+static const GUID IID_IDirectPlay = {1};
 static const GUID IID_IDirectPlay2A = {0};
 #endif
+/** @} */
 
 #ifdef __cplusplus
 }

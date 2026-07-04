@@ -5,9 +5,14 @@
  */
 #include "dplay.h"
 #include <atomic>
+#include <cstring>
 #include <new>
 
 namespace {
+    bool IsEqualGuid(const GUID& a, const GUID& b) {
+        return std::memcmp(&a, &b, sizeof(GUID)) == 0;
+    }
+
     class DirectPlay2AImpl final : public IDirectPlay2A {
     public:
         DirectPlay2AImpl() : refCount_(1) {}
@@ -64,13 +69,23 @@ namespace {
         DirectPlayImpl() : refCount_(1) {}
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
-            // In a real implementation we would check for IID_IDirectPlay2A
-            // For now, let's just return a stub if it's requested or if anything is requested.
-            // Since we don't have IIDs defined yet, we'll just return our DirectPlay2AImpl for now as a hack.
-            // Or better, we define a dummy IID_IDirectPlay2A.
             if (!ppvObject) return DPERR_INVALIDPARAMS;
-            *ppvObject = new (std::nothrow) DirectPlay2AImpl();
-            return (*ppvObject) ? DP_OK : DPERR_OUTOFMEMORY;
+
+            if (IsEqualGuid(riid, IID_IDirectPlay)) {
+                // Same object already implements IDirectPlay: return it, not a new instance.
+                AddRef();
+                *ppvObject = static_cast<IDirectPlay*>(this);
+                return DP_OK;
+            }
+            if (IsEqualGuid(riid, IID_IDirectPlay2A)) {
+                // A distinct interface: hand back a freshly constructed implementation.
+                // Its constructor already starts refCount_ at 1, so no extra AddRef() here.
+                *ppvObject = new (std::nothrow) DirectPlay2AImpl();
+                return (*ppvObject) ? DP_OK : DPERR_OUTOFMEMORY;
+            }
+
+            *ppvObject = nullptr;
+            return E_NOINTERFACE;
         }
 
         ULONG WINAPI AddRef() override { return ++refCount_; }

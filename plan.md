@@ -199,14 +199,42 @@ behavior.
       submodule under `third_party/` is not checked out here, unrelated to this change). No
       automated unit test exists yet for this (test infrastructure is `plan.md` Phase 15, not
       started), so this is verified by compilation only, not by a passing test.
-- [ ] Define a real internal `IID_IDirectPlay` constant in `include/dplay.h`, distinct from the
+- [x] Define a real internal `IID_IDirectPlay` constant in `include/dplay.h`, distinct from the
       current placeholder `IID_IDirectPlay2A = {0}`, so `QueryInterface` can compare against a real
-      GUID value instead of accepting anything.
-- [ ] Ensure `DirectPlayImpl::QueryInterface` returns `DPERR_NOINTERFACE`/`E_NOINTERFACE` for any
+      GUID value instead of accepting anything. **Done:** added `IID_IDirectPlay = {1}` next to
+      `IID_IDirectPlay2A = {0}`, with a doc comment stating explicitly these are FreeDirect-internal
+      placeholder values, not real Microsoft IIDs (no wire/binary-compatibility claim).
+- [x] Ensure `DirectPlayImpl::QueryInterface` returns `DPERR_NOINTERFACE`/`E_NOINTERFACE` for any
       `riid` other than `IID_IDirectPlay`/`IID_IDirectPlay2A`, instead of unconditionally
-      succeeding for any request as it does today.
-- [ ] Ensure `QueryInterface` calls `AddRef()` on the returned interface pointer before returning
-      `DP_OK`, in both `DirectPlayImpl` and `DirectPlay2AImpl`.
+      succeeding for any request as it does today. **Done:** added a local `IsEqualGuid` helper
+      (`src/directplay/DirectPlay.cpp`, `memcmp`-based — no such helper existed anywhere in
+      `free-api` or `free-direct` to reuse) and rewrote `DirectPlayImpl::QueryInterface` to check
+      `riid` against both known IIDs, returning `E_NOINTERFACE` and setting `*ppvObject = nullptr`
+      for anything else. Runtime-verified with a throwaway scratch harness (compiled and run
+      outside the repo, not committed) asserting an unknown GUID is rejected and does not fabricate
+      an object.
+- [x] Ensure `QueryInterface` calls `AddRef()` on the returned interface pointer before returning
+      `DP_OK`, in both `DirectPlayImpl` and `DirectPlay2AImpl`. **Done for `DirectPlayImpl`, not
+      applicable yet for `DirectPlay2AImpl`:** `DirectPlayImpl::QueryInterface(IID_IDirectPlay,
+      ...)` now returns `this` and calls `AddRef()` first, verified at runtime to correctly
+      increment/decrement the refcount (scratch harness: `AddRef()`/`Release()` balance checked
+      explicitly). `DirectPlayImpl::QueryInterface(IID_IDirectPlay2A, ...)` still allocates a
+      *new* `DirectPlay2AImpl`, whose constructor already starts `refCount_` at 1 — adding a
+      further `AddRef()` there would double-count and leak a reference, so it was deliberately
+      **not** added; this was verified at runtime too (a single `Release()` on the returned
+      `IDirectPlay2A*` correctly drops it to 0). `DirectPlay2AImpl::QueryInterface` itself still
+      always returns `E_NOINTERFACE` (no self-`riid` success path exists yet), so there is currently
+      no success path in it to attach an `AddRef()` call to — that remains open pending a future
+      task giving `DirectPlay2AImpl::QueryInterface` its own self-identity/`IUnknown`-style success
+      path, which is not yet specified elsewhere in this plan and should be added as a new task if
+      needed rather than assumed here.
+- [ ] **(New task, discovered while implementing the two tasks above, not in the original Phase 1
+      list.)** Give `DirectPlay2AImpl::QueryInterface` a self-identity success path: return `this`
+      (as `IDirectPlay2A*`, and optionally also for a `IID_IUnknown`-equivalent if one is ever
+      defined) with an `AddRef()` call when `riid` matches `IID_IDirectPlay2A`, instead of always
+      returning `E_NOINTERFACE` as it does today. Once this exists, revisit the previous task's
+      "AddRef() in both" wording, since only then will `DirectPlay2AImpl` have a success path to
+      attach it to.
 - [ ] Ensure `DirectPlayCreate` initializes `*lplpDP = nullptr` before any failure return path, so
       callers never observe an uninitialized pointer on error.
 - [ ] Ensure `DirectPlayCreate` rejects `pUnkOuter != nullptr` consistently, returning
