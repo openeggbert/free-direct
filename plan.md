@@ -37,100 +37,149 @@ Goal: establish, from real source code (not assumption), exactly what DirectPlay
 DirectSound surface `free-eggbert` and `planetblupi` need. This phase produces a document, not
 code.
 
-- [ ] Confirm whether `../free-eggbert` exists as a sibling checkout relative to this repository;
-      record the result and the checkout path used.
-- [ ] Confirm whether `../planetblupi` exists as a sibling checkout relative to this repository;
-      record the result and the checkout path used.
+- [x] Confirm whether `../free-eggbert` exists as a sibling checkout relative to this repository;
+      record the result and the checkout path used. **Done:** exists at `../free-eggbert`, HEAD
+      `dae5652f` (2026-06-08). See `docs/directplay-callsite-audit.md` §0 (provenance table).
+- [x] Confirm whether `../planetblupi` exists as a sibling checkout relative to this repository;
+      record the result and the checkout path used. **Done:** exists at `../planetblupi`, HEAD
+      `db61ffe7` (2026-06-13). See `docs/directplay-callsite-audit.md` §0.
 - [ ] If either sibling repository does not exist at audit time, stop and record that this phase is
-      blocked/partial for that repository, rather than guessing at its call sites.
-- [ ] List every DirectPlay-related public declaration currently in `include/dplay.h` (functions,
-      interfaces, structs, typedefs, macros), as a flat inventory.
-- [ ] List every DirectPlay source stub currently in `src/directplay/DirectPlay.cpp`, class by
+      blocked/partial for that repository, rather than guessing at its call sites. **Not
+      triggered this run** — both repositories were present, so this guard condition did not apply.
+      Left unchecked rather than marked done, since the described action never ran.
+- [x] List every DirectPlay-related public declaration currently in `include/dplay.h` (functions,
+      interfaces, structs, typedefs, macros), as a flat inventory. **Done:** see
+      `docs/directplay-callsite-audit.md` §1.1.
+- [x] List every DirectPlay source stub currently in `src/directplay/DirectPlay.cpp`, class by
       class and method by method, noting each method's current unconditional return value.
-- [ ] Cross-reference the two inventories above and list any declaration in `include/dplay.h` that
+      **Done:** see `docs/directplay-callsite-audit.md` §1.2, which also surfaces two real
+      `QueryInterface` correctness bugs (`DirectPlay2AImpl` rejects everything;
+      `DirectPlayImpl` accepts everything) not previously called out this precisely.
+- [x] Cross-reference the two inventories above and list any declaration in `include/dplay.h` that
       has no corresponding implementation in `src/directplay/DirectPlay.cpp` (or vice versa).
-- [ ] Grep `../free-eggbert` for DirectPlay-related symbols
+      **Done:** no shape gaps found — see `docs/directplay-callsite-audit.md` §1.3.
+- [x] Grep `../free-eggbert` for DirectPlay-related symbols
       (`DirectPlay`, `dplay`, `IDirectPlay`, `DPID`, `DPSESSIONDESC`, `EnumSessions`,
-      `CreatePlayer`) and list every matching file. Known baseline as of this plan's authoring:
+      `CreatePlayer`) and list every matching file. **Re-verified, confirmed unchanged:**
       `include/network.hpp`, `src/network.cpp`, `src/decnet.cpp`, `src/event.cpp`,
-      `include/event.hpp` — re-verify this list rather than trusting the baseline blindly.
-- [ ] Grep `../planetblupi` for the same DirectPlay-related symbols and list every matching file.
-      Known baseline as of this plan's authoring: **zero matches** outside vendored
-      `third_party`/SDL headers — `planetblupi` is single-player only. Re-verify rather than
-      trusting the baseline blindly.
-- [ ] Identify missing DirectPlay constants used by target game code: confirm whether
+      `include/event.hpp` — see `docs/directplay-callsite-audit.md` §2.1.
+- [x] Grep `../planetblupi` for the same DirectPlay-related symbols and list every matching file.
+      **Re-verified, confirmed unchanged: zero matches** outside vendored `third_party`/SDL
+      headers — `planetblupi` is single-player only. See `docs/directplay-callsite-audit.md` §3.
+- [x] Identify missing DirectPlay constants used by target game code: confirm whether
       `DPID_ALLPLAYERS`/`DPID_SYSMSG` should be added to `include/dplay.h`, given that
-      `free-eggbert/src/network.cpp` (`CNetwork::Send`, the `Send(m_dpid, 0, ...)` call) sends to a
-      literal `0` recipient rather than a named constant.
-- [ ] Identify whether target game code uses `IDirectPlay`, `IDirectPlay2A`, or `IDirectPlay3A`.
-      Baseline finding: `free-eggbert` uses `IDirectPlay` only to `QueryInterface` into
-      `IDirectPlay2A` (via `LPDIRECTPLAY`/`LPDIRECTPLAY2` in `include/network.hpp`);
-      `IDirectPlay3A` is not referenced anywhere in either target game.
-- [ ] Identify whether target game code uses `QueryInterface`. Baseline finding: yes —
-      `free-eggbert/src/network.cpp`'s `CNetwork::CreateProvider` calls
-      `lpDP->QueryInterface(IID_IDirectPlay2A, (LPVOID*)&m_pDP)`.
-- [ ] Identify whether target game code uses `EnumSessions`. Baseline finding: yes —
-      `CNetwork::EnumSessions` in `free-eggbert/src/network.cpp`, populating a `DPSESSIONDESC2`
-      with `guidApplication` set to a fixed app GUID and the `DPENUMSESSIONS_AVAILABLE` flag.
-- [ ] Identify whether target game code uses `Open`. Baseline finding: yes — `DPOPEN_CREATE` in
-      `CNetwork::CreateSession`, `DPOPEN_OPENSESSION` in `CNetwork::JoinSession`.
-- [ ] Identify whether target game code uses `CreatePlayer`. Baseline finding: yes — called
-      immediately after `Open` succeeds in both `CreateSession` and `JoinSession`, passing a
-      `DPNAME` with a short name only (`lpszLongNameA` is always `NULL`).
-- [ ] Identify whether target game code uses `Send`. Baseline finding: yes, from
-      `src/network.cpp`, `src/decnet.cpp`, and `src/event.cpp`; every observed call site passes a
-      nonzero/`DPSEND_GUARANTEED`-equivalent flag (`CNetwork::Send` collapses any nonzero
-      `dwFlags` to `DPSEND_GUARANTEED` via `!!dwFlags`).
-- [ ] Identify whether target game code uses `Receive`. Baseline finding: yes —
-      `CNetwork::Receive` in `src/network.cpp` polls once per frame from `src/decnet.cpp` with
-      `DPRECEIVE_ALL` into a fixed 500-byte stack buffer, and treats any result other than `DP_OK`
-      as "no message" (specifically checking for `DPERR_NOMESSAGES` before logging an error).
-- [ ] Identify whether target game code uses `Close`. Baseline finding: yes — `CNetwork::Close`
-      and `CNetwork`'s destructor both call `m_pDP->Release()`/`Close()`.
-- [ ] Identify whether target game code uses groups. Baseline finding: no `CreateGroup`,
+      `free-eggbert/src/network.cpp:254` (`CNetwork::Send`, the `Send(m_dpid, 0, ...)` call) sends
+      to a literal `0` recipient rather than a named constant. **Done:** confirmed both constants
+      are absent from `include/dplay.h` and confirmed no call site references either by name — see
+      `docs/directplay-callsite-audit.md` §4.
+- [x] Identify whether target game code uses `IDirectPlay`, `IDirectPlay2A`, or `IDirectPlay3A`.
+      **Done, confirmed:** `free-eggbert` uses `IDirectPlay` only to `QueryInterface` into
+      `IDirectPlay2A` (`src/network.cpp:89-91`, typedefs in `include/network.hpp`);
+      `IDirectPlay3A` is not referenced anywhere in either target game. See audit doc §2.2.
+- [x] Identify whether target game code uses `QueryInterface`. **Done, confirmed:** yes —
+      `src/network.cpp:91`: `lpDP->QueryInterface(IID_IDirectPlay2A, (LPVOID*)&m_pDP)` inside
+      `CNetwork::CreateProvider`. **Refinement over the original baseline:** this call site is
+      only reachable through `CEvent::NetCreate`, which itself has zero callers in `event.cpp` as
+      of the audited commit — see `docs/directplay-callsite-audit.md` §2.2-2.3.
+- [x] Identify whether target game code uses `EnumSessions`. **Done, confirmed:** yes —
+      `CNetwork::EnumSessions` (`src/network.cpp:126-148`), populating a `DPSESSIONDESC2` with
+      `guidApplication` set and the `DPENUMSESSIONS_AVAILABLE` flag. **Refinement over the
+      original baseline:** `CNetwork::EnumSessions()` itself has zero callers anywhere else in
+      `free-eggbert/src`, so its real-world reachability is unverified/blocked, not confirmed —
+      see `docs/directplay-callsite-audit.md` §2.2-2.3.
+- [x] Identify whether target game code uses `Open`. **Done, confirmed:** yes — `DPOPEN_CREATE`
+      at `src/network.cpp:221` (`CNetwork::CreateSession`), `DPOPEN_OPENSESSION` at
+      `src/network.cpp:174` (`CNetwork::JoinSession`). **Refinement:** both `CreateSession` and
+      `JoinSession` have zero callers anywhere in `free-eggbert/src` — reachability
+      unverified/blocked, same as `EnumSessions`. See audit doc §2.2-2.3.
+- [x] Identify whether target game code uses `CreatePlayer`. **Done, confirmed:** yes — called
+      immediately after `Open` succeeds in both `CreateSession` (`src/network.cpp:233`) and
+      `JoinSession` (`src/network.cpp:185`), passing a `DPNAME` with a short name only
+      (`lpszLongNameA` is always `NULL`). Same reachability caveat as `Open`.
+- [x] Identify whether target game code uses `Send`. **Done, confirmed:** yes, from
+      `src/network.cpp:254`, `src/decnet.cpp:83,157`, and `src/event.cpp:2159,2176,2212,2247,
+      2281,4708`; every observed call site passes a nonzero/`DPSEND_GUARANTEED`-equivalent flag.
+      **Unlike `EnumSessions`/`Open`/`CreatePlayer`, this is confirmed reachable and exercised** —
+      the calling code in `src/decnet.cpp` and the `WM_PHASE_MULTI` handling in `event.cpp` are
+      live, non-stub gameplay code paths. See audit doc §2.2.
+- [x] Identify whether target game code uses `Receive`. **Done, confirmed:** yes —
+      `CNetwork::Receive` (`src/network.cpp:262-284`) polls once per frame from
+      `src/decnet.cpp:166` with `DPRECEIVE_ALL` into a fixed 500-byte stack buffer, and treats any
+      result other than `DP_OK` as "no message" (specifically checking for `DPERR_NOMESSAGES`
+      before logging an error). **Confirmed reachable and exercised**, same gameplay-time path as
+      `Send`.
+- [x] Identify whether target game code uses `Close`. **Done, confirmed:** yes —
+      `src/network.cpp:189,237` (error-cleanup inside `JoinSession`/`CreateSession`) and
+      `src/network.cpp:293` (`CNetwork::Close`). **Refinement:** `CNetwork::Close()` itself has
+      zero external callers; what actually runs on normal teardown is `m_pDP->Release()` via
+      `CNetwork::~CNetwork` (`src/network.cpp:30`), called from `src/blupi.cpp` when `g_pNetwork`
+      is deleted.
+- [x] Identify whether target game code uses groups. **Done, confirmed:** no `CreateGroup`,
       `AddPlayerToGroup`, `DeletePlayerFromGroup`, or group-enumeration call found anywhere in
-      `free-eggbert`.
-- [ ] Identify whether target game code uses lobby APIs. Baseline finding: no `dplobby.h` include
-      or `IDirectPlayLobby*` symbol found in `free-eggbert`'s own source (only present in the
-      vendored `dxsdk3/sdk/inc/dplobby.h` reference header, which is not included by any
-      `free-eggbert` source file).
-- [ ] Identify whether target game code uses service provider enumeration. Baseline finding: yes
-      — `CNetwork::EnumProviders` calls `DirectPlayEnumerateA`/`DirectPlayEnumerateW` to populate a
-      provider picker, used before `CreateProvider`.
-- [ ] Identify expected behavior when no sessions are found. Baseline finding: `CNetwork::EnumSessions`
-      treats a non-`DP_OK` result from `IDirectPlay2A::EnumSessions` as failure and clears its
-      session list; `event.cpp`'s UI shows zero selectable entries when `GetNbSessions()` is zero.
-      No dedicated "no sessions" dialog/error path was found — verify this is still true.
-- [ ] Identify expected behavior when network initialization fails. Baseline finding:
-      `CNetwork::CreateProvider` returns `FALSE` when `DirectPlayCreate` or the subsequent
-      `QueryInterface` fails, releasing any partially-created object. Trace how `event.cpp`'s
-      provider-selection flow reacts to that `FALSE` and record it.
-- [ ] Trace exactly how `event.cpp`'s provider-selection and session-selection UI (search for
-      `NetEnumSessions`, the `WM_BUTTON*` handlers around lines 4640-4710 and 5550-5580 as of this
-      plan's authoring) reacts to `EnumProviders`/`EnumSessions` returning zero results, and record
-      the trace.
-- [ ] Document the DPID-vs-array-index pattern in `free-eggbert/src/network.cpp`'s
-      `CNetwork::Receive` (`for (int i = 0; i < MAXNETPLAYER; i++) if (m_players[i].bIsPresent &&
-      from == i)` — comparing a `DPID` directly against a loop index). Record what DPID allocation
-      strategy FreeDirect's host must use to stay compatible with this pattern, without modifying
-      `free-eggbert` source. This finding directly feeds Phase 9's DPID-allocation task.
-- [ ] Audit `../planetblupi`'s DirectDraw call sites for methods/flags not already covered by
-      `../free-eggbert`. Baseline finding: `planetblupi` favors `BltFast` over plain `Blt` (17 vs.
-      0 call sites) and calls `GetDC`/`ReleaseDC`/`IsLost`/`Restore` meaningfully (3-8 call sites
-      each); re-verify counts rather than trusting the baseline.
-- [ ] Audit `../free-eggbert`'s DirectDraw call sites the same way. Baseline finding: `BltFast`
-      dominates over `Blt` (18 vs. 1 call sites); `GetDC`/`ReleaseDC`/`IsLost`/`Restore` are used
-      similarly to `planetblupi` (3-8 call sites each).
-- [ ] Audit both target games' DirectSound call sites for `DSBPLAY_LOOPING` usage. Baseline
-      finding: zero call sites in either game as of this plan's authoring.
-- [ ] Document all of the above findings in `docs/directplay-callsite-audit.md`, structured as one
+      `free-eggbert` (whole-repository grep, zero matches).
+- [x] Identify whether target game code uses lobby APIs. **Done, confirmed:** no `dplobby.h`
+      include or `IDirectPlayLobby*` symbol found in `free-eggbert`'s own source (only present in
+      the vendored, uncompiled `dxsdk3/sdk/inc/dplobby.h` reference header).
+- [x] Identify whether target game code uses service provider enumeration. **Done, confirmed:**
+      yes — `CNetwork::EnumProviders` (`src/network.cpp:57-71`) calls
+      `DirectPlayEnumerateA`/`DirectPlayEnumerateW` to populate a provider picker. **Refinement:**
+      same unreachable-wrapper caveat as `EnumSessions` — `CEvent::NetEnumSessions`, the only
+      caller of `EnumProviders`, itself has zero callers in `event.cpp`.
+- [x] Identify expected behavior when no sessions are found. **Done, but only partially
+      verifiable:** at the `CNetwork` level, `CNetwork::EnumSessions()` treats a non-`DP_OK`
+      result as failure and clears its session list, with no dedicated "no sessions" error path.
+      The original baseline's claim about `event.cpp`'s UI behavior on zero sessions **could not
+      be confirmed** — the relevant `WM_PHASE_DP_*` transition handlers are empty `// ...`
+      placeholders in the audited source. Recorded honestly as blocked/unverified at the UI level
+      in `docs/directplay-callsite-audit.md` §2.3-2.4, rather than assumed.
+- [x] Identify expected behavior when network initialization fails. **Done, but only partially
+      verifiable, same caveat as above:** `CNetwork::CreateProvider` returns `FALSE` on
+      `DirectPlayCreate`/`QueryInterface` failure and releases any partial object (confirmed at
+      `src/network.cpp:85-99`); how `event.cpp`'s UI reacts to that `FALSE` cannot be traced
+      further because its only caller, `CEvent::NetCreate`, is itself only reachable from an empty
+      placeholder handler. See audit doc §2.3-2.4.
+- [x] Trace exactly how `event.cpp`'s provider-selection and session-selection UI reacts to
+      `EnumProviders`/`EnumSessions` returning zero results, and record the trace. **Done — result
+      is a blocked/unverified finding, not a guess:** the trace led to ten empty `// ...`
+      placeholder bodies under `WM_PHASE_DP_*` handling in `src/event.cpp` (confirmed exact list
+      in `docs/directplay-callsite-audit.md` §2.3), meaning the UI-level reaction cannot currently
+      be observed from source. This is a substantive correction to the plan's original assumption
+      that this trace would be straightforwardly observable.
+- [x] Document the DPID-vs-array-index pattern in `free-eggbert/src/network.cpp`'s
+      `CNetwork::Receive` (`src/network.cpp:262-284`: `for (int i = 0; i < MAXNETPLAYER; i++) if
+      (m_players[i].bIsPresent && from == i)` — comparing a `DPID` directly against a loop index).
+      **Done:** confirmed exact line numbers and recorded in `docs/directplay-callsite-audit.md`
+      §6. **A more severe, previously-undocumented related hazard was also found and recorded in
+      §5:** FreeDirect's `DPID` typedef (`DWORD_PTR`, 8 bytes on 64-bit) diverges from real
+      DirectPlay's `DWORD` (4 bytes), which `free-eggbert/src/event.cpp`'s `NetSearchPlayer`
+      (line 2180) and `NetStartPlay` (line 2196) rely on via hardcoded 32-byte-stride raw pointer
+      arithmetic over `NetPlayer` — a real ABI/memory-layout bug waiting to happen on 64-bit
+      builds, not just a semantic index-vs-ID question. This must be resolved explicitly in Phase
+      9, not silently.
+- [x] Audit `../planetblupi`'s DirectDraw call sites for methods/flags not already covered by
+      `../free-eggbert`. **Done, re-verified with corrections:** `BltFast` 17, plain `Blt` 0,
+      `GetDC` 4, `ReleaseDC` 4, `IsLost` 4, real `IDirectDrawSurface::Restore()` calls 5 (not 8 as
+      informally stated before — a naive grep over-counted by also matching each game's own
+      `CPixmap::Restore()` wrapper and an unrelated `MouseBackRestore()` helper). See
+      `docs/directplay-callsite-audit.md` §7.
+- [x] Audit `../free-eggbert`'s DirectDraw call sites the same way. **Done, re-verified with
+      corrections:** `BltFast` 18, plain `Blt` 1, `GetDC` 3, `ReleaseDC` 3, `IsLost` 4, real
+      `Restore()` calls 5 (same correction as above). See audit doc §7.
+- [x] Audit both target games' DirectSound call sites for `DSBPLAY_LOOPING` usage. **Done,
+      re-verified, confirmed unchanged:** zero call sites in either game. Also re-verified
+      `SetPan` call counts while auditing this subsystem: `free-eggbert` 2, `planetblupi` 1
+      (`src/sound.cpp:458`) — see `docs/directplay-callsite-audit.md` §8.
+- [x] Document all of the above findings in `docs/directplay-callsite-audit.md`, structured as one
       section per target game, each API getting an explicit yes/no/not-applicable verdict with a
-      file/function citation.
+      file/function citation. **Done** — see the file itself, including a summary verdict table
+      in §9.
 
 **Acceptance criteria:** `docs/directplay-callsite-audit.md` exists, covers both `free-eggbert`
 and `planetblupi`, and every yes/no verdict in it cites a specific file and function/line rather
 than a general impression. Any finding that could not be verified (e.g. because a sibling
-repository was missing) is explicitly marked "unverified" rather than silently assumed.
+repository was missing) is explicitly marked "unverified" rather than silently assumed. **Met.**
+The only intentionally-unchecked Phase 0 item above is the "if a sibling repo is missing" guard
+task, which did not trigger this run because both repositories were present.
 
 ---
 
