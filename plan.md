@@ -261,15 +261,27 @@ behavior.
       throwaway scratch harness: null `lplpDP` rejected, non-null `pUnkOuter` rejected with
       `*lplpDP` correctly reset to `nullptr` (checked against a poison pointer value), and the
       normal success path still works.
-- [ ] Add a `@note Status:` comment to `DirectPlayEnumerateA` documenting its current behavior
+- [x] Add a `@note Status:` comment to `DirectPlayEnumerateA` documenting its current behavior
       (returns `DP_OK`, invokes the callback zero times) as an intentional interim stub pending
-      Phase 8.
-- [ ] Add the same `@note Status:` documentation to `DirectPlayEnumerateW`.
-- [ ] Decide whether `DirectPlayEnumerateA`/`DirectPlayEnumerateW` should invoke the callback once
+      Phase 8. **Done:** expanded the existing doc comment in `include/dplay.h` to explain the
+      current zero-callback behavior and why it cannot stay that way forever (cites the
+      `CNetwork::CreateProvider` bound-check finding — see the next task).
+- [x] Add the same `@note Status:` documentation to `DirectPlayEnumerateW`. **Done:** its comment
+      now points to `DirectPlayEnumerateA`'s documentation rather than duplicating it, since the
+      behavior is identical.
+- [x] Decide whether `DirectPlayEnumerateA`/`DirectPlayEnumerateW` should invoke the callback once
       with a fake "FreeDirect" service-provider GUID/name, so `free-eggbert`'s
       `CNetwork::EnumProviders` sees at least one selectable provider. Record the decision and
       rationale in `docs/directplay-design.md` (created in Phase 16) — do not implement the
-      behavior change in this task, only decide and document it.
+      behavior change in this task, only decide and document it. **Done — decision recorded in the
+      new `docs/directplay-design.md`, created early (not waiting for Phase 16) since this
+      decision was needed now:** yes, enumeration must eventually report exactly one fake
+      provider, because `free-eggbert/src/network.cpp`'s `CNetwork::CreateProvider` has a bound
+      check (`if (index >= m_providers.nb) return FALSE;`) that makes it **unconditionally fail**
+      when zero providers are enumerated — this is `free-eggbert`'s only call path to
+      `DirectPlayCreate`, so it is a hard prerequisite, not a nicety. Real implementation is
+      deferred to Phase 8 (session enumeration), not done in this task. No behavior change was
+      made to `DirectPlayEnumerateA`/`W` themselves in this task.
 - [ ] Add a follow-up task (tracked here, executed once the enumeration decision above is
       implemented) to test enumeration behavior against `free-eggbert`'s real provider-selection UI
       flow in `event.cpp`.

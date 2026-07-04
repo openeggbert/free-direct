@@ -163,11 +163,21 @@ typedef LPDPENUMSESSIONS_CALLBACK2 LPDPENUMSESSIONSCALLBACK2;
 
 /**
  * @brief Enumerates available DirectPlay service providers (ANSI).
+ *
+ * Current behavior: returns `DP_OK` and invokes `lpEnumCallback` zero times, i.e. it always
+ * reports "no service providers available." This is an intentional interim stub, not a finished
+ * feature: `free-eggbert`'s `CNetwork::EnumProviders` (see `docs/directplay-callsite-audit.md`
+ * and `docs/directplay-design.md`) requires at least one enumerated provider before it can ever
+ * call `DirectPlayCreate`, so real provider enumeration is planned for `plan.md` Phase 8's
+ * session-enumeration work.
  * @note Status: STUB
  */
 HRESULT WINAPI DirectPlayEnumerateA(LPDPENUMDPCALLBACKA lpEnumCallback, LPVOID lpContext);
 /**
  * @brief Enumerates available DirectPlay service providers (Unicode).
+ *
+ * Current behavior: returns `DP_OK` and invokes `lpEnumCallback` zero times. See
+ * `DirectPlayEnumerateA`'s documentation for the ANSI variant, which applies identically here.
  * @note Status: STUB
  */
 HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID lpContext);
