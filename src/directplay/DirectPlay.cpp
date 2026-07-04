@@ -40,8 +40,14 @@ namespace {
         }
 
         HRESULT WINAPI EnumSessions(LPDPSESSIONDESC2 lpEnumSessionsDesc, DWORD dwTimeout, LPDPENUMSESSIONS_CALLBACK2 lpEnumSessionsCallback, LPVOID lpContext, DWORD dwFlags) override {
-            (void)lpEnumSessionsDesc; (void)dwTimeout; (void)lpEnumSessionsCallback; (void)lpContext; (void)dwFlags;
-            // No sessions found
+            (void)dwTimeout; (void)lpContext; (void)dwFlags;
+            // lpEnumSessionsDesc is optional (null means "enumerate everything"); its dwSize is
+            // only validated when a filter descriptor is actually provided.
+            if (lpEnumSessionsDesc && lpEnumSessionsDesc->dwSize != sizeof(DPSESSIONDESC2)) return DPERR_INVALIDPARAMS;
+            if (!lpEnumSessionsCallback) return DPERR_INVALIDPARAMS;
+            // Real session discovery lands in Phase 8 (hosting/joining don't exist yet), so
+            // there is genuinely nothing to discover today: reporting zero sessions (never
+            // invoking the callback) is honestly correct right now, not a placeholder stub.
             return DP_OK;
         }
 
@@ -84,12 +90,19 @@ namespace {
 
         HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) override {
             (void)idFrom; (void)idTo; (void)dwFlags; (void)lpData; (void)dwDataSize;
+            if (!session_.IsOpen()) return DPERR_NOCONNECTION;
+            // Sender/recipient player ID validation, payload validation, and actual delivery
+            // all land in Phase 10.
             return DP_OK;
         }
 
         HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) override {
             (void)lpidFrom; (void)lpidTo; (void)dwFlags; (void)lpData; (void)lpdwDataSize;
-            return DP_OK; // No messages
+            if (!session_.IsOpen()) return DPERR_NOCONNECTION;
+            // DirectPlaySession has no message queue yet (Phase 3): there is genuinely nothing
+            // to receive, so DPERR_NOMESSAGES is the honestly correct answer today, matching
+            // exactly what free-eggbert's CNetwork::Receive checks for.
+            return DPERR_NOMESSAGES;
         }
 
         HRESULT WINAPI Close() override {

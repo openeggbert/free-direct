@@ -411,9 +411,22 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       with a throwaway scratch harness: first `Open()` (both `DPOPEN_CREATE` and
       `DPOPEN_OPENSESSION`) succeeds, a second `Open()` on the same object returns
       `DPERR_ALREADYINITIALIZED`, and the existing `dwSize`/null validation still works.
-- [ ] Replace `EnumSessions()`'s unconditional `DP_OK` return with behavior driven by the
+- [x] Replace `EnumSessions()`'s unconditional `DP_OK` return with behavior driven by the
       enumeration decision recorded in Phase 1 (full discovery logic still lands in Phase 8; this
-      task only wires the method to real state instead of an unconditional stub).
+      task only wires the method to real state instead of an unconditional stub). **Done, with a
+      scope correction:** the Phase 1 decision in `docs/directplay-design.md` was specifically
+      about the free functions `DirectPlayEnumerateA`/`W` (service *provider* enumeration, used by
+      `CNetwork::EnumProviders`), not about `IDirectPlay2A::EnumSessions` (session enumeration,
+      used by `CNetwork::EnumSessions`) — these are two distinct real-DirectPlay concepts that
+      this task's wording conflated; noting the correction here rather than silently treating them
+      as the same thing. What was actually done: `lpEnumSessionsDesc` (optional) now has its
+      `dwSize` validated when provided, and a null `lpEnumSessionsCallback` is now rejected with
+      `DPERR_INVALIDPARAMS` (a safety-necessary addition — there would be no way to receive
+      discovered sessions without one). The method still returns `DP_OK` with zero callback
+      invocations, which is honestly correct today (Phase 6/7/8 hosting/joining/discovery
+      infrastructure doesn't exist yet, so there is genuinely nothing to discover), not a
+      leftover placeholder. Runtime-verified: null callback and undersized filter descriptor both
+      rejected; valid inputs (with and without a filter descriptor) succeed with zero results.
 - [x] Replace `CreatePlayer()`'s hardcoded `*lpidPlayer = 1` with a DPID allocated per the strategy
       to be finalized in Phase 9 (a simple incrementing counter is an acceptable placeholder here;
       Phase 9 revisits correctness against the Phase 0 DPID-vs-index finding). **Done:** added a
@@ -426,10 +439,23 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       precondition check is not named by this task and is left for a later validation sweep if
       needed. Runtime-verified: sequential `CreatePlayer` calls yield distinct, incrementing DPIDs
       starting at 1.
-- [ ] Replace `Send()`'s unconditional `DP_OK` return with parameter/state validation only (full
-      routing/delivery lands in Phase 10).
-- [ ] Replace `Receive()`'s unconditional `DP_OK` return with `DPERR_NOMESSAGES` once the message
-      queue (Phase 3) reports empty.
+- [x] Replace `Send()`'s unconditional `DP_OK` return with parameter/state validation only (full
+      routing/delivery lands in Phase 10). **Done, state validation only:** `Send()` now returns
+      `DPERR_NOCONNECTION` when `!session_.IsOpen()`. Deliberately does **not** yet validate
+      sender/recipient player IDs or the payload — those are Phase 10's own explicitly-numbered
+      tasks and are left to that phase rather than pulled forward, even though `localPlayerIds`
+      technically already exists to check against.
+- [x] Replace `Receive()`'s unconditional `DP_OK` return with `DPERR_NOMESSAGES` once the message
+      queue (Phase 3) reports empty. **Done, ahead of a real queue existing:** `Receive()` now
+      returns `DPERR_NOCONNECTION` when `!session_.IsOpen()`, and `DPERR_NOMESSAGES`
+      unconditionally otherwise. Since `DirectPlaySession` has no message-queue member until
+      Phase 3, "the queue reports empty" is trivially and honestly true today — this is not a
+      placeholder standing in for real behavior, it is the actually-correct answer given the
+      current state of the world, and happens to exactly match what
+      `free-eggbert/src/network.cpp`'s `CNetwork::Receive` checks for. Runtime-verified (both
+      tasks together): before `Open()`, both methods return `DPERR_NOCONNECTION`; after `Open()`,
+      `Send()` succeeds and `Receive()` returns `DPERR_NOMESSAGES`; after `Close()`, both return
+      `DPERR_NOCONNECTION` again.
 - [x] Make `Close()` clear all session/player/message state on `DirectPlaySession` and transition
       to the `Closed` state. **Done for session/player state; message state is not applicable
       yet:** `Close()` now clears `localPlayerIds`, `remotePlayerIds`, and resets `nextPlayerId`

@@ -5,46 +5,60 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
 ## Current state
 
 - Branch: `develop`.
-- Last commit pushed to `develop`: `c285550` ("Wire CreatePlayer() and Close() to real
-  DirectPlaySession state").
-- On top of that, one more change is now made and **not yet committed**: `Open()` now validates
-  `dwFlags`. See "Completed this batch" below.
+- Last commit pushed to `develop`: `efac4e6` ("Validate dwFlags in Open(), return
+  DPERR_INVALIDFLAGS for unrecognized bits").
+- On top of that, one more change is now made and **not yet committed**: `EnumSessions()`,
+  `Send()`, and `Receive()` are now wired to real state. See "Completed this batch" below.
 - `plan.md` Phase 0 and Phase 1 are complete (Phase 1 modulo two intentionally-deferred tasks).
-  **Phase 2 now has 17 of its ~21 tasks done — only 4 remain**: `EnumSessions()`/`Send()` state
-  wiring, `Receive()`'s `DPERR_NOMESSAGES` wiring (blocked on Phase 3's message queue not existing
-  yet), and `Release()` calling `IDirectPlayTransport::Shutdown()`.
+  **Phase 2 now has 20 of its 21 tasks done — only 1 remains**: `Release()` tearing down transport
+  resources via `IDirectPlayTransport::Shutdown()`. This is deliberately left open: there is no
+  transport instance anywhere yet (that starts in Phase 4), so this task may turn out to be
+  genuinely blocked until then rather than doable now — worth a quick check before assuming it's
+  simply "next."
 - No DirectDraw/DirectSound code has been touched. No game source in `../free-eggbert` or
   `../planetblupi` has been touched.
 
-## Completed this batch (Phase 2 — `dwFlags` validation)
+## Completed this batch (Phase 2 — `EnumSessions`/`Send`/`Receive` wired to real state)
 
-- **`Open()`** now returns `DPERR_INVALIDFLAGS` for any `dwFlags` bit outside
-  `DPOPEN_CREATE | DPOPEN_JOIN | DPOPEN_OPENSESSION` (checked right after the existing `dwSize`/
-  null validation, before the already-open check). Does not additionally enforce that
-  `DPOPEN_CREATE`/`DPOPEN_JOIN` are mutually exclusive — not named by this task, left as a possible
-  future refinement rather than implemented speculatively.
-- **Fixed a stale in-code comment** left over from the prior batch that claimed `Close()` "does
-  not yet reset `session_`" — it does, as of the `CreatePlayer()`/`Close()` wiring commit.
+- **`EnumSessions()`**: validates `lpEnumSessionsDesc`'s `dwSize` when a filter descriptor is
+  provided (it's optional — null means "enumerate everything"); rejects a null
+  `lpEnumSessionsCallback` with `DPERR_INVALIDPARAMS` (safety-necessary addition — there'd be no
+  way to receive results without one). Still returns `DP_OK` with zero callback invocations, which
+  is now understood to be *honestly correct* (Phase 6/7/8 hosting/discovery infrastructure doesn't
+  exist yet, so there's genuinely nothing to discover), not a leftover placeholder.
+- **Scope correction recorded in `plan.md`**: this task's wording referenced "the enumeration
+  decision recorded in Phase 1," but that decision (`docs/directplay-design.md`) was specifically
+  about the free functions `DirectPlayEnumerateA`/`W` (service *provider* enumeration), not about
+  `IDirectPlay2A::EnumSessions` (session enumeration) — two distinct real-DirectPlay concepts the
+  task text had conflated. Noted explicitly rather than silently glossed over.
+- **`Send()`**: now returns `DPERR_NOCONNECTION` when the session isn't open. Deliberately does
+  *not* validate sender/recipient player IDs or payload — those are Phase 10's own numbered tasks,
+  left there rather than pulled forward even though `localPlayerIds` already exists to check
+  against.
+- **`Receive()`**: now returns `DPERR_NOCONNECTION` when not open, and `DPERR_NOMESSAGES`
+  unconditionally otherwise — genuinely correct today since `DirectPlaySession` has no
+  message-queue member until Phase 3, and this exactly matches what `free-eggbert`'s
+  `CNetwork::Receive` checks for.
 - **Verified with a throwaway runtime scratch harness** (compiled and run outside the repository,
-  not committed): an unrecognized flag bit is rejected both alone and combined with a valid bit;
-  `DPOPEN_CREATE` and `DPOPEN_JOIN` individually still succeed exactly as before.
-- Updated `plan.md`: checked the `dwFlags` task with notes on what is and isn't enforced.
+  not committed): before `Open()`, `Send`/`Receive` both return `DPERR_NOCONNECTION`;
+  `EnumSessions` rejects a null callback and an undersized filter descriptor, and succeeds (zero
+  results) with valid inputs with or without a filter; after `Open()`, `Send` succeeds and
+  `Receive` returns `DPERR_NOMESSAGES`; after `Close()`, both return `DPERR_NOCONNECTION` again.
+- Updated `plan.md`: checked all three tasks with detailed notes on what was and wasn't done, and
+  the scope correction above.
 
 ## Blocked / incomplete
 
 - Carried over from Phase 0 (still unresolved, still relevant): the DPID-size decision
   (`docs/directplay-callsite-audit.md` §5) and the `free-eggbert` UI-reachability caveats (§2.3).
-- Remaining Phase 2 work (4 tasks): wire `EnumSessions()`/`Send()` to check `session_.IsOpen()`
-  (parameter/state validation only — full discovery/routing is Phase 8/10); wire `Receive()` to
-  return `DPERR_NOMESSAGES` (genuinely blocked until Phase 3 gives `DirectPlaySession` a real
-  message queue — `DirectPlayMessageQueue` is still an empty scaffold); wire `Release()` to call
-  `IDirectPlayTransport::Shutdown()` (there is no transport instance on `DirectPlaySession` yet
-  either — that's Phase 4+ — so this may also turn out to be blocked until then).
+- Phase 2's last remaining task (`Release()` → `IDirectPlayTransport::Shutdown()`) may be blocked
+  until Phase 4 gives `DirectPlaySession` an actual transport instance to shut down — needs a
+  quick look before starting it, not an assumption either way.
 
 ## Files inspected/changed this batch
 
-- Changed: `src/directplay/DirectPlay.cpp` (`Open()` `dwFlags` check, stale comment fix),
-  `plan.md` (checkbox).
+- Changed: `src/directplay/DirectPlay.cpp` (`EnumSessions`/`Send`/`Receive` rewritten), `plan.md`
+  (checkboxes).
 - Scratch-only, not committed: a throwaway runtime test harness under the session scratchpad
   directory, deleted after use.
 
@@ -54,19 +68,18 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
   `../free-eggbert/third_party` is not checked out — unrelated to this change, carried over from
   prior batches, still unresolved).
 - Verified via `g++ -fsyntax-only -Wall -Wextra -Wpedantic` (clean) plus an actual
-  compiled-and-executed runtime check of the flag-validation behavior. Still no committed
-  automated test — Phase 15 (test infrastructure) has not been started.
+  compiled-and-executed runtime check covering all three methods across the open/closed lifecycle.
+  Still no committed automated test — Phase 15 (test infrastructure) has not been started.
 
 ## Recommended next tasks
 
-1. Wire `EnumSessions()` and `Send()` to check `session_.IsOpen()` and return a meaningful error
-   when not open — the two Phase 2 tasks that are actually doable right now without waiting on
-   another phase.
-2. Investigate whether `Receive()`'s `DPERR_NOMESSAGES` task and `Release()`'s
-   `IDirectPlayTransport::Shutdown()` task are better done now (with a reasonable stand-in — e.g.
-   `Receive()` can honestly return `DPERR_NOMESSAGES` unconditionally today, since no queue exists
-   yet to ever have a message in it) or deferred until Phase 3/4 respectively — worth a quick
-   decision before Phase 2 is called "complete."
+1. Check whether Phase 2's last task (`Release()` transport shutdown) is actually doable now or
+   genuinely blocked on Phase 4's transport work not existing yet — if blocked, say so plainly in
+   `plan.md` rather than leaving it ambiguously "not started."
+2. If Phase 2 is effectively done (pending only that one blocked task), consider starting Phase 3
+   (message queue semantics) next, since `DirectPlayMessageQueue` is still an empty scaffold and
+   `Receive()`'s current `DPERR_NOMESSAGES`-always behavior is exactly what Phase 3 needs to build
+   real FIFO semantics on top of.
 3. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
    `docs/directplay-callsite-audit.md` §5.
 4. Investigate and fix the missing SDL3 submodule checkout so the real CMake/ninja build can run
@@ -89,10 +102,10 @@ Full detail in `docs/directplay-callsite-audit.md`.
 output/aggregation fixed; `DirectPlayEnumerateA`/`W` documented and the fake-provider decision
 recorded in `docs/directplay-design.md`; four scaffolding files created.
 
-**Phase 2 (commits `37febd4`, `f67dedd`, `188cfab`, `c285550`):** `DirectPlaySession` given real
-data-model fields; `Open()`/`CreatePlayer()` validate `dwSize`; `Open()` wired to real state
-transitions with `DPERR_ALREADYINITIALIZED` on double-open; `CreatePlayer()`/`Close()` wired to
-real player/session state.
+**Phase 2 (commits `37febd4`, `f67dedd`, `188cfab`, `c285550`, `efac4e6`):** `DirectPlaySession`
+given real data-model fields; `dwSize`/`dwFlags` validation added to `Open()`/`CreatePlayer()`;
+`Open`/`CreatePlayer`/`Close` wired to real state with correct `DPERR_ALREADYINITIALIZED` and
+DPID-allocation/reset behavior.
 
-**Phase 2 — `dwFlags` validation (this batch, not yet committed):** see "Completed this batch"
-above.
+**Phase 2 — `EnumSessions`/`Send`/`Receive` wired (this batch, not yet committed):** see
+"Completed this batch" above.
