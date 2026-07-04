@@ -72,11 +72,23 @@ DirectX 3 (subset)
 
 ## Build Instructions
 
+FreeDirect depends on `../free-api` (a sibling checkout) and, through it, on SDL3/SDL3_image/
+SDL3_mixer. By default the build expects SDL to be vendored as git submodules under
+`third_party/` in whichever sibling game project (`free-eggbert` or `planetblupi`) provides them.
+
 ```bash
 git clone https://github.com/openeggbert/free-direct.git
 cd free-direct
 
 cmake -B build
+cmake --build build
+```
+
+If SDL3/SDL3_image/SDL3_mixer are already installed system-wide (e.g. via their own CMake
+install), configure with `-DFREE_USE_SYSTEM_SDL=ON` instead of vendoring anything:
+
+```bash
+cmake -B build -DFREE_USE_SYSTEM_SDL=ON
 cmake --build build
 ```
 

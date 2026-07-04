@@ -5,106 +5,112 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
 ## Current state
 
 - Branch: `develop`.
-- Last commit pushed to `develop`: `75d4de5` ("Add permanent DirectPlay unit tests; closes
-  plan.md Phase 3").
-- On top of that, one more change is now made and **not yet committed**: `LoopbackDirectPlayTransport`
-  is implemented and wired into `Open`/`Close`/`Send`, with four new permanent tests. See
-  "Completed this batch" below.
-- **`plan.md` Phase 0, Phase 1 (modulo two intentionally-deferred tasks), Phase 2, Phase 3, and
-  Phase 4 are all fully complete.** `tests/directplay_tests.cpp` now has 7 passing tests total.
+- Last commit pushed to `develop`: `2509b5d` ("Implement LoopbackDirectPlayTransport; closes
+  plan.md Phase 4").
+- On top of that, one more change is now made and **not yet committed**: the long-standing SDL3
+  build blocker is resolved. See "Completed this batch" below.
+- `plan.md` Phase 0, Phase 1 (modulo two intentionally-deferred tasks), Phase 2, Phase 3, and
+  Phase 4 are all fully complete. `tests/directplay_tests.cpp` has 7 passing tests.
 - **Phase 5 (ENet integration planning) has not been started.**
-- No DirectDraw/DirectSound code has been touched. No game source in `../free-eggbert` or
-  `../planetblupi` has been touched.
+- No DirectDraw/DirectSound code has been touched (beyond the build-config change below, which
+  touches no subsystem source). No game source in `../free-eggbert` or `../planetblupi` has been
+  touched.
 
-## Completed this batch (Phase 4 — loopback backend; closes Phase 4)
+## Completed this batch (SDL3 build blocker resolved — not a `plan.md` task, an environment fix)
 
-- **Implemented `LoopbackDirectPlayTransport`** (`src/directplay/LoopbackDirectPlayTransport.hpp`/
-  `.cpp`): an in-memory `std::deque<std::vector<uint8_t>>` byte-buffer queue. `Send()` appends a
-  copy; `Receive()` pops the front entry (or returns `false` without popping if the caller's
-  buffer is too small); `Listen()`/`Connect()` trivially succeed; `Shutdown()` clears the buffer.
-  Zero real socket/backend dependency — confirmed no `ENet`/`SDL_net` *identifier* appears in
-  either file (only doc-comment mentions of the policy, not code).
-- **`Open()` now unconditionally assigns a fresh `LoopbackDirectPlayTransport`** to
-  `session_.transport` on success — it's the only backend that exists today, so there's no
-  provider-selection step yet (that's Phase 5/6/8's job). **`Close()` now also calls
-  `session_.transport->Shutdown()` and resets it to `nullptr`** — this makes `Release()`'s own
-  `Shutdown()` call (added in Phase 2, previously dead code since `transport` was always null)
-  actually meaningful for the "Release() without a prior Close()" case, confirmed by a new test.
-- **`Send()` implements the self-send path** (`idTo == idFrom`): rather than enqueuing directly
-  into the message queue, it deliberately round-trips the payload through
-  `session_.transport->Send()`/`Receive()` first, so `LoopbackDirectPlayTransport`'s own methods
-  are genuinely exercised (matching the eventual shape of a real backend) instead of being
-  assigned and left idle. Any other recipient is still a silent no-op — general routing,
-  player-ID validation, and payload validation remain Phase 10's job. A failed enqueue (queue
-  full/oversize) currently returns `DPERR_SENDTOOBIG`, which is imprecise for the "queue full"
-  case specifically — flagged for Phase 10 to refine when it implements full routing.
-- **`CreatePlayer()`/`Receive()` needed no code changes** for this phase — neither ever referenced
-  `session_.transport`, so they already worked correctly regardless of backend; re-verified with
-  dedicated tests rather than just assumed.
-- **Added four new permanent tests to `tests/directplay_tests.cpp`** (now 7 total, up from 3):
-  `Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids`, `Test_LoopbackSendToSelf_ReturnsOk`,
-  `Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload`,
-  `Test_LoopbackClose_SendAndReceiveReportNoConnection` — all four go through the real, public
-  `IDirectPlay2A` interface end-to-end via a shared `OpenLoopbackSession` helper. No injection
-  workaround was needed this time, since `Open()` itself now creates real, usable loopback state.
-- **Actually built and ran the full test file** per its own updated documented command from the
-  repository root: `OK: all DirectPlay tests passed.`, exit code 0 (all 7 tests, no failures).
-- Updated `CMakeLists.txt` to add `LoopbackDirectPlayTransport.cpp` to `free-direct`'s sources.
-- Updated `plan.md`: checked all 10 Phase 4 tasks with detailed notes on design choices (loopback
-  round-trip vs. direct enqueue, the `DPERR_SENDTOOBIG` imprecision, why `CreatePlayer`/`Receive`
-  needed no changes) and verification (actual build+run output, `ENet`/`SDL_net` grep result).
+**Root cause found, not guessed at:** every batch since Phase 0 noted that `cmake ..` failed with
+"Missing vendored dependency 'SDL' in .../free-direct/third_party" and could only be
+syntax-checked, never fully built/linked. Investigated properly this time:
+
+- `free-direct` has no `third_party/` directory and no `.gitmodules` — it was never going to
+  self-vendor SDL. `free-api`'s own `CMakeLists.txt` documents three ways it can obtain
+  `SDL3::SDL3`/`SDL3_image::SDL3_image`/`SDL3_mixer::SDL3_mixer`: reuse targets a parent already
+  created, `-DFREE_API_USE_SYSTEM_SDL3=ON` (`find_package`), or (developer convenience) reuse
+  `../free-eggbert`'s or `../planetblupi`'s own `cmake/ThirdPartySDL.cmake` vendoring script,
+  which has its own separate `-DFREE_USE_SYSTEM_SDL=ON` flag.
+- **Confirmed system SDL3/SDL3_image/SDL3_mixer are already installed** in this environment (found
+  via `pkg-config`, with proper CMake `Config.cmake` files under `/usr/local/lib/cmake/`).
+- Passing `-DFREE_USE_SYSTEM_SDL=ON` got past the "missing vendored dependency" error (confirmed
+  via `--trace-expand` that `find_package(SDL3 REQUIRED)` etc. succeeded, populating
+  `SDL3_DIR`/`SDL3_image_DIR`/`SDL3_mixer_DIR` in the cache) — but `free-direct`'s own
+  `CMakeLists.txt` then still failed its own `if(NOT TARGET SDL3::SDL3 ...)` check immediately
+  afterward.
+- **Diagnosed precisely via `--trace-expand`, not by guessing:** `find_package()`'s imported
+  targets are only visible in the directory scope where `find_package()` was called and below.
+  That call happens inside `free-api`'s own `add_subdirectory()` scope — a *child* of
+  `free-direct`'s top-level directory — so once `add_subdirectory(../free-api FREE_API)` returns,
+  the targets do not exist at all in `free-direct`'s own scope (confirmed: `if(TARGET SDL3::SDL3)`
+  evaluates false there, even though the identical check succeeds inside `free-api`'s own
+  `CMakeLists.txt` moments earlier). A first attempt at a fix (promoting the targets to
+  `IMPORTED_GLOBAL` from the parent scope) **did not work and was corrected** — you cannot call
+  `set_target_properties()` on a target that doesn't exist in the calling scope in the first
+  place; that fix was replaced before being committed.
+- **Actual fix, entirely within `free-direct`'s own `CMakeLists.txt`** (no changes to `free-api` or
+  `free-eggbert`, both separate sibling repositories out of scope for this fix): if the targets
+  are still missing after `add_subdirectory(../free-api ...)`, call `find_package(SDL3 CONFIG
+  QUIET)` / `find_package(SDL3_image CONFIG QUIET)` / `find_package(SDL3_mixer CONFIG QUIET)`
+  again, directly in `free-direct`'s own scope. This is fast and reliable because the nested call
+  already populated the `_DIR` cache variables, so it just re-locates the same config files and
+  creates the same imported targets, this time visible where needed. When `free-api` instead
+  vendors SDL as a real (non-`IMPORTED`) `add_subdirectory()`'d project — the default path — these
+  targets are already visible everywhere, so every `find_package()` call here is a no-op.
+- **Verified for real, not just syntax-checked:** configured a completely fresh, empty build
+  directory from scratch with `cmake -DFREE_USE_SYSTEM_SDL=ON <repo>` — succeeded
+  (`-- Generating done`). Built it with `cmake --build . -j4` — **`free-api`, `free-direct`, and
+  the `FREE_DIRECT` executable all compiled and linked successfully**, first time in this whole
+  session. Re-verified the same in the actual `cmake-build-debug/` directory used throughout this
+  session's prior batches (reconfigured incrementally with the same flag, then built) — same
+  clean, full, successful build.
+- **Documented the fix** in `README.md`'s Build Instructions section:
+  `cmake -B build -DFREE_USE_SYSTEM_SDL=ON` as the documented alternative to vendoring SDL as
+  submodules.
 
 ## Blocked / incomplete
 
 - Carried over from Phase 0 (still unresolved, still relevant): the DPID-size decision
   (`docs/directplay-callsite-audit.md` §5) and the `free-eggbert` UI-reachability caveats (§2.3).
-- Noted for Phase 10: the `DPERR_SENDTOOBIG`-for-every-`Enqueue()`-failure mapping in `Send()` is
-  imprecise (conflates "oversize payload" with "queue full") and should be refined once Phase 10
-  implements full routing with proper per-condition error codes.
-- Phase 15 still needs to wire `tests/directplay_tests.cpp` into `CMakeLists.txt`/CTest.
+- `tests/directplay_tests.cpp` is still not wired into CTest (Phase 15) — this batch didn't change
+  that, but now that the full CMake build genuinely works, wiring it in should be straightforward
+  whenever Phase 15 is reached.
+- **This SDL3 fix was verified with `-DFREE_USE_SYSTEM_SDL=ON` (system packages) only.** The
+  vendored-submodule path (the CMake default, no flag) was not re-tested and is still expected to
+  fail in this environment, since `free-direct` has no `third_party/` submodules and none of the
+  sibling repos' vendored SDL was symlinked/copied in. That's fine — system SDL is a fully
+  supported, now-working path — but it's worth knowing the default (no-flag) `cmake -B build`
+  invocation from `README.md`'s first example still won't work standalone in *this* environment
+  without also passing the flag from the second example.
 
 ## Files inspected/changed this batch
 
-- New: `src/directplay/LoopbackDirectPlayTransport.hpp`, `src/directplay/
-  LoopbackDirectPlayTransport.cpp`.
-- Changed: `src/directplay/DirectPlay.cpp` (`Open`/`Close`/`Send`/`Release` updated),
-  `CMakeLists.txt` (new source file), `tests/directplay_tests.cpp` (four new tests, updated
-  header comment/build command), `plan.md` (checkboxes).
-- Scratch-only, not committed: a throwaway runtime test harness under the session scratchpad
-  directory, deleted after use (distinct from the real, committed `tests/directplay_tests.cpp`).
+- Changed: `CMakeLists.txt` (SDL target-visibility fix, replacing an incorrect first attempt
+  before it was committed), `README.md` (documented `-DFREE_USE_SYSTEM_SDL=ON`).
+- No `plan.md` change — this was an environment/build-tooling fix, not a DirectPlay/DirectDraw/
+  DirectSound task, so there was no corresponding checkbox to check.
+- Investigated but not modified: `../free-api/CMakeLists.txt`, `../free-eggbert/cmake/
+  ThirdPartySDL.cmake` (both read-only, to understand the actual root cause — deliberately not
+  edited, since both are separate sibling repositories out of this fix's scope).
 
 ## Build/test status
 
-- Still cannot run the full linked CMake build in this environment (vendored SDL3 submodule under
-  `../free-eggbert/third_party` is not checked out — unrelated to this change, carried over from
-  every prior batch, still unresolved).
-- **`tests/directplay_tests.cpp` was actually built and run**, exactly per its own documented
-  command:
-  ```
-  g++ -std=c++20 -Wall -Wextra \
-      -I include -I ../free-api/include -I ../free-api/include_non_windows \
-      -I src/directplay \
-      src/directplay/DirectPlay.cpp src/directplay/LoopbackDirectPlayTransport.cpp \
-      tests/directplay_tests.cpp \
-      -o directplay_tests
-  ./directplay_tests
-  ```
-  Output: `OK: all DirectPlay tests passed.`, exit code 0 (7/7 tests). Not yet integrated into
-  CTest (Phase 15).
+- **The full CMake build now genuinely works end-to-end**, for the first time this session:
+  `cmake -B build -DFREE_USE_SYSTEM_SDL=ON && cmake --build build` succeeds, producing
+  `libfree-api.a`, `libfree-direct.a`, and the `FREE_DIRECT` executable, all linked successfully.
+  Verified twice: once from a completely fresh/empty build directory, once by reconfiguring the
+  actual `cmake-build-debug/` directory used throughout this session.
+- `tests/directplay_tests.cpp` was not re-run in this batch (no DirectPlay logic changed) — its
+  last confirmed state is 7/7 passing, from the Phase 4 batch.
 
 ## Recommended next tasks
 
-1. Start `plan.md` Phase 5 (ENet integration planning): add the `FREE_DIRECT_ENABLE_ENET` CMake
-   option and vendored/system ENet detection first, since everything else in that phase (the
-   `EnetDirectPlayTransport` skeleton, the wire packet header) depends on ENet actually being
-   available to compile against.
+1. Start `plan.md` Phase 5 (ENet integration planning) — now with a real, working full build
+   available for verification, not just syntax-checking. Begin with the `FREE_DIRECT_ENABLE_ENET`
+   CMake option and vendored/system ENet detection, since everything else in that phase depends on
+   ENet actually being available to compile against.
 2. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
    `docs/directplay-callsite-audit.md` §5.
-3. Investigate and fix the missing SDL3 submodule checkout so the real CMake/ninja build can run
-   end-to-end in this environment — still open from every prior batch.
-4. Commit this batch's changes (`src/directplay/LoopbackDirectPlayTransport.hpp`/`.cpp`,
-   `src/directplay/DirectPlay.cpp`, `CMakeLists.txt`, `tests/directplay_tests.cpp`, `plan.md`,
-   this `NEXT.md`).
+3. When Phase 15 is reached, wire `tests/directplay_tests.cpp` into `CMakeLists.txt`/CTest — now
+   straightforward given the build actually works.
+4. Commit this batch's changes (`CMakeLists.txt`, `README.md`, this `NEXT.md`).
 
 ---
 
@@ -130,5 +136,7 @@ scaffolding files created.
 queue; `Receive()`/`Close()` wired to the real queue; size/oversize bounds; permanent unit tests
 (`tests/directplay_tests.cpp` created). **Fully complete.**
 
-**Phase 4 — loopback backend (this batch, not yet committed): closes Phase 4.** See "Completed
-this batch" above.
+**Phase 4 (commit `2509b5d`):** `LoopbackDirectPlayTransport` implemented and wired into
+`Open`/`Close`/`Send`; four more permanent tests added (7 total). **Fully complete.**
+
+**SDL3 build blocker resolved (this batch, not yet committed):** see "Completed this batch" above.

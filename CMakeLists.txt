@@ -13,6 +13,35 @@ if(NOT TARGET free-api)
     add_subdirectory(../free-api FREE_API)
 endif()
 
+# free-api may resolve SDL3/SDL3_image/SDL3_mixer via find_package() (its own
+# -DFREE_API_USE_SYSTEM_SDL3=ON path, or a sibling game's ThirdPartySDL.cmake
+# vendoring script's -DFREE_USE_SYSTEM_SDL=ON path). CMake's find_package()
+# (config mode) only makes imported targets visible in the directory scope
+# where it was called and below - here, that is inside free-api's own
+# add_subdirectory() scope, a *child* of this directory, so from this
+# (parent) scope the targets do not exist at all once add_subdirectory()
+# returns (confirmed via --trace-expand: `if(TARGET SDL3::SDL3)` evaluates
+# false here even though the same check succeeds inside free-api's
+# CMakeLists.txt). A target that doesn't exist in this scope cannot be
+# promoted to global from here (there's nothing to call
+# set_target_properties() on) - the fix has to re-run find_package() itself,
+# directly in this scope. That is fast and reliable because free-api's
+# nested find_package() call already populated SDL3_DIR / SDL3_image_DIR /
+# SDL3_mixer_DIR in the cache, so this just re-locates the same config
+# files. (When free-api instead vendors SDL as a real add_subdirectory()'d
+# project - the default path, no -DFREE_API_USE_SYSTEM_SDL3 - those targets
+# are ordinary, not IMPORTED, and are already visible everywhere, so every
+# find_package() call below is skipped as a no-op.)
+if(NOT TARGET SDL3::SDL3)
+    find_package(SDL3 CONFIG QUIET)
+endif()
+if(NOT TARGET SDL3_image::SDL3_image)
+    find_package(SDL3_image CONFIG QUIET)
+endif()
+if(NOT TARGET SDL3_mixer::SDL3_mixer)
+    find_package(SDL3_mixer CONFIG QUIET)
+endif()
+
 if(NOT TARGET SDL3::SDL3 OR NOT TARGET SDL3_image::SDL3_image OR NOT TARGET SDL3_mixer::SDL3_mixer)
     message(FATAL_ERROR
         "SDL targets are missing. Configure vendored SDL first (see free-eggbert/cmake/ThirdPartySDL.cmake), "
