@@ -4,6 +4,7 @@
  * @note Status: STUB
  */
 #include "dplay.h"
+#include "DirectPlaySession.hpp"
 #include <atomic>
 #include <cstring>
 #include <new>
@@ -45,8 +46,21 @@ namespace {
         }
 
         HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) override {
-            (void)dwFlags;
             if (!lpSessionDesc || lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2)) return DPERR_INVALIDPARAMS;
+            // Only "already open" is rejected here; re-Open() after Close() is allowed to
+            // proceed, matching this task's specific "already-open object" wording (Close()
+            // itself does not yet reset session_ - that is a separate, not-yet-done task).
+            if (session_.IsOpen()) return DPERR_ALREADYINITIALIZED;
+
+            session_.isHost = (dwFlags & DPOPEN_CREATE) != 0;
+            session_.applicationGuid = lpSessionDesc->guidApplication;
+            session_.maxPlayers = lpSessionDesc->dwMaxPlayers;
+            session_.currentPlayers = lpSessionDesc->dwCurrentPlayers;
+            session_.sessionName.clear();
+            if (lpSessionDesc->lpszSessionNameA) session_.sessionName = lpSessionDesc->lpszSessionNameA;
+            session_.password.clear();
+            if (lpSessionDesc->lpszPasswordA) session_.password = lpSessionDesc->lpszPasswordA;
+            session_.state = free_direct_directplay::DirectPlayObjectState::Open;
             return DP_OK;
         }
 
@@ -73,6 +87,7 @@ namespace {
 
     private:
         std::atomic<ULONG> refCount_;
+        free_direct_directplay::DirectPlaySession session_;
     };
 
     class DirectPlayImpl final : public IDirectPlay {

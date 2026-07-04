@@ -386,8 +386,21 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       `DPERR_INVALIDPARAMS`, correctly-sized inputs (and a null, optional `lpPlayerName`) accepted.
 - [ ] Validate `dwFlags` passed to `Open()`, returning `DPERR_INVALIDFLAGS` for any bit outside
       `DPOPEN_CREATE`/`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`.
-- [ ] Replace `Open()`'s unconditional `DP_OK` return with real state transitions plus
-      `DPERR_ALREADYINITIALIZED` when called again on an already-open object.
+- [x] Replace `Open()`'s unconditional `DP_OK` return with real state transitions plus
+      `DPERR_ALREADYINITIALIZED` when called again on an already-open object. **Done:**
+      `DirectPlay2AImpl` now owns a `free_direct_directplay::DirectPlaySession session_` member.
+      `Open()` rejects a second call with `DPERR_ALREADYINITIALIZED` only when `session_.IsOpen()`
+      (a re-`Open()` after `Close()` is deliberately still allowed to proceed, matching this task's
+      specific "already-*open*" wording — `Close()` does not reset `session_` yet, that is a
+      separate not-yet-done task, so this distinction has no observable effect until it lands). On
+      success, `Open()` now sets `isHost` from `DPOPEN_CREATE`, and copies `applicationGuid`,
+      `maxPlayers`, `currentPlayers`, `sessionName`, and `password` from the caller's descriptor
+      into `session_`'s owned fields (deep-copying the two strings, never retaining the caller's
+      `LPSTR` pointers), then transitions `state` to `Open`. `dwFlags` bits other than
+      `DPOPEN_CREATE` are not yet validated (separate task, not in this batch). Runtime-verified
+      with a throwaway scratch harness: first `Open()` (both `DPOPEN_CREATE` and
+      `DPOPEN_OPENSESSION`) succeeds, a second `Open()` on the same object returns
+      `DPERR_ALREADYINITIALIZED`, and the existing `dwSize`/null validation still works.
 - [ ] Replace `EnumSessions()`'s unconditional `DP_OK` return with behavior driven by the
       enumeration decision recorded in Phase 1 (full discovery logic still lands in Phase 8; this
       task only wires the method to real state instead of an unconditional stub).
