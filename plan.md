@@ -498,14 +498,25 @@ builds and this test passes.
 Goal: give `Receive` real FIFO semantics backed by `DirectPlayMessageQueue`, independent of any
 transport backend.
 
-- [ ] Implement an internal `DirectPlayMessagePacket` struct in
-      `src/directplay/DirectPlayMessageQueue.hpp`.
-- [ ] Store the source DPID (`idFrom`) in `DirectPlayMessagePacket`.
-- [ ] Store the destination DPID (`idTo`) in `DirectPlayMessagePacket`.
-- [ ] Store flags (e.g. the guaranteed-delivery bit) in `DirectPlayMessagePacket`.
-- [ ] Store payload bytes as a `std::vector<uint8_t>` in `DirectPlayMessagePacket`.
-- [ ] Implement a FIFO receive queue (e.g. `std::deque<DirectPlayMessagePacket>`) inside
-      `DirectPlayMessageQueue`.
+- [x] Implement an internal `DirectPlayMessagePacket` struct in
+      `src/directplay/DirectPlayMessageQueue.hpp`. **Done.**
+- [x] Store the source DPID (`idFrom`) in `DirectPlayMessagePacket`. **Done.**
+- [x] Store the destination DPID (`idTo`) in `DirectPlayMessagePacket`. **Done.**
+- [x] Store flags (e.g. the guaranteed-delivery bit) in `DirectPlayMessagePacket`. **Done:** a
+      plain `DWORD flags` field; no specific bit is interpreted yet (that happens once `Send`
+      actually enqueues a packet in a later Phase 3/10 task).
+- [x] Store payload bytes as a `std::vector<uint8_t>` in `DirectPlayMessagePacket`. **Done:**
+      `std::vector<std::uint8_t> payload`.
+- [x] Implement a FIFO receive queue (e.g. `std::deque<DirectPlayMessagePacket>`) inside
+      `DirectPlayMessageQueue`. **Done**, plus a minimal API to actually use it —
+      `IsEmpty()`/`Enqueue()`/`Front()`/`PopFront()` — none of which were separately enumerated as
+      tasks but are necessary for the queue to be usable at all (by `Receive()` in the next batch,
+      and by whatever eventually delivers a message: loopback in Phase 4, real routing in Phase
+      10). Nothing calls `Enqueue()` yet. Runtime-verified with a throwaway scratch harness:
+      two packets enqueued and dequeued in FIFO order, with `idFrom`/`idTo`/`payload` all
+      surviving round-trip intact; `IsEmpty()`/`Front()` correctly reflect empty-queue state
+      before/after. `DirectPlayMessageQueue.hpp`/`.cpp` still have zero transport/backend
+      dependency (only `dplay.h` and standard library headers).
 - [ ] Implement `Receive`'s buffer-size query behavior: when `lpData == nullptr` and
       `*lpdwDataSize == 0`, return the required size via `*lpdwDataSize` without dequeuing.
 - [ ] Implement `Receive` returning `DPERR_NOMESSAGES` when the queue is empty, matching

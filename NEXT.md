@@ -5,85 +5,85 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
 ## Current state
 
 - Branch: `develop`.
-- Last commit pushed to `develop`: `c3e45a4` ("Wire EnumSessions(), Send(), and Receive() to real
-  DirectPlaySession state").
-- On top of that, one more change is now made and **not yet committed**: `Release()` now safely
-  tears down a (currently always-null) transport. See "Completed this batch" below.
-- **`plan.md` Phase 0, Phase 1 (modulo two intentionally-deferred tasks), and Phase 2 are all
-  fully complete** — Phase 2 has zero remaining unchecked tasks as of this batch.
-  `DirectPlay2AImpl` now has a real `DirectPlaySession` driving `Open`/`CreatePlayer`/`Close`/
-  `EnumSessions`/`Send`/`Receive`/`Release`, all with meaningful state transitions and error codes
-  instead of unconditional `DP_OK` stubs.
-- **Phase 3 (message queue semantics) has not been started.** `DirectPlayMessageQueue` is still
-  an empty scaffold; `Receive()` currently returns `DPERR_NOMESSAGES` unconditionally (correctly,
-  since there is genuinely no queue yet), which is exactly the behavior Phase 3 needs to build
-  real FIFO semantics on top of.
+- Last commit pushed to `develop`: `1b01a2d` ("Make Release() safely shut down a transport;
+  closes plan.md Phase 2").
+- On top of that, one more change is now made and **not yet committed**: `DirectPlayMessageQueue`
+  now holds a real `DirectPlayMessagePacket` struct and a FIFO `std::deque` behind a minimal usage
+  API. See "Completed this batch" below.
+- `plan.md` Phase 0, Phase 1 (modulo two intentionally-deferred tasks), and Phase 2 are complete.
+  **Phase 3 (message queue semantics) has now started**: 6 of its 16 tasks are done (the data
+  structure itself). Not yet done: wiring `Receive()` in `DirectPlay.cpp` to actually use this
+  queue, queue size/oversize-packet limits, and the three "add a unit test" tasks.
 - No DirectDraw/DirectSound code has been touched. No game source in `../free-eggbert` or
   `../planetblupi` has been touched.
 
-## Completed this batch (Phase 2 — `Release()` transport shutdown; closes Phase 2)
+## Completed this batch (Phase 3 — `DirectPlayMessagePacket` + FIFO queue)
 
-- **Added `std::unique_ptr<IDirectPlayTransport> transport`** to `DirectPlaySession` (always null
-  today — no concrete backend exists until `LoopbackDirectPlayTransport` in Phase 4 /
-  `EnetDirectPlayTransport` in Phase 5).
-- **`Release()` on `DirectPlay2AImpl`** now calls `session_.transport->Shutdown()` when non-null,
-  before `delete this`. Currently a no-op in practice (transport is always null), but the correct,
-  safe shutdown call is now in place and will activate automatically once a future phase
-  constructs and assigns a real transport during `Open()` — no further change to `Release()`
-  itself should be needed then.
-- **Verification was split into two parts, deliberately, since there's no way yet to inject a
-  transport into a real `DirectPlay2AImpl`** (that only becomes possible once Phase 4/5 give
-  `Open()` logic to construct one): (1) a throwaway scratch harness confirmed `Release()`'s
-  refcounting/deletion still works correctly with the always-null transport; (2) a second,
-  separate scratch check attached a standalone mock `IDirectPlayTransport` directly to a bare
-  `DirectPlaySession` (bypassing `DirectPlay2AImpl`, since there's no injection path) to confirm
-  the null-check-then-`Shutdown()` pattern itself is correct. Both are honestly reported as
-  distinct, partial verifications in `plan.md`, not conflated into a single "fully tested" claim.
-- Updated `plan.md`: checked the final Phase 2 task with this two-part verification note. **Phase
-  2 now has zero remaining unchecked tasks.**
+- **Implemented `DirectPlayMessagePacket`** in `DirectPlayMessageQueue.hpp`: `DPID idFrom`,
+  `DPID idTo`, `DWORD flags` (no specific bit interpreted yet), and
+  `std::vector<std::uint8_t> payload`.
+- **Implemented the FIFO queue itself** (`std::deque<DirectPlayMessagePacket>`) inside
+  `DirectPlayMessageQueue`, plus a minimal usage API not separately enumerated as its own task but
+  necessary for the queue to be usable at all: `IsEmpty()`, `Enqueue()`, `Front()` (peek without
+  removing), `PopFront()`. **Nothing calls `Enqueue()` yet** — that starts once `Receive()` is
+  wired to this queue (next batch) needs something to have put a message there, and eventually
+  once real delivery exists (loopback in Phase 4, routing in Phase 10).
+- **Verified with a throwaway runtime scratch harness** (compiled and run outside the repository,
+  not committed): two packets enqueued and dequeued in strict FIFO order, with
+  `idFrom`/`idTo`/`payload` all surviving the round-trip intact; `IsEmpty()`/`Front()` correctly
+  reflect empty-queue state before enqueuing and after fully draining.
+- Confirmed `DirectPlayMessageQueue.hpp`/`.cpp` still have zero transport/backend dependency
+  (only `dplay.h` and standard library headers — no `SDL_`/`ENet` identifiers).
+- Updated `plan.md`: checked all 6 data-structure tasks with notes on the added (unenumerated but
+  necessary) usage API.
 
 ## Blocked / incomplete
 
 - Carried over from Phase 0 (still unresolved, still relevant): the DPID-size decision
   (`docs/directplay-callsite-audit.md` §5) and the `free-eggbert` UI-reachability caveats (§2.3).
-  Should be resolved before Phase 9 does real DPID allocation.
-- Phase 1's two intentionally-deferred tasks remain open by design (gated on Phase 2/8 work that
-  is itself now mostly done for one of them — worth re-checking whether the enumeration
-  UI-behavior follow-up test is unblockable yet, though its actual gate is the fake-provider
-  *implementation*, which is still Phase 8, not yet started).
-- Phase 3 (message queue semantics) has not been started at all.
+- Remaining Phase 3 work: wire `Receive()` in `DirectPlay.cpp`'s `DirectPlay2AImpl` to actually
+  read from `DirectPlayMessageQueue` (buffer-size query behavior, `DPERR_NOMESSAGES` on empty,
+  copying `idFrom`/`idTo`, validating `lpdwDataSize`, rejecting a too-small output buffer without
+  dequeuing); a maximum queued-message count; oversize-packet rejection; three "add a unit test"
+  tasks — **a decision is still needed on where committed tests should live before Phase 15
+  exists** (see "Recommended next tasks").
 
 ## Files inspected/changed this batch
 
-- Changed: `src/directplay/DirectPlay.cpp` (`Release()` rewritten),
-  `src/directplay/DirectPlaySession.hpp` (`transport` field, updated doc comment),
-  `src/directplay/DirectPlayTransport.hpp` (updated doc comment), `plan.md` (checkbox).
-- Scratch-only, not committed: a throwaway two-part runtime test harness under the session
-  scratchpad directory, deleted after use.
+- Changed: `src/directplay/DirectPlayMessageQueue.hpp` (real struct + queue + API),
+  `src/directplay/DirectPlayMessageQueue.cpp` (status comment only), `plan.md` (checkboxes).
+- Scratch-only, not committed: a throwaway runtime test harness under the session scratchpad
+  directory, deleted after use.
 
 ## Build/test status
 
 - Still cannot run the full linked CMake build in this environment (vendored SDL3 submodule under
   `../free-eggbert/third_party` is not checked out — unrelated to this change, carried over from
-  prior batches, still unresolved).
-- Verified via `g++ -fsyntax-only -Wall -Wextra -Wpedantic` (clean) plus two actual
-  compiled-and-executed runtime checks (see "Completed this batch"). Still no committed automated
-  test — Phase 15 (test infrastructure) has not been started. Every Phase 2 behavior change this
-  session has been verified this way; none were marked done on syntax-checking alone.
+  every prior batch, still unresolved).
+- Verified via `g++ -fsyntax-only -Wall -Wextra -Wpedantic` (clean) plus an actual
+  compiled-and-executed runtime check of FIFO ordering and empty-queue behavior. Still no
+  committed automated test — Phase 15 (test infrastructure) has not been started.
 
 ## Recommended next tasks
 
-1. Start `plan.md` Phase 3 (message queue semantics): implement `DirectPlayMessagePacket`
-   (source/destination DPID, flags, payload bytes) in `DirectPlayMessageQueue`, then a FIFO
-   receive queue, then wire `Receive()`'s buffer-size-query and copy-out behavior to it. This is
-   the natural next phase now that Phase 2 is fully closed.
-2. Investigate and fix the missing SDL3 submodule checkout so the real CMake/ninja build can run
-   end-to-end in this environment — still open from every prior batch, and will matter
-   increasingly as more of DirectPlay is implemented without ever running the real build.
-3. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
+1. Wire `Receive()` in `DirectPlay.cpp` to `DirectPlayMessageQueue`: buffer-size query
+   (`lpData == nullptr && *lpdwDataSize == 0` returns the required size), `DPERR_NOMESSAGES` when
+   empty, copy `idFrom`/`idTo` on success, validate `lpdwDataSize != nullptr`, reject (without
+   dequeuing) when the caller's buffer is smaller than the queued payload.
+2. **Decide where committed unit tests should live before Phase 15 exists.** Three of Phase 3's
+   tasks are literally "add a unit test," and the phase's acceptance criteria require them to
+   "pass under CTest" — which doesn't exist yet. Options: (a) keep using throwaway scratch
+   verification and leave those specific checkboxes unchecked until Phase 15 wires up a real test
+   executable, or (b) start a `tests/` directory now with standalone, CMake-independent test
+   files that Phase 15 later wires into CTest. Worth deciding explicitly rather than drifting into
+   one or the other.
+3. Add a maximum queued-message count and oversize-packet rejection to
+   `DirectPlayMessageQueue`/its `Enqueue` path.
+4. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
    `docs/directplay-callsite-audit.md` §5.
-4. Commit this batch's changes (`src/directplay/DirectPlay.cpp`,
-   `src/directplay/DirectPlaySession.hpp`, `src/directplay/DirectPlayTransport.hpp`, `plan.md`,
+5. Investigate and fix the missing SDL3 submodule checkout so the real CMake/ninja build can run
+   end-to-end in this environment — still open from every prior batch.
+6. Commit this batch's changes (`src/directplay/DirectPlayMessageQueue.hpp`/`.cpp`, `plan.md`,
    this `NEXT.md`).
 
 ---
@@ -102,10 +102,10 @@ Full detail in `docs/directplay-callsite-audit.md`.
 output/aggregation fixed; `DirectPlayEnumerateA`/`W` documented and the fake-provider decision
 recorded in `docs/directplay-design.md`; four scaffolding files created.
 
-**Phase 2 (commits `37febd4`, `f67dedd`, `188cfab`, `c285550`, `efac4e6`, `c3e45a4`):**
-`DirectPlaySession` given real data-model fields; `dwSize`/`dwFlags` validation added;
-`Open`/`CreatePlayer`/`Close`/`EnumSessions`/`Send`/`Receive` all wired to real state with
-meaningful `DPERR_*` codes.
+**Phase 2 (commits `37febd4`, `f67dedd`, `188cfab`, `c285550`, `efac4e6`, `c3e45a4`, `1b01a2d`):**
+`DirectPlaySession` given real state (fields, DPID allocation, transport slot);
+`Open`/`CreatePlayer`/`Close`/`EnumSessions`/`Send`/`Receive`/`Release` all wired to real state
+with meaningful `DPERR_*` codes instead of unconditional `DP_OK` stubs. **Phase 2 fully complete.**
 
-**Phase 2 — `Release()` transport shutdown (this batch, not yet committed):** see "Completed this
-batch" above. **Closes Phase 2.**
+**Phase 3 — `DirectPlayMessagePacket` + FIFO queue (this batch, not yet committed):** see
+"Completed this batch" above.
