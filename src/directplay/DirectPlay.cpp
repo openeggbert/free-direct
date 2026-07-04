@@ -103,17 +103,41 @@ namespace {
         }
 
         HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) override {
-            (void)lpidFrom; (void)lpidTo; (void)dwFlags; (void)lpData; (void)lpdwDataSize;
+            (void)dwFlags;
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
-            // DirectPlaySession has no message queue yet (Phase 3): there is genuinely nothing
-            // to receive, so DPERR_NOMESSAGES is the honestly correct answer today, matching
-            // exactly what free-eggbert's CNetwork::Receive checks for.
-            return DPERR_NOMESSAGES;
+            if (!lpdwDataSize) return DPERR_INVALIDPARAMS;
+
+            const auto* front = session_.messageQueue.Front();
+            if (!front) return DPERR_NOMESSAGES;
+
+            const DWORD payloadSize = static_cast<DWORD>(front->payload.size());
+
+            // Buffer-size query: caller wants to know how big a buffer it needs, without
+            // dequeuing anything yet.
+            if (!lpData && *lpdwDataSize == 0) {
+                *lpdwDataSize = payloadSize;
+                return DP_OK;
+            }
+
+            if (*lpdwDataSize < payloadSize) {
+                // Report the required size but leave the packet queued - no dedicated "buffer
+                // too small" code exists in include/dplay.h, and free-eggbert's CNetwork::Receive
+                // doesn't distinguish this case either, so DPERR_INVALIDPARAMS is reused here.
+                *lpdwDataSize = payloadSize;
+                return DPERR_INVALIDPARAMS;
+            }
+            if (!lpData) return DPERR_INVALIDPARAMS;
+
+            std::memcpy(lpData, front->payload.data(), payloadSize);
+            *lpdwDataSize = payloadSize;
+            if (lpidFrom) *lpidFrom = front->idFrom;
+            if (lpidTo) *lpidTo = front->idTo;
+            session_.messageQueue.PopFront();
+            return DP_OK;
         }
 
         HRESULT WINAPI Close() override {
-            // Message-queue state is not cleared here yet - DirectPlaySession has no message
-            // queue member until Phase 3 gives it one.
+            session_.messageQueue.Clear();
             session_.localPlayerIds.clear();
             session_.remotePlayerIds.clear();
             session_.nextPlayerId = 1;

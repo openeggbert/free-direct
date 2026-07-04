@@ -4,10 +4,10 @@
  *
  * This header is intentionally private to the DirectPlay implementation: it
  * must never be included from `include/dplay.h` and must never be installed.
- * Pure data structure with no transport/backend dependency. Not yet wired
- * into `DirectPlay.cpp`'s `Receive` - that is a later `plan.md` Phase 3 task.
- * Nothing enqueues packets into it yet either; that starts once a real
- * delivery path exists (loopback in Phase 4, routing in Phase 10).
+ * Pure data structure with no transport/backend dependency. `DirectPlaySession`
+ * owns one instance; `DirectPlay.cpp`'s `Receive`/`Close` read/clear it.
+ * Nothing enqueues packets into it yet - that starts once a real delivery
+ * path exists (loopback in Phase 4, routing in Phase 10).
  * @note Status: PARTIAL
  */
 #pragma once
@@ -53,6 +53,9 @@ public:
 
     /// Removes the packet at the front of the queue. Precondition: `!IsEmpty()`.
     void PopFront() { packets_.pop_front(); }
+
+    /// Discards all queued packets, e.g. when `Close()` resets a `DirectPlaySession`.
+    void Clear() { packets_.clear(); }
 
 private:
     std::deque<DirectPlayMessagePacket> packets_;

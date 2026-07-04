@@ -462,8 +462,11 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       back to `1` (so a session that is closed and later re-`Open()`ed starts a fresh DPID
       sequence, not a continuation of the old one), clears `sessionName`/`password`, zeroes
       `applicationGuid`/`maxPlayers`/`currentPlayers`, resets `isHost` to `false`, and transitions
-      `state` to `Closed`. Message-queue clearing is explicitly deferred and documented as such in
-      the header comment, since `DirectPlaySession` has no message-queue member until Phase 3.
+      `state` to `Closed`. Message-queue clearing was explicitly deferred at the time, since
+      `DirectPlaySession` had no message-queue member yet. **Follow-up (Phase 3 batch): now
+      done** — `Close()` also calls `session_.messageQueue.Clear()` (using the new
+      `DirectPlayMessageQueue::Clear()` method, added for this purpose), and the stale
+      deferral comment has been removed.
       Runtime-verified: after `Close()`, a subsequent `Open()` no longer returns
       `DPERR_ALREADYINITIALIZED` (proving `state` left `Open`), and a player created after that
       re-`Open()` gets DPID `1` again (proving the allocator and player list were actually reset,
@@ -517,17 +520,51 @@ transport backend.
       surviving round-trip intact; `IsEmpty()`/`Front()` correctly reflect empty-queue state
       before/after. `DirectPlayMessageQueue.hpp`/`.cpp` still have zero transport/backend
       dependency (only `dplay.h` and standard library headers).
-- [ ] Implement `Receive`'s buffer-size query behavior: when `lpData == nullptr` and
+- [x] Implement `Receive`'s buffer-size query behavior: when `lpData == nullptr` and
       `*lpdwDataSize == 0`, return the required size via `*lpdwDataSize` without dequeuing.
-- [ ] Implement `Receive` returning `DPERR_NOMESSAGES` when the queue is empty, matching
+      **Done** — implemented together with the other `Receive()` tasks below, since they share
+      one method body and one set of ordered checks.
+- [x] Implement `Receive` returning `DPERR_NOMESSAGES` when the queue is empty, matching
       `free-eggbert/src/network.cpp`'s `CNetwork::Receive` expectation of that specific code.
-- [ ] Implement `Receive` copying the sender DPID into `*lpidFrom` on a successful dequeue.
-- [ ] Implement `Receive` copying the recipient DPID into `*lpidTo` on a successful dequeue.
-- [ ] Implement `Receive` validating `lpdwDataSize != nullptr` before dereferencing it.
-- [ ] Implement `Receive` validating the output buffer: when `*lpdwDataSize` is smaller than the
+      **Done:** `DirectPlaySession` now has a real `DirectPlayMessageQueue messageQueue` member;
+      `Receive()` checks `session_.messageQueue.Front()` and returns `DPERR_NOMESSAGES` when null.
+- [x] Implement `Receive` copying the sender DPID into `*lpidFrom` on a successful dequeue.
+      **Done**, guarded by `if (lpidFrom)` (an output pointer is optional, matching the same
+      tolerance already extended to `CreatePlayer`'s `lpidPlayer`).
+- [x] Implement `Receive` copying the recipient DPID into `*lpidTo` on a successful dequeue.
+      **Done**, same optional-pointer treatment as `lpidFrom`.
+- [x] Implement `Receive` validating `lpdwDataSize != nullptr` before dereferencing it. **Done:**
+      checked immediately after the `session_.IsOpen()` check, returning `DPERR_INVALIDPARAMS`.
+- [x] Implement `Receive` validating the output buffer: when `*lpdwDataSize` is smaller than the
       queued packet's payload size, return an appropriate `DPERR_*` (reuse `DPERR_INVALIDPARAMS` if
       no dedicated "buffer too small" code exists in `include/dplay.h`; add one only if the target
-      game's code path distinguishes it) without dequeuing the packet.
+      game's code path distinguishes it) without dequeuing the packet. **Done:** confirmed no
+      dedicated "buffer too small" code exists in `include/dplay.h` (the closest-named
+      `DPERR_BUFFERTOOLARGE` is a different real-DirectPlay condition, not reused here since it
+      would be misleading), and confirmed `free-eggbert/src/network.cpp`'s `CNetwork::Receive`
+      doesn't distinguish this case either (it always passes a fixed 500-byte buffer). Reused
+      `DPERR_INVALIDPARAMS` as instructed; writes the required size back via `*lpdwDataSize`
+      before returning, and does not call `PopFront()`, leaving the packet queued for a retry
+      with a bigger buffer.
+      **`Receive()` implementation note:** the full method (all six tasks above, plus the
+      pre-existing `session_.IsOpen()` → `DPERR_NOCONNECTION` check from a prior batch) does:
+      not-open → `DPERR_NOCONNECTION`; null `lpdwDataSize` → `DPERR_INVALIDPARAMS`; empty queue →
+      `DPERR_NOMESSAGES`; buffer-size query (`lpData == nullptr && *lpdwDataSize == 0`) → writes
+      size, `DP_OK`, no dequeue; `*lpdwDataSize` too small → writes required size,
+      `DPERR_INVALIDPARAMS`, no dequeue; `lpData == nullptr` with a nonzero-but-sufficient
+      `*lpdwDataSize` → `DPERR_INVALIDPARAMS`; otherwise copies the payload, writes
+      `idFrom`/`idTo`, dequeues, `DP_OK`.
+      **Verification is split in two, honestly, since nothing in the codebase can yet enqueue a
+      message into a live object** (`Send()` doesn't enqueue — Phase 10; no transport delivers
+      one either — Phase 4): (1) a throwaway scratch harness exercised every path reachable
+      through the real `IDirectPlay2A::Receive()` today (not-open, null `lpdwDataSize`,
+      open-but-empty, and post-`Close()`); (2) a second scratch check verified the buffer-size
+      query / too-small / successful-copy logic by replicating `Receive()`'s exact logic against a
+      bare, fully-public `DirectPlaySession` + pre-populated `DirectPlayMessageQueue` — this
+      proves the logic pattern is correct but does **not** yet exercise
+      `DirectPlay2AImpl::Receive()`'s literal code path for those three cases end-to-end, since
+      there is no way to get a message into a live object yet. That gap closes naturally once
+      Phase 4/10 delivery exists.
 - [ ] Implement a maximum queued-message count on `DirectPlayMessageQueue` to bound memory growth
       when a peer stops calling `Receive`.
 - [ ] Implement oversize-packet rejection before a packet is ever queued (see Phase 11's

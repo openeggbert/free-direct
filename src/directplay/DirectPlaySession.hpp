@@ -11,6 +11,7 @@
 #pragma once
 
 #include "dplay.h"
+#include "DirectPlayMessageQueue.hpp"
 #include "DirectPlayTransport.hpp"
 
 #include <memory>
@@ -69,6 +70,10 @@ public:
     /// constructs a concrete `IDirectPlayTransport` yet (that starts with
     /// `LoopbackDirectPlayTransport` in Phase 4 and `EnetDirectPlayTransport` in Phase 5).
     std::unique_ptr<IDirectPlayTransport> transport;
+
+    /// Backs `IDirectPlay2A::Receive`. Nothing enqueues into it yet - see
+    /// `DirectPlayMessageQueue.hpp`.
+    DirectPlayMessageQueue messageQueue;
 };
 
 } // namespace free_direct_directplay
