@@ -5,74 +5,97 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
 ## Current state
 
 - Branch: `develop`.
-- Last commit pushed to `develop`: `3b38e0c` ("Wire Receive() and Close() to the real
-  DirectPlayMessageQueue").
-- On top of that, one more change is now made and **not yet committed**: `DirectPlayMessageQueue`
-  now bounds its size and rejects oversize payloads. See "Completed this batch" below.
-- `plan.md` Phase 0, Phase 1 (modulo two intentionally-deferred tasks), and Phase 2 are complete.
-  **Phase 3 now has 13 of its 16 tasks done — only the three "add a unit test" tasks remain**, and
-  they are pending the still-open tests-location decision (see "Blocked / incomplete").
+- Last commit pushed to `develop`: `1cde3d5` ("Bound DirectPlayMessageQueue size and reject
+  oversize payloads").
+- On top of that, one more change is now made and **not yet committed**: `Receive()`'s logic was
+  refactored into a testable `DirectPlayMessageQueue::TryReceive()` method, and a real, permanent
+  `tests/directplay_tests.cpp` was created and verified to pass. See "Completed this batch" below.
+- **`plan.md` Phase 0, Phase 1 (modulo two intentionally-deferred tasks), Phase 2, and Phase 3 are
+  all fully complete.** Phase 3 has zero remaining unchecked tasks as of this batch.
+- **Phase 4 (loopback backend) has not been started.**
 - No DirectDraw/DirectSound code has been touched. No game source in `../free-eggbert` or
   `../planetblupi` has been touched.
 
-## Completed this batch (Phase 3 — queue size/oversize bounds)
+## Completed this batch (Phase 3 — permanent unit tests; closes Phase 3)
 
-- **Added `kMaxQueuedMessages = 256`** (`static constexpr std::size_t`) to
-  `DirectPlayMessageQueue` — a round, generous placeholder, not tied to any specific real-DirectPlay
-  or `free-eggbert` requirement.
-- **Added `kMaxPayloadBytes = 4096`**, chosen to comfortably exceed every `free-eggbert` payload
-  size found in the Phase 0 audit (a fixed 500-byte receive buffer; actual payloads in the low
-  hundreds of bytes).
-- **`Enqueue()`'s signature changed from `void` to `bool`**: returns `false` without enqueuing
-  when the payload exceeds `kMaxPayloadBytes` (checked first) or the queue is already at
-  `kMaxQueuedMessages`. Zero call-site impact today, since nothing calls `Enqueue()` yet.
-  Deciding which `DPERR_*` code `Send()` should map each rejection reason to is explicitly left
-  for Phase 10 — this batch only implements the bounds themselves, in the queue.
-- **Verified with a throwaway runtime scratch harness** (compiled and run outside the repository,
-  not committed): a payload one byte over the limit is rejected and not queued; a payload exactly
-  at the limit is accepted; filling the queue to exactly capacity succeeds, one more is rejected
-  without disturbing what's already queued, and after draining one slot exactly one more succeeds.
-- Updated `plan.md`: checked both bounds tasks with the reasoning above.
+- **Solved the "no way to inject a message into a live object" problem properly, instead of
+  working around it with a duplicate-logic test.** `Receive()`'s buffer-size-query/
+  `DPERR_NOMESSAGES`/too-small-buffer/successful-copy logic was extracted out of `DirectPlay.cpp`
+  into a new `DirectPlayMessageQueue::TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize)` method.
+  `DirectPlay2AImpl::Receive()` now only checks `session_.IsOpen()` and then delegates to
+  `session_.messageQueue.TryReceive(...)`. This refactor was verified to preserve identical
+  observable behavior via a throwaway regression scratch harness (re-running the exact
+  not-open/null-`lpdwDataSize`/empty-queue/post-`Close()` checks from the prior batch) before
+  writing any new permanent test.
+- **Created `tests/directplay_tests.cpp`** — a standalone, dependency-light file with its own
+  `main()`, containing the three tests Phase 3 asked for:
+  - `Test_ReceiveOnEmptyQueue_ReturnsNoMessages` — goes through the real, public `IDirectPlay2A`
+    interface end-to-end (this path is fully reachable today).
+  - `Test_ReceiveWithTooSmallBuffer_PreservesPacket` and
+    `Test_ReceiveSuccessfulCopy_MatchesQueuedPacket` — call `DirectPlayMessageQueue::TryReceive()`
+    directly on a queue they construct and populate via `Enqueue()`. Because of the refactor
+    above, this is **the exact same method production `Receive()` calls**, not a
+    re-implementation — these tests will catch a real regression in `Receive()`'s core logic, not
+    just in a parallel copy of it.
+  - The file documents its own build/run command in a header comment. **Actually built and run
+    exactly as documented**, from the repository root: all three checks pass
+    (`OK: all DirectPlay tests passed.`, exit code 0).
+  - **Not yet wired into CMake/CTest** — that is explicitly `plan.md` Phase 15's job. Added
+    `tests/directplay_tests` to `.gitignore` so the compiled binary is never accidentally
+    committed.
+- Updated `plan.md`: checked all three unit-test tasks plus the standing tests-location decision
+  (now acted on, not just decided), with a detailed note on the refactor and why it was the right
+  fix rather than a workaround. The Phase 3 acceptance criteria note is honest that "passes under
+  CTest" is not yet literally true (no CTest target exists), while "the tests exist, build, and
+  pass" is verified true.
 
 ## Blocked / incomplete
 
 - Carried over from Phase 0 (still unresolved, still relevant): the DPID-size decision
   (`docs/directplay-callsite-audit.md` §5) and the `free-eggbert` UI-reachability caveats (§2.3).
-- **The only remaining Phase 3 work is the three "add a unit test" tasks, still pending the
-  tests-location decision**, carried over unresolved for two batches now: create a standalone
-  `tests/directplay_tests.cpp` (not wired into CMake yet — that's Phase 15) versus continuing
-  throwaway scratch verification indefinitely. This should be decided the next time Phase 3 work
-  resumes, rather than deferred again.
+- Phase 15 still needs to wire `tests/directplay_tests.cpp` (and future DirectDraw/DirectSound
+  test files) into `CMakeLists.txt`/CTest — tracked there, not a blocker for Phase 4+.
 
 ## Files inspected/changed this batch
 
-- Changed: `src/directplay/DirectPlayMessageQueue.hpp` (`kMaxQueuedMessages`/`kMaxPayloadBytes`
-  constants, `Enqueue()` now returns `bool`), `plan.md` (checkboxes).
-- Scratch-only, not committed: a throwaway runtime test harness under the session scratchpad
-  directory, deleted after use.
+- Changed: `src/directplay/DirectPlay.cpp` (`Receive()` simplified to delegate),
+  `src/directplay/DirectPlayMessageQueue.hpp` (`TryReceive()` method added), `.gitignore`
+  (ignore the compiled test binary), `plan.md` (checkboxes).
+- New: `tests/directplay_tests.cpp` (permanent, committed test file).
+- Scratch-only, not committed: a throwaway regression-check harness under the session scratchpad
+  directory, deleted after use (distinct from `tests/directplay_tests.cpp`, which *is* committed).
 
 ## Build/test status
 
 - Still cannot run the full linked CMake build in this environment (vendored SDL3 submodule under
   `../free-eggbert/third_party` is not checked out — unrelated to this change, carried over from
   every prior batch, still unresolved).
-- Verified via `g++ -fsyntax-only -Wall -Wextra -Wpedantic` (no errors) plus an actual
-  compiled-and-executed runtime check of both bounds. Still no committed automated test — Phase 15
-  (test infrastructure) has not been started.
+- **For the first time this session, a real committed test file was built and run**, exactly per
+  its own documented command, from the repository root:
+  ```
+  g++ -std=c++20 -Wall -Wextra \
+      -I include -I ../free-api/include -I ../free-api/include_non_windows \
+      -I src/directplay \
+      src/directplay/DirectPlay.cpp tests/directplay_tests.cpp \
+      -o directplay_tests
+  ./directplay_tests
+  ```
+  Output: `OK: all DirectPlay tests passed.`, exit code 0. This is not yet integrated into CTest
+  (Phase 15), but it is a genuine, reproducible, standalone test run — stronger evidence than the
+  throwaway scratch harnesses used for every earlier batch.
 
 ## Recommended next tasks
 
-1. Decide the tests-location question (see "Blocked / incomplete") and act on it — create
-   `tests/directplay_tests.cpp` (standalone, not yet CMake-wired) covering the three remaining
-   Phase 3 unit-test tasks: `Receive` on an empty queue (`DPERR_NOMESSAGES`), `Receive` with a
-   too-small buffer (packet preserved, meaningful error), and `Receive` performing a successful
-   copy (payload/sender/recipient all correct). This closes out Phase 3 entirely.
+1. Start `plan.md` Phase 4 (loopback backend): implement `LoopbackDirectPlayTransport` — the
+   natural next phase now that Phases 1-3 give it real session/player/message state to route
+   packets between two in-process `DirectPlaySession` instances.
 2. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
    `docs/directplay-callsite-audit.md` §5.
 3. Investigate and fix the missing SDL3 submodule checkout so the real CMake/ninja build can run
    end-to-end in this environment — still open from every prior batch.
-4. Commit this batch's changes (`src/directplay/DirectPlayMessageQueue.hpp`, `plan.md`, this
-   `NEXT.md`).
+4. Commit this batch's changes (`src/directplay/DirectPlay.cpp`,
+   `src/directplay/DirectPlayMessageQueue.hpp`, `tests/directplay_tests.cpp`, `.gitignore`,
+   `plan.md`, this `NEXT.md`).
 
 ---
 
@@ -94,8 +117,8 @@ scaffolding files created.
 `DirectPlaySession` given real state; `Open`/`CreatePlayer`/`Close`/`EnumSessions`/`Send`/
 `Receive`/`Release` all wired to real state. **Fully complete.**
 
-**Phase 3 (commits `f78ee61`, `3b38e0c`):** `DirectPlayMessagePacket` + FIFO queue implemented;
-`Receive()`/`Close()` wired to the real queue.
+**Phase 3 (commits `f78ee61`, `3b38e0c`, `1cde3d5`):** `DirectPlayMessagePacket` + FIFO queue;
+`Receive()`/`Close()` wired to the real queue; size/oversize bounds added.
 
-**Phase 3 — queue size/oversize bounds (this batch, not yet committed):** see "Completed this
-batch" above.
+**Phase 3 — permanent unit tests (this batch, not yet committed): closes Phase 3.** See
+"Completed this batch" above.

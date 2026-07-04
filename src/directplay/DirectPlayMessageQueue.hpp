@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <utility>
 #include <vector>
@@ -74,6 +75,50 @@ public:
 
     /// Discards all queued packets, e.g. when `Close()` resets a `DirectPlaySession`.
     void Clear() { packets_.clear(); }
+
+    /**
+     * @brief Implements `IDirectPlay2A::Receive`'s buffer-size-query / `DPERR_NOMESSAGES` /
+     * too-small-buffer / successful-copy logic against this queue.
+     *
+     * Does not check whether the owning session is open - `DirectPlay2AImpl::Receive`
+     * (`DirectPlay.cpp`) does that first and returns `DPERR_NOCONNECTION` itself before ever
+     * calling this. Extracted as its own method (rather than living inline in `Receive()`) so
+     * it can be exercised directly by tests without needing a way to inject a message into a
+     * live `IDirectPlay2A` object, which does not exist yet (`Send()` doesn't enqueue - that is
+     * Phase 10; no transport delivers one either - that is Phase 4).
+     * @note Status: PARTIAL
+     */
+    HRESULT TryReceive(DPID* lpidFrom, DPID* lpidTo, void* lpData, DWORD* lpdwDataSize) {
+        if (!lpdwDataSize) return DPERR_INVALIDPARAMS;
+
+        const DirectPlayMessagePacket* front = Front();
+        if (!front) return DPERR_NOMESSAGES;
+
+        const DWORD payloadSize = static_cast<DWORD>(front->payload.size());
+
+        // Buffer-size query: caller wants to know how big a buffer it needs, without
+        // dequeuing anything yet.
+        if (!lpData && *lpdwDataSize == 0) {
+            *lpdwDataSize = payloadSize;
+            return DP_OK;
+        }
+
+        if (*lpdwDataSize < payloadSize) {
+            // Report the required size but leave the packet queued - no dedicated "buffer too
+            // small" code exists in include/dplay.h, and free-eggbert's CNetwork::Receive
+            // doesn't distinguish this case either, so DPERR_INVALIDPARAMS is reused here.
+            *lpdwDataSize = payloadSize;
+            return DPERR_INVALIDPARAMS;
+        }
+        if (!lpData) return DPERR_INVALIDPARAMS;
+
+        std::memcpy(lpData, front->payload.data(), payloadSize);
+        *lpdwDataSize = payloadSize;
+        if (lpidFrom) *lpidFrom = front->idFrom;
+        if (lpidTo) *lpidTo = front->idTo;
+        PopFront();
+        return DP_OK;
+    }
 
 private:
     std::deque<DirectPlayMessagePacket> packets_;

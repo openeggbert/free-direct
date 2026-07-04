@@ -105,35 +105,11 @@ namespace {
         HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) override {
             (void)dwFlags;
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
-            if (!lpdwDataSize) return DPERR_INVALIDPARAMS;
-
-            const auto* front = session_.messageQueue.Front();
-            if (!front) return DPERR_NOMESSAGES;
-
-            const DWORD payloadSize = static_cast<DWORD>(front->payload.size());
-
-            // Buffer-size query: caller wants to know how big a buffer it needs, without
-            // dequeuing anything yet.
-            if (!lpData && *lpdwDataSize == 0) {
-                *lpdwDataSize = payloadSize;
-                return DP_OK;
-            }
-
-            if (*lpdwDataSize < payloadSize) {
-                // Report the required size but leave the packet queued - no dedicated "buffer
-                // too small" code exists in include/dplay.h, and free-eggbert's CNetwork::Receive
-                // doesn't distinguish this case either, so DPERR_INVALIDPARAMS is reused here.
-                *lpdwDataSize = payloadSize;
-                return DPERR_INVALIDPARAMS;
-            }
-            if (!lpData) return DPERR_INVALIDPARAMS;
-
-            std::memcpy(lpData, front->payload.data(), payloadSize);
-            *lpdwDataSize = payloadSize;
-            if (lpidFrom) *lpidFrom = front->idFrom;
-            if (lpidTo) *lpidTo = front->idTo;
-            session_.messageQueue.PopFront();
-            return DP_OK;
+            // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
+            // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
+            // be exercised directly by tests/directplay_tests.cpp without needing a way to
+            // inject a message into a live IDirectPlay2A object.
+            return session_.messageQueue.TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize);
         }
 
         HRESULT WINAPI Close() override {

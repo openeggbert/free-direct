@@ -2,3 +2,4 @@ build*
 .idea/*
 _build*
 cmake-build-debug/*
+tests/directplay_tests

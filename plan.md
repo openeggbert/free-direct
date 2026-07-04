@@ -588,15 +588,51 @@ transport backend.
       `kMaxQueuedMessages + 1`th enqueue is rejected without disturbing what's already queued
       (confirmed the original front-of-queue packet is unchanged), and after draining one slot,
       exactly one more enqueue succeeds.
-- [ ] Add a unit test for `Receive` on an empty queue, asserting `DPERR_NOMESSAGES`.
-- [ ] Add a unit test for `Receive` with a too-small caller-provided buffer, asserting the queued
-      packet is preserved (not dequeued) and a meaningful error is returned.
-- [ ] Add a unit test for `Receive` performing a successful copy, asserting payload bytes, sender
-      DPID, and recipient DPID all match what was queued.
+- [x] Add a unit test for `Receive` on an empty queue, asserting `DPERR_NOMESSAGES`. **Done:**
+      `tests/directplay_tests.cpp` (new file), `Test_ReceiveOnEmptyQueue_ReturnsNoMessages`. Goes
+      through the real, public `IDirectPlay2A` interface end-to-end (`DirectPlayCreate` →
+      `QueryInterface` → `Open` → `Receive`), since this path is fully reachable today.
+- [x] Add a unit test for `Receive` with a too-small caller-provided buffer, asserting the queued
+      packet is preserved (not dequeued) and a meaningful error is returned. **Done:**
+      `Test_ReceiveWithTooSmallBuffer_PreservesPacket` in the same file.
+- [x] Add a unit test for `Receive` performing a successful copy, asserting payload bytes, sender
+      DPID, and recipient DPID all match what was queued. **Done:**
+      `Test_ReceiveSuccessfulCopy_MatchesQueuedPacket` in the same file.
+
+      **How the injection problem was actually solved, rather than worked around with a
+      duplicate-logic test:** earlier batches noted that nothing in the codebase can enqueue a
+      message into a *live* `IDirectPlay2A` object yet (`Send()` doesn't enqueue — Phase 10; no
+      transport delivers one either — Phase 4), which seemed to block writing genuine tests for
+      the too-small-buffer and successful-copy cases without duplicating `Receive()`'s logic in
+      the test file (a real risk: a duplicate wouldn't catch a regression in the actual
+      implementation). Instead, `Receive()`'s buffer-size-query/`DPERR_NOMESSAGES`/too-small/
+      successful-copy logic was refactored out of `DirectPlay.cpp` into a new
+      `DirectPlayMessageQueue::TryReceive()` method (`DirectPlayMessageQueue.hpp`);
+      `DirectPlay2AImpl::Receive()` now does only its `session_.IsOpen()` check and then
+      delegates to `session_.messageQueue.TryReceive(...)`. The two new tests call
+      `TryReceive()` directly on a `DirectPlayMessageQueue` they construct and populate
+      themselves via the already-existing `Enqueue()` — this is the *exact same method* production
+      `Receive()` calls, not a re-implementation of it, so these tests will catch a real
+      regression in `Receive()`'s core logic. This refactor was verified to preserve identical
+      behavior via a throwaway regression scratch harness (re-running the exact same
+      not-open/null-`lpdwDataSize`/empty-queue/post-`Close()` checks from the previous batch)
+      before the new permanent tests were written.
+- [x] **(Decision, carried over from two prior batches, now acted on.)** Created
+      `tests/directplay_tests.cpp` as a standalone, dependency-light file with its own `main()`
+      and a documented build/run command in its header comment — **not yet wired into CMake or
+      CTest**, since that is explicitly `plan.md` Phase 15's job ("Add a DirectPlay unit test
+      executable"). Actually built and run per its own documented instructions from the
+      repository root; all three checks pass (`OK: all DirectPlay tests passed.`, exit code 0).
+      Added `tests/directplay_tests` to `.gitignore` so the compiled binary is never accidentally
+      committed.
 
 **Acceptance criteria:** the three new tests pass under CTest; `DirectPlayMessageQueue` has zero
 transport/backend dependencies, verifiable by confirming no `SDL_`/`ENet` identifier appears in
-`src/directplay/DirectPlayMessageQueue.*`.
+`src/directplay/DirectPlayMessageQueue.*`. **Partially met, honestly:** the three tests exist,
+build, and pass — verified by actually running them — but not yet "under CTest," since no CTest
+target exists until Phase 15 wires `tests/directplay_tests.cpp` into `CMakeLists.txt`. The
+zero-transport-dependency check passes (`DirectPlayMessageQueue.hpp`/`.cpp` include only
+`dplay.h` and standard library headers).
 
 ---
 
