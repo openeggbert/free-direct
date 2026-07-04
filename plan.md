@@ -337,20 +337,42 @@ near-empty scaffolding files.
 Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`CreatePlayer`/`Send`/
 `Receive` stop being unconditional-success stubs and start reflecting actual object state.
 
-- [ ] Add a `DirectPlayObjectState` enum (`Created`, `Open`, `Closed`) to
-      `src/directplay/DirectPlaySession.hpp`.
-- [ ] Track whether the object is closed via the new state enum on `DirectPlaySession`.
-- [ ] Track whether a session is currently open (host or joined) as derived from the state enum.
-- [ ] Track whether this peer is host or client as a boolean/enum field on `DirectPlaySession`.
-- [ ] Track local player DPIDs in a `std::vector<DPID>` on `DirectPlaySession`.
-- [ ] Track remote player DPIDs in a separate `std::vector<DPID>` on `DirectPlaySession`.
-- [ ] Track an owned copy of the session descriptor (`DPSESSIONDESC2`) on `DirectPlaySession`,
+- [x] Add a `DirectPlayObjectState` enum (`Created`, `Open`, `Closed`) to
+      `src/directplay/DirectPlaySession.hpp`. **Done:** a scoped `enum class` at namespace scope
+      (`free_direct_directplay`), not nested in the class, so it can be referenced without
+      `DirectPlaySession::` qualification from `DirectPlay.cpp` later.
+- [x] Track whether the object is closed via the new state enum on `DirectPlaySession`. **Done:**
+      `IsClosed()` returns `state == DirectPlayObjectState::Closed` — no separate boolean, exactly
+      as "derived from the state enum" implies.
+- [x] Track whether a session is currently open (host or joined) as derived from the state enum.
+      **Done:** `IsOpen()` returns `state == DirectPlayObjectState::Open`, same pattern as
+      `IsClosed()`.
+- [x] Track whether this peer is host or client as a boolean/enum field on `DirectPlaySession`.
+      **Done:** `bool isHost` (the task explicitly allows either a boolean or an enum; chose
+      boolean to match `free-eggbert`'s own `BOOL m_bHost` shape referenced in the Phase 0 audit).
+- [x] Track local player DPIDs in a `std::vector<DPID>` on `DirectPlaySession`. **Done:**
+      `localPlayerIds`.
+- [x] Track remote player DPIDs in a separate `std::vector<DPID>` on `DirectPlaySession`. **Done:**
+      `remotePlayerIds`, a distinct vector from `localPlayerIds`.
+- [x] Track an owned copy of the session descriptor (`DPSESSIONDESC2`) on `DirectPlaySession`,
       deep-copying session name/password strings rather than retaining caller-owned pointers.
-- [ ] Track the session name as an owned `std::string`, derived from the session descriptor copy.
-- [ ] Track the application GUID (`guidApplication`) from the session descriptor.
-- [ ] Track `dwMaxPlayers` from the session descriptor.
-- [ ] Track `dwCurrentPlayers` as a live counter, incremented/decremented as players are created/
-      removed.
+      **Done, with a deliberate design choice documented in the header:** rather than keeping a
+      `DPSESSIONDESC2`-shaped member (which would invite someone to read its now-meaningless
+      `lpszSessionName`/`lpszPassword` pointer fields later), the scalar/string data worth owning
+      is broken out into plain fields directly (`sessionName`, `password`, `applicationGuid`,
+      `maxPlayers`, `currentPlayers` — the next four tasks). No caller-owned pointer is retained
+      anywhere on `DirectPlaySession`.
+- [x] Track the session name as an owned `std::string`, derived from the session descriptor copy.
+      **Done:** `sessionName`. (`password` was added alongside it, matching the previous task's
+      explicit mention of "session name/password strings" needing deep-copy treatment, even though
+      it wasn't separately enumerated as its own bullet.)
+- [x] Track the application GUID (`guidApplication`) from the session descriptor. **Done:**
+      `applicationGuid`.
+- [x] Track `dwMaxPlayers` from the session descriptor. **Done:** `maxPlayers`.
+- [x] Track `dwCurrentPlayers` as a live counter, incremented/decremented as players are created/
+      removed. **Done (field only in this batch):** `currentPlayers`, defaulted to `0`. The actual
+      increment/decrement-on-player-create/remove *behavior* is not implemented yet — that lands
+      with the `CreatePlayer`/`Close` wiring tasks later in this phase, which are not yet done.
 - [ ] Validate `DPSESSIONDESC2.dwSize` in `Open()`, returning `DPERR_INVALIDPARAMS` when it does
       not equal `sizeof(DPSESSIONDESC2)`.
 - [ ] Validate `DPNAME.dwSize` in `CreatePlayer()`, returning `DPERR_INVALIDPARAMS` when it does
