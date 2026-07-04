@@ -5,54 +5,46 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
 ## Current state
 
 - Branch: `develop`.
-- Last commit pushed to `develop`: `188cfab` ("Wire Open() to real DirectPlaySession state").
-- On top of that, one more change is now made and **not yet committed**: `CreatePlayer()` and
-  `Close()` are now wired to `session_` too. See "Completed this batch" below.
+- Last commit pushed to `develop`: `c285550` ("Wire CreatePlayer() and Close() to real
+  DirectPlaySession state").
+- On top of that, one more change is now made and **not yet committed**: `Open()` now validates
+  `dwFlags`. See "Completed this batch" below.
 - `plan.md` Phase 0 and Phase 1 are complete (Phase 1 modulo two intentionally-deferred tasks).
-  Phase 2 now has 16 of its ~21 tasks done. `Open`/`CreatePlayer`/`Close` all use real
-  `DirectPlaySession` state now; `EnumSessions`/`Send`/`Receive`/`Release` still don't.
+  **Phase 2 now has 17 of its ~21 tasks done — only 4 remain**: `EnumSessions()`/`Send()` state
+  wiring, `Receive()`'s `DPERR_NOMESSAGES` wiring (blocked on Phase 3's message queue not existing
+  yet), and `Release()` calling `IDirectPlayTransport::Shutdown()`.
 - No DirectDraw/DirectSound code has been touched. No game source in `../free-eggbert` or
   `../planetblupi` has been touched.
 
-## Completed this batch (Phase 2 — `CreatePlayer()`/`Close()` wired to real state)
+## Completed this batch (Phase 2 — `dwFlags` validation)
 
-- **Added `DPID nextPlayerId = 1` to `DirectPlaySession`** — a new field, not one of the originally
-  enumerated Phase 2 data-model fields, but necessary to implement the `CreatePlayer` DPID
-  allocation task. Noted explicitly in `plan.md` rather than added silently. Starts at `1`,
-  skipping `0` (matching real DirectPlay's `DPID_SYSMSG`/`DPID_ALLPLAYERS` convention); Phase 9
-  revisits correctness against the Phase 0 DPID-vs-array-index finding.
-- **`CreatePlayer()` rewritten**: allocates `session_.nextPlayerId++`, appends it to
-  `localPlayerIds`, increments `currentPlayers`, and writes the new DPID to `*lpidPlayer` only
-  when that output pointer is non-null (preserving the original stub's tolerance of a null
-  `lpidPlayer`). Does not check whether the session is open first — not named by this task,
-  deliberately left for a later validation sweep.
-- **`Close()` rewritten**: clears `localPlayerIds`/`remotePlayerIds`, resets `nextPlayerId` back
-  to `1` (so a closed-then-reopened session gets a fresh DPID sequence, not a continuation),
-  clears `sessionName`/`password`, zeroes `applicationGuid`/`maxPlayers`/`currentPlayers`, resets
-  `isHost`, and transitions `state` to `Closed`. Message-queue clearing is explicitly deferred
-  (documented in the header) since `DirectPlaySession` has no message-queue member until Phase 3.
+- **`Open()`** now returns `DPERR_INVALIDFLAGS` for any `dwFlags` bit outside
+  `DPOPEN_CREATE | DPOPEN_JOIN | DPOPEN_OPENSESSION` (checked right after the existing `dwSize`/
+  null validation, before the already-open check). Does not additionally enforce that
+  `DPOPEN_CREATE`/`DPOPEN_JOIN` are mutually exclusive — not named by this task, left as a possible
+  future refinement rather than implemented speculatively.
+- **Fixed a stale in-code comment** left over from the prior batch that claimed `Close()` "does
+  not yet reset `session_`" — it does, as of the `CreatePlayer()`/`Close()` wiring commit.
 - **Verified with a throwaway runtime scratch harness** (compiled and run outside the repository,
-  not committed): sequential `CreatePlayer` calls yield distinct, incrementing DPIDs starting at 1;
-  a null `lpidPlayer` is still tolerated; after `Close()`, a subsequent `Open()` no longer returns
-  `DPERR_ALREADYINITIALIZED` (proving `state` actually left `Open`), and a player created after
-  that re-`Open()` gets DPID `1` again (proving the allocator and player list were genuinely reset,
-  not just a top-level flag).
-- Updated `plan.md`: checked both tasks with notes on the new field, the "null `lpidPlayer` still
-  tolerated" decision, and exactly what `Close()` does and doesn't clear yet.
+  not committed): an unrecognized flag bit is rejected both alone and combined with a valid bit;
+  `DPOPEN_CREATE` and `DPOPEN_JOIN` individually still succeed exactly as before.
+- Updated `plan.md`: checked the `dwFlags` task with notes on what is and isn't enforced.
 
 ## Blocked / incomplete
 
 - Carried over from Phase 0 (still unresolved, still relevant): the DPID-size decision
   (`docs/directplay-callsite-audit.md` §5) and the `free-eggbert` UI-reachability caveats (§2.3).
-- Remaining Phase 2 work: `dwFlags` validation in `Open()`; `EnumSessions`/`Send`/`Receive`
-  rewired to real state (`Receive`'s `DPERR_NOMESSAGES` wiring explicitly depends on Phase 3's
-  message queue, which doesn't exist yet); `Release()` calling `IDirectPlayTransport::Shutdown()`.
+- Remaining Phase 2 work (4 tasks): wire `EnumSessions()`/`Send()` to check `session_.IsOpen()`
+  (parameter/state validation only — full discovery/routing is Phase 8/10); wire `Receive()` to
+  return `DPERR_NOMESSAGES` (genuinely blocked until Phase 3 gives `DirectPlaySession` a real
+  message queue — `DirectPlayMessageQueue` is still an empty scaffold); wire `Release()` to call
+  `IDirectPlayTransport::Shutdown()` (there is no transport instance on `DirectPlaySession` yet
+  either — that's Phase 4+ — so this may also turn out to be blocked until then).
 
 ## Files inspected/changed this batch
 
-- Changed: `src/directplay/DirectPlay.cpp` (`CreatePlayer`/`Close` rewritten),
-  `src/directplay/DirectPlaySession.hpp` (`nextPlayerId` field, updated file-level doc comment),
-  `plan.md` (checkboxes).
+- Changed: `src/directplay/DirectPlay.cpp` (`Open()` `dwFlags` check, stale comment fix),
+  `plan.md` (checkbox).
 - Scratch-only, not committed: a throwaway runtime test harness under the session scratchpad
   directory, deleted after use.
 
@@ -62,23 +54,24 @@ This is the living status file described in `CLAUDE.md`'s `NEXT.md` Policy.
   `../free-eggbert/third_party` is not checked out — unrelated to this change, carried over from
   prior batches, still unresolved).
 - Verified via `g++ -fsyntax-only -Wall -Wextra -Wpedantic` (clean) plus an actual
-  compiled-and-executed runtime check covering DPID allocation, null-pointer tolerance, and the
-  `Close()`-then-reopen reset behavior. Still no committed automated test — Phase 15 (test
-  infrastructure) has not been started.
+  compiled-and-executed runtime check of the flag-validation behavior. Still no committed
+  automated test — Phase 15 (test infrastructure) has not been started.
 
 ## Recommended next tasks
 
-1. Add `dwFlags` validation to `Open()` (`DPERR_INVALIDFLAGS` for bits outside
-   `DPOPEN_CREATE`/`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`) — the task the user explicitly queued up
-   next this session.
-2. Wire `EnumSessions()`/`Send()` to check `session_.IsOpen()` (parameter/state validation only,
-   per their Phase 2 task wording — full discovery/routing logic is Phase 8/10).
+1. Wire `EnumSessions()` and `Send()` to check `session_.IsOpen()` and return a meaningful error
+   when not open — the two Phase 2 tasks that are actually doable right now without waiting on
+   another phase.
+2. Investigate whether `Receive()`'s `DPERR_NOMESSAGES` task and `Release()`'s
+   `IDirectPlayTransport::Shutdown()` task are better done now (with a reasonable stand-in — e.g.
+   `Receive()` can honestly return `DPERR_NOMESSAGES` unconditionally today, since no queue exists
+   yet to ever have a message in it) or deferred until Phase 3/4 respectively — worth a quick
+   decision before Phase 2 is called "complete."
 3. Before Phase 9 does real DPID allocation, make the explicit DPID-size decision flagged in
    `docs/directplay-callsite-audit.md` §5.
 4. Investigate and fix the missing SDL3 submodule checkout so the real CMake/ninja build can run
    end-to-end in this environment — still open from prior batches.
-5. Commit this batch's changes (`src/directplay/DirectPlay.cpp`,
-   `src/directplay/DirectPlaySession.hpp`, `plan.md`, this `NEXT.md`).
+5. Commit this batch's changes (`src/directplay/DirectPlay.cpp`, `plan.md`, this `NEXT.md`).
 
 ---
 
@@ -96,9 +89,10 @@ Full detail in `docs/directplay-callsite-audit.md`.
 output/aggregation fixed; `DirectPlayEnumerateA`/`W` documented and the fake-provider decision
 recorded in `docs/directplay-design.md`; four scaffolding files created.
 
-**Phase 2 (commits `37febd4`, `f67dedd`, `188cfab`):** `DirectPlaySession` given real data-model
-fields; `Open()`/`CreatePlayer()` validate `dwSize`; `Open()` wired to real state transitions with
-`DPERR_ALREADYINITIALIZED` on double-open.
+**Phase 2 (commits `37febd4`, `f67dedd`, `188cfab`, `c285550`):** `DirectPlaySession` given real
+data-model fields; `Open()`/`CreatePlayer()` validate `dwSize`; `Open()` wired to real state
+transitions with `DPERR_ALREADYINITIALIZED` on double-open; `CreatePlayer()`/`Close()` wired to
+real player/session state.
 
-**Phase 2 — `CreatePlayer()`/`Close()` wired (this batch, not yet committed):** see "Completed
-this batch" above.
+**Phase 2 — `dwFlags` validation (this batch, not yet committed):** see "Completed this batch"
+above.

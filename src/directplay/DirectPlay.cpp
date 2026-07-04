@@ -47,9 +47,11 @@ namespace {
 
         HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) override {
             if (!lpSessionDesc || lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2)) return DPERR_INVALIDPARAMS;
-            // Only "already open" is rejected here; re-Open() after Close() is allowed to
-            // proceed, matching this task's specific "already-open object" wording (Close()
-            // itself does not yet reset session_ - that is a separate, not-yet-done task).
+            if (dwFlags & ~static_cast<DWORD>(DPOPEN_CREATE | DPOPEN_JOIN | DPOPEN_OPENSESSION)) {
+                return DPERR_INVALIDFLAGS;
+            }
+            // Only "already open" is rejected here; re-Open() after a real Close() is allowed
+            // to proceed, matching this task's specific "already-open object" wording.
             if (session_.IsOpen()) return DPERR_ALREADYINITIALIZED;
 
             session_.isHost = (dwFlags & DPOPEN_CREATE) != 0;

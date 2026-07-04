@@ -384,8 +384,18 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       `DPNAME*` is actually provided; a null `lpPlayerName` is still accepted. Both tasks
       runtime-verified with a throwaway scratch harness: null/undersized inputs rejected with
       `DPERR_INVALIDPARAMS`, correctly-sized inputs (and a null, optional `lpPlayerName`) accepted.
-- [ ] Validate `dwFlags` passed to `Open()`, returning `DPERR_INVALIDFLAGS` for any bit outside
-      `DPOPEN_CREATE`/`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`.
+- [x] Validate `dwFlags` passed to `Open()`, returning `DPERR_INVALIDFLAGS` for any bit outside
+      `DPOPEN_CREATE`/`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`. **Done:** checked right after the
+      `dwSize`/null validation, before the already-open check. Only rejects bits outside the
+      `DPOPEN_CREATE | DPOPEN_JOIN | DPOPEN_OPENSESSION` mask (note `DPOPEN_JOIN` and
+      `DPOPEN_OPENSESSION` share the same numeric value, so this is really a two-bit mask); does
+      **not** additionally enforce that `DPOPEN_CREATE` and `DPOPEN_JOIN` are mutually exclusive
+      (e.g. passing both set would still pass this check), since that wasn't named by this task —
+      left as a possible future refinement, not implemented speculatively. Runtime-verified: an
+      unrecognized flag bit is rejected alone and when combined with a valid bit; `DPOPEN_CREATE`
+      and `DPOPEN_JOIN` individually still succeed as before. Also corrected a stale in-code
+      comment left over from the previous batch that claimed `Close()` "does not yet reset
+      session_" — it does, as of the prior commit.
 - [x] Replace `Open()`'s unconditional `DP_OK` return with real state transitions plus
       `DPERR_ALREADYINITIALIZED` when called again on an already-open object. **Done:**
       `DirectPlay2AImpl` now owns a `free_direct_directplay::DirectPlaySession session_` member.
