@@ -45,12 +45,16 @@ namespace {
         }
 
         HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) override {
-            (void)lpSessionDesc; (void)dwFlags;
+            (void)dwFlags;
+            if (!lpSessionDesc || lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2)) return DPERR_INVALIDPARAMS;
             return DP_OK;
         }
 
         HRESULT WINAPI CreatePlayer(LPDPID lpidPlayer, LPDPNAME lpPlayerName, HANDLE hEvent, LPVOID lpData, DWORD dwDataSize, DWORD dwFlags) override {
-            (void)lpidPlayer; (void)lpPlayerName; (void)hEvent; (void)lpData; (void)dwDataSize; (void)dwFlags;
+            (void)hEvent; (void)lpData; (void)dwDataSize; (void)dwFlags;
+            // lpPlayerName is optional (a player may be created without a display name); only
+            // its size is validated when one is actually provided.
+            if (lpPlayerName && lpPlayerName->dwSize != sizeof(DPNAME)) return DPERR_INVALIDPARAMS;
             if (lpidPlayer) *lpidPlayer = 1;
             return DP_OK;
         }

@@ -373,10 +373,17 @@ Goal: give `DirectPlaySession` real, validated state so that `Open`/`Close`/`Cre
       removed. **Done (field only in this batch):** `currentPlayers`, defaulted to `0`. The actual
       increment/decrement-on-player-create/remove *behavior* is not implemented yet — that lands
       with the `CreatePlayer`/`Close` wiring tasks later in this phase, which are not yet done.
-- [ ] Validate `DPSESSIONDESC2.dwSize` in `Open()`, returning `DPERR_INVALIDPARAMS` when it does
-      not equal `sizeof(DPSESSIONDESC2)`.
-- [ ] Validate `DPNAME.dwSize` in `CreatePlayer()`, returning `DPERR_INVALIDPARAMS` when it does
-      not equal `sizeof(DPNAME)`.
+- [x] Validate `DPSESSIONDESC2.dwSize` in `Open()`, returning `DPERR_INVALIDPARAMS` when it does
+      not equal `sizeof(DPSESSIONDESC2)`. **Done:** also rejects a null `lpSessionDesc` with the
+      same code, since dereferencing it to read `dwSize` would otherwise be undefined behavior —
+      a safety-necessary addition, not scope creep. `Open()` itself does not yet do anything else
+      (no state transition wired in yet — that is the next batch).
+- [x] Validate `DPNAME.dwSize` in `CreatePlayer()`, returning `DPERR_INVALIDPARAMS` when it does
+      not equal `sizeof(DPNAME)`. **Done:** `lpPlayerName` is treated as optional (real DirectPlay
+      allows creating a player without name info), so the size check only runs when a non-null
+      `DPNAME*` is actually provided; a null `lpPlayerName` is still accepted. Both tasks
+      runtime-verified with a throwaway scratch harness: null/undersized inputs rejected with
+      `DPERR_INVALIDPARAMS`, correctly-sized inputs (and a null, optional `lpPlayerName`) accepted.
 - [ ] Validate `dwFlags` passed to `Open()`, returning `DPERR_INVALIDFLAGS` for any bit outside
       `DPOPEN_CREATE`/`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`.
 - [ ] Replace `Open()`'s unconditional `DP_OK` return with real state transitions plus
