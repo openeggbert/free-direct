@@ -63,7 +63,40 @@ bool EnetDirectPlayTransport::Listen(std::uint16_t port) {
     return host_ != nullptr;
 }
 
-bool EnetDirectPlayTransport::Connect() { return false; }
+bool EnetDirectPlayTransport::Connect(const char* address, std::uint16_t port) {
+    if (!enetReady_ || host_ || peer_) return false;
+
+    // Channel limit matches Listen()'s - see that method's comment on why it's a
+    // provisional placeholder. peerCount=1: a joining client only ever talks to the
+    // one host it connects to.
+    constexpr std::size_t kChannelLimit = 1;
+
+    // A joining client's ENetHost has no listen address (nullptr) - it only ever
+    // initiates outgoing connections, never accepts incoming ones.
+    host_ = enet_host_create(nullptr, 1, kChannelLimit, 0, 0);
+    if (!host_) return false;
+
+    ENetAddress enetAddress;
+    if (enet_address_set_host(&enetAddress, address) != 0) {
+        enet_host_destroy(host_);
+        host_ = nullptr;
+        return false;
+    }
+    enetAddress.port = port;
+
+    // enet_host_connect() only queues a CONNECT attempt and returns immediately - a
+    // non-null peer_ means the attempt was queued, not that it has completed. Waiting
+    // for (or timing out on) an actual connection is a later concern (this class has
+    // no event-servicing method yet), not this task's.
+    peer_ = enet_host_connect(host_, &enetAddress, kChannelLimit, 0);
+    if (!peer_) {
+        enet_host_destroy(host_);
+        host_ = nullptr;
+        return false;
+    }
+
+    return true;
+}
 
 bool EnetDirectPlayTransport::Send(const void* /*data*/, std::size_t /*size*/) { return false; }
 
@@ -73,10 +106,37 @@ bool EnetDirectPlayTransport::Receive(void* /*buffer*/, std::size_t /*bufferSize
 }
 
 void EnetDirectPlayTransport::Shutdown() {
+    if (peer_ && host_) {
+        // Graceful disconnect: ask the remote peer to acknowledge before we tear the
+        // host down, rather than just destroying local state and leaving the remote
+        // side to notice via a timeout. Only handles the one peer_ this class itself
+        // tracks (the one Connect() created) - a host with multiple connected peers
+        // (Listen()'s eventual real multi-peer role) needs its own per-peer tracking,
+        // which is Phase 6/10's job, not this one's.
+        enet_peer_disconnect(peer_, 0);
+
+        // Bounded wait, not indefinite: Shutdown() must still return promptly even if
+        // the remote peer is gone or unresponsive. kDisconnectPollAttempts *
+        // kDisconnectPollTimeoutMs is the worst-case time spent here - both are
+        // provisional, generous-but-small placeholders, not derived from a specific
+        // free-eggbert/planetblupi requirement.
+        constexpr int kDisconnectPollAttempts = 10;
+        constexpr unsigned kDisconnectPollTimeoutMs = 100;
+        for (int i = 0; i < kDisconnectPollAttempts; ++i) {
+            ENetEvent event;
+            if (enet_host_service(host_, &event, kDisconnectPollTimeoutMs) <= 0) continue;
+            if (event.type == ENET_EVENT_TYPE_RECEIVE) enet_packet_destroy(event.packet);
+            if (event.type == ENET_EVENT_TYPE_DISCONNECT) break;
+        }
+    }
+
     if (host_) {
+        // enet_host_destroy() also frees every ENetPeer belonging to this host, so
+        // peer_ (if set) would be left dangling if not cleared here too.
         enet_host_destroy(host_);
         host_ = nullptr;
     }
+    peer_ = nullptr;
 }
 
 } // namespace free_direct_directplay

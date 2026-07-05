@@ -41,8 +41,13 @@ public:
      */
     virtual bool Listen(std::uint16_t port) = 0;
 
-    /** @brief Connects to a host previously started with Listen(). */
-    virtual bool Connect() = 0;
+    /**
+     * @brief Connects to a host at `address`:`port` previously started with Listen().
+     * `address`/`port` are meaningless to backends with no real network concept (e.g.
+     * loopback), which accept and ignore them. A `true` return means the connection
+     * attempt was initiated (backend-defined whether that implies completion yet).
+     */
+    virtual bool Connect(const char* address, std::uint16_t port) = 0;
 
     /** @brief Sends a payload to a peer; reliability semantics are backend-defined for now. */
     virtual bool Send(const void* data, std::size_t size) = 0;

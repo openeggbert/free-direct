@@ -842,10 +842,53 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       both the default (`FREE_DIRECT_ENABLE_ENET=OFF`) and `ON` CMake builds end-to-end, re-ran the
       11/11 `tests/directplay_tests.cpp` suite (unaffected), and re-confirmed `include/dplay.h` has
       zero ENet/SDL identifiers.
-- [ ] Add ENet client creation (`enet_host_create` with no listen address) for the joining role.
-- [ ] Add ENet peer connection (`enet_host_connect`) for the joining role.
-- [ ] Add ENet disconnect handling (`enet_peer_disconnect` plus processing the resulting
-      `ENET_EVENT_TYPE_DISCONNECT` event).
+- [x] Add ENet client creation (`enet_host_create` with no listen address) for the joining role.
+- [x] Add ENet peer connection (`enet_host_connect`) for the joining role. **Done (both boxes
+      together):** implemented as a single `EnetDirectPlayTransport::Connect(const char* address,
+      std::uint16_t port)`, not two separate steps - a client `ENetHost` created but never
+      connected has nothing independently observable or testable about it (unlike `Listen()`'s
+      host, which a real peer can connect to on its own), so splitting client-creation and
+      peer-connection into two commits would have left the first one unverifiable. `Connect()`
+      creates a listen-address-less `ENetHost` (`enet_host_create(nullptr, 1, kChannelLimit, 0,
+      0)`, `kChannelLimit` matching `Listen()`'s), resolves `address` via `enet_address_set_host`,
+      and calls `enet_host_connect`; fails cleanly with no host/peer left behind if ENet never
+      initialized, a host/peer already exists on this instance, address resolution fails, or
+      `enet_host_connect` itself returns null. `IDirectPlayTransport::Connect()`'s signature
+      changed from no-argument to `Connect(const char* address, std::uint16_t port)` - same
+      zero-existing-callers situation as `Listen()`'s earlier signature change (confirmed by grep);
+      updated the only other override, `LoopbackDirectPlayTransport::Connect()`, to accept and
+      ignore both new parameters. A `true` return means the connection attempt was queued, not
+      that it completed - `HasPeer()` (new, test-only, mirrors `HasHost()`) documents this
+      explicitly rather than implying more than is true. `Shutdown()`/the destructor now clear
+      `peer_` too (a peer belongs to its host and is freed when `enet_host_destroy` runs - leaving
+      the pointer set would dangle). **Verified for real** with a standalone whitebox smoke test
+      (not committed, same `#define private public` technique as the `Listen()` verification): a
+      `Listen()`-created server and a `Connect()`-created client, both real `EnetDirectPlayTransport`
+      instances, complete a genuine ENet handshake with each other (`ENET_EVENT_TYPE_CONNECT` on
+      both sides after servicing both hosts); a second `Connect()` call while already
+      connecting/connected correctly fails; connecting to a syntactically-invalid address fails
+      cleanly with no host/peer left behind (not a crash). Also re-verified both
+      `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds end-to-end, the 11/11 `tests/directplay_tests.cpp`
+      suite (unaffected), and that `include/dplay.h` has zero ENet/SDL identifiers.
+- [x] Add ENet disconnect handling (`enet_peer_disconnect` plus processing the resulting
+      `ENET_EVENT_TYPE_DISCONNECT` event). **Done:** `EnetDirectPlayTransport::Shutdown()` now
+      calls `enet_peer_disconnect(peer_, 0)` first (when a `peer_` exists), then services `host_`
+      in a small bounded loop (`kDisconnectPollAttempts = 10` × `kDisconnectPollTimeoutMs = 100`,
+      both provisional placeholders) waiting for `ENET_EVENT_TYPE_DISCONNECT` before actually
+      destroying the host - a graceful disconnect the remote peer can observe, not just a silent
+      local teardown it would only notice via its own timeout. Scoped deliberately to the single
+      `peer_` this class already tracks (the one `Connect()` created); a host with multiple
+      connected peers (`Listen()`'s eventual real multi-peer role) needs its own per-peer tracking,
+      which belongs to Phase 6/10, not this task. `Shutdown()` remains safe to call twice (all
+      branches are null-guarded). **Verified for real**, not just "didn't crash", with a standalone
+      whitebox smoke test (not committed): a `Listen()`-created server and `Connect()`-created
+      client establish a real connection; the client calls the public `Shutdown()`; the *server*,
+      serviced independently, observes a genuine `ENET_EVENT_TYPE_DISCONNECT` as a direct result -
+      proof of an actual ENet-protocol-level disconnect, not a local-only teardown; calling
+      `Shutdown()` again on both instances afterward is safe. Also re-verified both
+      `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds end-to-end, the 11/11
+      `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero
+      ENet/SDL identifiers.
 - [ ] Add reliable packet send using `ENET_PACKET_FLAG_RELIABLE`.
 - [ ] Add unreliable packet send **only if needed**: Phase 0 found every observed `free-eggbert`
       `Send` call site uses a truthy flag that collapses to `DPSEND_GUARANTEED`, so unreliable send

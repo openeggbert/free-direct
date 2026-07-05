@@ -11,7 +11,9 @@ namespace free_direct_directplay {
 
 bool LoopbackDirectPlayTransport::Listen(std::uint16_t /*port*/) { return true; }
 
-bool LoopbackDirectPlayTransport::Connect() { return true; }
+bool LoopbackDirectPlayTransport::Connect(const char* /*address*/, std::uint16_t /*port*/) {
+    return true;
+}
 
 bool LoopbackDirectPlayTransport::Send(const void* data, std::size_t size) {
     const auto* bytes = static_cast<const std::uint8_t*>(data);
