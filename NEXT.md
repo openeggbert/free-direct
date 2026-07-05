@@ -10,8 +10,9 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
   DirectDraw + DirectSound + DirectPlay) and `../planetblupi` (*Planet Blupi*, uses DirectDraw +
   DirectSound, confirmed zero DirectPlay usage). Scope is bounded by what these two games'
   real call sites actually need, not by DirectX API coverage in general (`CLAUDE.md`).
-- **Current development phase**: `plan.md` Phase 5 ("ENet integration planning"), in progress.
-  Phases 0-4 are complete.
+- **Current development phase**: `plan.md` Phase 5 ("ENet integration planning") is now complete
+  except for one item explicitly deferred to Phase 16 (protocol documentation). Phases 0-4 are
+  complete. Phase 6 ("Session hosting") is next, not yet started.
 - **Important architectural decisions**:
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net type or symbol may ever appear in them.
@@ -87,7 +88,11 @@ client complete a genuine handshake, the server observes a real `ENET_EVENT_TYPE
 the client's `Shutdown()` runs, and payloads sent via `Send()` arrive byte-for-byte with the
 correct ENet packet flags (`ENET_PACKET_FLAG_RELIABLE` vs `ENET_PACKET_FLAG_UNSEQUENCED`,
 inspected on the receiving end) depending on the `reliable` argument; `DirectPlay2AImpl::Send()`
-now maps the real `DPSEND_GUARANTEED` flag to that `reliable` argument instead of hardcoding it.
+now maps the real `DPSEND_GUARANTEED` flag to that `reliable` argument instead of hardcoding it;
+two `plan.md`/`NEXT.md` decision write-ups added to `docs/directplay-design.md` (Decision 2: single
+ENet channel; Decision 3: `DPID` must be a 4-byte `DWORD`, and the host's first player must get
+`DPID` `0` — both are documentation-only, no code changed for either). This closes out `plan.md`
+Phase 5's code tasks entirely.
 
 **What does not work yet / is not implemented**:
 - `EnetDirectPlayTransport` — real lifecycle, `Listen()`, `Connect()`, `Shutdown()`, and
@@ -103,6 +108,11 @@ now maps the real `DPSEND_GUARANTEED` flag to that `reliable` argument instead o
   validates buffer size/payload-length consistency on receive, but nothing constructs one from a
   real `DPSESSIONDESC2`/session yet, and `magic`/`version` mismatches are not rejected yet either
   (deliberately deferred — see `DirectPlayWireProtocol.hpp`'s file comment).
+- The `DPID` size/starting-value decision (Section 4, `docs/directplay-design.md` Decision 3) is
+  now written down, but **not implemented**: `include/dplay.h`'s `DPID` typedef is still
+  `DWORD_PTR` (should become `DWORD`), and `DirectPlaySession::nextPlayerId` still starts at `1`
+  (should start at `0`). Both are real `plan.md` Phase 9 (or Phase 6, for the host-namespace
+  half) code tasks, not done yet.
 - General `Send()` routing (to a player other than the sender) is a silent no-op — real routing,
   broadcast, and player-ID/payload validation are `plan.md` Phase 10, not started.
 - `EnumSessions()` never finds anything (returns zero results) — real session discovery is
@@ -272,6 +282,22 @@ now maps the real `DPSEND_GUARANTEED` flag to that `reliable` argument instead o
   *difference* the way the ENet smoke tests did - it pins down that the new flag-derived path
   works and gives a regression anchor for Phase 6). Also re-verified both CMake build
   configurations end-to-end and `include/dplay.h`'s zero ENet/SDL identifiers.
+- **Added two decision write-ups to `docs/directplay-design.md`** — documentation only, no code
+  changed, no build/test re-verification needed (nothing under `src/`/`include/`/`tests/` touched):
+  - **Decision 2** (single ENet channel): closes out `plan.md` Phase 5's "decide the default ENet
+    channel layout" task, formally documenting what the already-shipped `EnetDirectPlayTransport`
+    code (`kChannelLimit = 1`, channel `0` everywhere) already assumed.
+  - **Decision 3** (`DPID` width and starting value): resolves both `docs/
+    directplay-callsite-audit.md` §5 (size: `DPID` should be a 4-byte `DWORD`, not the current
+    8-byte `DWORD_PTR`, to match real DirectPlay and `free-eggbert`'s hardcoded-32-byte-stride
+    `NetPlayer` layout assumption) and §6 (starting value: the host's first player must be
+    assigned `DPID` `0`, not `1`, because `free-eggbert/src/event.cpp:4692-4699` populates the
+    local player's slot with its real DPID and `src/network.cpp:262-289`'s `CNetwork::Receive`
+    looks it up via `from == i` at `i == 0`) - traced directly against `../free-eggbert` source
+    (not just the existing audit doc) to confirm both citations still hold. Satisfies `plan.md`
+    Phase 9's acceptance criteria requiring this written decision to exist before Phase 9 code
+    lands. **Not implemented yet**: `include/dplay.h`'s `DPID` typedef is still `DWORD_PTR`, and
+    `DirectPlaySession::nextPlayerId` still starts at `1` - both remain real Phase 6/9 code tasks.
 
 ## 4. Current blocker / main problem
 
@@ -294,16 +320,19 @@ working. The closest thing to an open problem is an **unresolved design decision
 - **Suspected cause**: `DPID` was originally typedef'd as `DWORD_PTR` "to stay ABI-safe on both
   32-bit and 64-bit hosts" (per its own header comment), without accounting for `free-eggbert`'s
   raw-pointer-arithmetic assumption about struct layout.
-  A second, related but separate question (DPID *starting value*, not size) is also open: whether
+  A second, related but separate question (DPID *starting value*, not size) was also open: whether
   DPID `0` must stay reserved (matching real DirectPlay's `DPID_SYSMSG`/`DPID_ALLPLAYERS`
   convention, and `DirectPlaySession::nextPlayerId`'s current placeholder default of `1`) or
   whether it must be assignable to the first real player to match `free-eggbert`'s own
   `CNetwork::Receive`'s `from == i` index-based comparison.
-- **What has already been tried**: nothing yet — this has only been documented (twice, in the
-  audit and again in `plan.md` Phase 9's task list as an explicit "resolve this before
-  implementing" requirement), not acted on. It does not block current work because no code yet
-  depends on the answer (`plan.md` Phase 9, real DPID allocation, has not started —
-  `DirectPlaySession::nextPlayerId` is still an explicitly-labeled placeholder counter).
+- **What has already been tried**: **both questions now have an explicit written decision** —
+  `docs/directplay-design.md` Decision 3 (added this session): `DPID` should become a 4-byte
+  `DWORD` (matching real DirectPlay and `free-eggbert`'s layout assumption), and the host's first
+  player should get `DPID` `0` (matching `free-eggbert`'s apparent assumption, breaking with real
+  DirectPlay's reservation convention). **The decision is written but not yet implemented** —
+  `include/dplay.h`'s typedef and `DirectPlaySession::nextPlayerId`'s initial value are both
+  unchanged. It still does not block current work, since no code yet depends on the answer
+  (`plan.md` Phase 9, real DPID allocation, has not started).
 
 A secondary, much smaller open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet
 path) has never been exercised successfully in this environment, since no `libenet` system
@@ -312,8 +341,10 @@ currently blocking anything, since the vendored path is the proven, working defa
 
 ## 5. Known bugs and limitations
 
-- **Confirmed hazard, not yet fixed**: `DPID` size mismatch (`DWORD_PTR` vs. real DirectPlay's
-  `DWORD`) — see Section 4. `docs/directplay-callsite-audit.md` §5.
+- **Confirmed hazard, decision written, not yet fixed**: `DPID` size mismatch (`DWORD_PTR` vs. real
+  DirectPlay's `DWORD`) — see Section 4. `docs/directplay-callsite-audit.md` §5;
+  `docs/directplay-design.md` Decision 3 records the fix (`DPID` should become `DWORD`) but the
+  typedef itself is unchanged.
 - **Confirmed, not a FreeDirect bug**: `../free-eggbert`'s own DirectPlay lobby/session UI
   (`WM_PHASE_DP_*` handlers in `src/event.cpp`) is unwired — ten empty placeholder bodies, and a
   whole-repository grep confirms `NetCreate`/`NetEnumSessions`/`JoinSession`/`CreateSession`/
@@ -450,29 +481,39 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-With the `DPSEND_GUARANTEED` mapping done, `plan.md` Phase 5's remaining unchecked items are both
-documentation/decision tasks, not code:
+`plan.md` Phase 5 is now done (its only remaining unchecked item, protocol documentation for the
+wire header, is explicitly deferred to Phase 16 by its own annotation). Phase 6 ("Session hosting")
+is next.
 
-1. **Decide the default ENet channel layout and document it** (`plan.md`: "a single channel is
-   likely sufficient given both target games' simple message patterns"). This is arguably already
-   decided in practice - `Listen()`/`Connect()`/`Send()` all already use `kChannelLimit = 1`/channel
-   `0` - but the decision has never been written down with rationale, which `plan.md` explicitly
-   requires.
-   - Files: `docs/directplay-design.md` (new decision entry, matching the existing "Decision 1"
-     format).
-   - Verify: none — documentation task, not code.
+**Open design question to resolve with the user before real Phase 6 code, not just picked
+unilaterally**: `Open(..., DPOPEN_CREATE)` currently always assigns `LoopbackDirectPlayTransport`
+unconditionally (`DirectPlay.cpp`). Phase 6 wants `Open()` to "start the ENet host listener... when
+using `EnetDirectPlayTransport`" - but nothing in `plan.md`/`CLAUDE.md` yet says *how* a caller or
+session picks ENet vs. loopback (a new `Open`/`DirectPlayCreate` parameter? A build-time-only
+choice, e.g. only ever loopback unless `FREE_DIRECT_ENABLE_ENET`? An environment variable?
+Something else?). `free-eggbert`'s own `IDirectPlay2A::Open` call site has no such parameter in
+real DirectPlay's API, so this can't be answered by "what does the game already call" alone - it
+needs a FreeDirect-specific design decision. Resolve this (documented as a new Decision in
+`docs/directplay-design.md`) before implementing backend selection in `Open()`.
 
-2. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
-   - Files: `docs/directplay-design.md` (add a new decision entry, matching the existing
-     "Decision 1" format already in that file).
-   - Verify: none — this is a documentation/decision task, not code.
+Smaller, non-blocked Phase 6 tasks that can proceed regardless of that decision:
 
-After both, Phase 5's only remaining unchecked item is "Add protocol documentation for the header
-layout... to `docs/directplay-protocol.md`", which is itself explicitly deferred to Phase 16 by
-its own `plan.md` annotation - so it does not block moving on. Phase 6 ("Session hosting") is the
-next phase after that - that is where `Open()` first gets logic to actually select
-`EnetDirectPlayTransport` over `LoopbackDirectPlayTransport`, which is a bigger design decision
-than anything in this list and should be scoped out as its own task before writing code.
+1. **Create a session instance GUID (`guidInstance`) when hosting**, if the caller did not already
+   supply one.
+   - Files: `src/directplay/DirectPlay.cpp` (`DirectPlay2AImpl::Open`), possibly
+     `src/directplay/DirectPlaySession.hpp` if session-descriptor storage needs a field for it.
+     Check whether `DPSESSIONDESC2.guidInstance` is already stored/round-tripped anywhere (Phase 2
+     work) before assuming it needs new storage.
+   - Verify: a test opening with `DPOPEN_CREATE` and an all-zero `guidInstance` in the caller's
+     `DPSESSIONDESC2`, asserting the session ends up with a non-zero `guidInstance` (exact
+     mechanism - written back into the caller's struct, or just stored internally - needs
+     checking against what `free-eggbert` actually reads back, if anything).
+
+2. **Store the session descriptor supplied to `Open`** on `DirectPlaySession`, if Phase 2 didn't
+   already cover every field `Open`/`EnumSessions`/hosting will need.
+   - Files: `src/directplay/DirectPlaySession.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`.
+   - Verify: re-read `DirectPlaySession.hpp`'s existing session-descriptor fields first - this task
+     may already be done or mostly done from Phase 2; confirm before writing new code.
 
 ## 9. Do not do yet
 
@@ -486,8 +527,11 @@ than anything in this list and should be scoped out as its own task before writi
   yet (still a stub).
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15) — deliberately
   deferred until more of Phases 5-11 exist to test.
-- Do not silently pick an answer to the DPID-size question — it must be written down explicitly
-  first (task 2 above), not decided implicitly inside implementation code.
+- Do not silently pick a backend-selection strategy for `Open()` (loopback vs. ENet) - it needs its
+  own documented decision (see Section 8's "Open design question") before implementation, the same
+  way the DPID and channel-layout decisions were written down before their consuming code landed.
+- Do not implement `Open()` actually starting a real ENet host/selecting `EnetDirectPlayTransport`
+  before that backend-selection decision is made and written down.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
 - Do not add DirectX API surface, flags, or behavior beyond what `../free-eggbert`/
   `../planetblupi` call sites actually require (`CLAUDE.md` scope policy) — ask before expanding.
@@ -497,10 +541,12 @@ than anything in this list and should be scoped out as its own task before writi
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first. Inspect only the files needed for the first task in "Next smallest tasks"
-(currently: documenting the default ENet channel layout decision in docs/directplay-design.md - a
-documentation task, not code). Do not refactor unrelated code, do not touch
-DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
+Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is next. Before writing
+any Open()-backend-selection code, resolve and document the open design question in Section 8
+("how does a caller/session pick ENet vs. loopback") with the user - do not pick it unilaterally.
+Once that's resolved (or if working on one of the smaller, non-blocked Phase 6 tasks in Section 8
+instead), inspect only the files needed for that one task. Do not refactor unrelated code, do not
+touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
 verified improvement - implement just that one task. Run the relevant build/test command from
 "Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
 considering the task done. Then update NEXT.md to reflect the new state.

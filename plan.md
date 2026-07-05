@@ -953,8 +953,13 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       real backend is wired in where reliable vs. unreliable delivery could actually differ
       observably. Also re-verified both `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds
       end-to-end and that `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Decide the default ENet channel layout (a single channel is likely sufficient given both
-      target games' simple message patterns) and document the decision with rationale.
+- [x] Decide the default ENet channel layout (a single channel is likely sufficient given both
+      target games' simple message patterns) and document the decision with rationale. **Done:**
+      `docs/directplay-design.md` Decision 2 — a single channel (channel `0`, `kChannelLimit = 1`),
+      since `IDirectPlay`/`IDirectPlay2A`'s `Send`/`Receive` have no channel concept at all and
+      neither target game's audited call sites show more than one message stream. Documents a
+      decision already implicit in `EnetDirectPlayTransport`'s existing code (previous tasks),
+      rather than preceding it - no code changed for this task.
 - [x] Add a packet type enum (e.g. `Join`, `JoinAccept`, `JoinReject`, `Data`, `Discovery`,
       `DiscoveryResponse`) for the internal FreeDirect-to-FreeDirect wire protocol. **Done:**
       `DirectPlayWirePacketType` in new `src/directplay/DirectPlayWireProtocol.hpp` — exactly
@@ -1037,7 +1042,10 @@ whichever transport is configured.
       `EnetDirectPlayTransport`.
 - [ ] Assign the host player-ID namespace: decide and document the starting DPID value and
       increment rule for host-allocated players, consistent with Phase 0's finding about
-      `free-eggbert`'s index-based DPID comparison.
+      `free-eggbert`'s index-based DPID comparison. **Written decision now exists** (done ahead of
+      this phase, alongside Phase 9's identical requirement): `docs/directplay-design.md` Decision
+      3 - host's first player gets DPID `0`, subsequent joiners get sequential `1, 2, 3, ...`. The
+      actual wiring into `Open(..., DPOPEN_CREATE)`'s real implementation is still this task's job.
 - [ ] Allow the host to accept incoming client connections up to `dwMaxPlayers`.
 - [ ] Send a join-accepted packet (Phase 5 protocol) to a connecting client once accepted.
 - [ ] Send a join-rejected packet to a connecting client when the session is full or the
@@ -1144,7 +1152,13 @@ Phase 0 DPID-vs-index finding.
       resolve the conflict** with Phase 0's finding that `free-eggbert`'s receive-side code
       compares `from == i` starting at index `0`: document in writing whether the host's first
       real player must be DPID `1` (reserving `0`) or DPID `0` (matching the game's apparent
-      assumption), since these two choices are mutually exclusive.
+      assumption), since these two choices are mutually exclusive. **Written decision now exists**
+      (a prerequisite `plan.md`/`NEXT.md` task, done ahead of this one): `docs/
+      directplay-design.md` Decision 3 resolves this in favor of DPID `0` (matching the game's
+      apparent assumption, not real DirectPlay's reservation convention) — the actual code
+      (`include/dplay.h`'s `DPID` typedef to `DWORD`, and `DirectPlaySession::nextPlayerId`'s
+      initial value from `1` to `0`) is still this task's job, not done yet. Do not mark this box
+      done until that code lands.
 - [ ] Register a local player on `CreatePlayer`, storing it in `DirectPlaySession`'s local-player
       list.
 - [ ] Register a remote player when a join-accepted/player-joined notification arrives from the
@@ -1174,8 +1188,8 @@ Phase 0 DPID-vs-index finding.
       and removes the player from future `EnumSessions`/roster queries.
 
 **Acceptance criteria:** the DPID-vs-index conflict has an explicit written decision in
-`docs/directplay-design.md` merged *before* any other Phase 9 code lands; the three new tests
-pass.
+`docs/directplay-design.md` merged *before* any other Phase 9 code lands (**satisfied**: Decision
+3, merged in the Phase 5-adjacent documentation batch); the three new tests pass.
 
 ---
 
