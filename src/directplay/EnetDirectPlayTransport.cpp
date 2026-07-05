@@ -205,6 +205,21 @@ bool EnetDirectPlayTransport::AssignPendingConnection(DPID id) {
     return true;
 }
 
+bool EnetDirectPlayTransport::RejectPendingConnection() {
+    if (pendingPeers_.empty()) return false;
+
+    // Popped out immediately, same as a successful AssignPendingConnection() - this
+    // peer must never be reconsidered for assignment while its disconnect is in
+    // flight. Graceful (enet_peer_disconnect), not enet_peer_disconnect_now: being
+    // turned away because the session is full is an ordinary, expected outcome, not a
+    // fault (docs/directplay-design.md Decision 9) - the same reasoning Shutdown()
+    // already applies to every peer it tears down.
+    ENetPeer* peer = pendingPeers_.front();
+    pendingPeers_.pop_front();
+    enet_peer_disconnect(peer, 0);
+    return true;
+}
+
 bool EnetDirectPlayTransport::HasDisconnectedPeer() const { return !disconnectedPeerIds_.empty(); }
 
 bool EnetDirectPlayTransport::TakeDisconnectedPeer(DPID* outId) {

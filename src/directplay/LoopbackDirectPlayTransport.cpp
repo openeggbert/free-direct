@@ -44,6 +44,11 @@ bool LoopbackDirectPlayTransport::AssignPendingConnection(DPID /*id*/) {
     return false;
 }
 
+bool LoopbackDirectPlayTransport::RejectPendingConnection() {
+    // No incoming-connection concept, so nothing to reject either.
+    return false;
+}
+
 bool LoopbackDirectPlayTransport::HasDisconnectedPeer() const {
     // No incoming-connection concept, so no disconnect-of-one concept either.
     return false;

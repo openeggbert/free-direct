@@ -1197,8 +1197,16 @@ whichever transport is configured.
 - [ ] Send a join-accepted packet (Phase 5 protocol) to a connecting client once accepted.
 - [ ] Send a join-rejected packet to a connecting client when the session is full or the
       application GUID does not match.
-- [ ] Enforce `dwMaxPlayers` by rejecting new joins once `dwCurrentPlayers` reaches the configured
-      maximum.
+- [x] Enforce `dwMaxPlayers` by rejecting new joins once `dwCurrentPlayers` reaches the configured
+      maximum. **Done:** `docs/directplay-design.md` Decision 9 - a new
+      `IDirectPlayTransport::RejectPendingConnection()` (mirrors `AssignPendingConnection`, no DPID
+      parameter) pops the oldest pending peer and gracefully `enet_peer_disconnect`s it;
+      `DirectPlay2AImpl::Receive()` runs it in a loop after DPID assignment, only when
+      `dwMaxPlayers != 0` (0 = no limit) and the session is at/over the cap. No join-rejected
+      explanation packet yet - that needs per-DPID `Send()` (Phase 10), tracked separately by the
+      two tasks directly above this one. Verified with a real ENet smoke test: clients within the
+      cap connect normally, an excess client observes a genuine `ENET_EVENT_TYPE_DISCONNECT`. Both
+      CMake configs build clean and the 14/14 `tests/directplay_tests.cpp` suite still passes.
 - [x] Update `dwCurrentPlayers` as players join and leave. **Done, after asking the user** how
       the transport should surface "this DPID disconnected" without exposing `ENetPeer*` -
       `docs/directplay-design.md` Decision 8 mirrors Decision 7's pending-connection shape exactly:

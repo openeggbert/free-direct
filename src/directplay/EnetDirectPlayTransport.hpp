@@ -84,6 +84,7 @@ public:
     void Service() override;
     bool HasPendingConnection() const override;
     bool AssignPendingConnection(DPID id) override;
+    bool RejectPendingConnection() override;
     bool HasDisconnectedPeer() const override;
     bool TakeDisconnectedPeer(DPID* outId) override;
     void Shutdown() override;

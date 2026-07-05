@@ -89,6 +89,16 @@ public:
     virtual bool AssignPendingConnection(DPID id) = 0;
 
     /**
+     * @brief Rejects the oldest pending connection (mirrors AssignPendingConnection(),
+     * but admits nothing - there is no DPID to assign to a connection being turned
+     * away) via a graceful disconnect (`docs/directplay-design.md` Decision 9). Returns
+     * `false` (no-op) if there was no pending connection. The rejected peer is never
+     * reported via TakeDisconnectedPeer() - it was never assigned a DPID, so nothing
+     * outside the transport ever knew about it.
+     */
+    virtual bool RejectPendingConnection() = 0;
+
+    /**
      * @brief True if a previously-assigned peer (via AssignPendingConnection()) has
      * since disconnected and not yet been reported via TakeDisconnectedPeer()
      * (`docs/directplay-design.md` Decision 8). A peer that disconnects before ever

@@ -217,10 +217,7 @@ namespace {
             // Assign a real DPID to each pending incoming connection, up to dwMaxPlayers
             // (docs/directplay-design.md Decision 7) - the transport only reports "a peer
             // connected but has no DPID yet"; allocation policy (which counter, the cap,
-            // player-list bookkeeping) stays here, not in the transport. Explicitly
-            // rejecting/disconnecting a pending connection once full is a separate,
-            // still-open plan.md Phase 6 task - left pending (connected at the ENet
-            // level, unassigned) for now, not disconnected.
+            // player-list bookkeeping) stays here, not in the transport.
             if (session_.transport && session_.isHost) {
                 // dwMaxPlayers == 0 means "no limit" (real DirectPlay's documented
                 // convention) - free-eggbert never actually relies on this (it always
@@ -234,6 +231,16 @@ namespace {
                     if (!session_.transport->AssignPendingConnection(newId)) break;
                     session_.remotePlayerIds.push_back(newId);
                     session_.currentPlayers++;
+                }
+                // Session is full for real (dwMaxPlayers != 0 - "0" never rejects
+                // anything, matching the "no limit" convention above): any connection
+                // still pending at this point cannot be assigned, so reject it outright
+                // rather than leaving it connected-but-unassigned forever
+                // (docs/directplay-design.md Decision 9).
+                if (session_.maxPlayers != 0) {
+                    while (session_.currentPlayers >= session_.maxPlayers &&
+                           session_.transport->RejectPendingConnection()) {
+                    }
                 }
             }
             // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on

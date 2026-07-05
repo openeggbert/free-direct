@@ -691,3 +691,63 @@ loop). **Verified for real** with two standalone smoke tests (not committed): (1
 itself could only be verified at the transport level, since `IDirectPlay2A` has no
 player-count-observing method. Both CMake build configurations and the 14/14
 `tests/directplay_tests.cpp` suite (unaffected) re-verified.
+
+---
+
+## Decision 9: rejecting an over-`dwMaxPlayers` pending connection - graceful disconnect, no explanation packet yet
+
+**Status:** Decided and implemented. Closes `plan.md`'s "enforce `dwMaxPlayers` by rejecting new
+joins" task, left open by Decision 7 (which only assigned DPIDs up to the cap and left any excess
+pending forever, undisturbed).
+
+### The question
+
+Once `session_.currentPlayers` reaches `session_.maxPlayers`, what should happen to a connection
+that is still sitting in `pendingPeers_` (connected at the ENet level, never assigned a DPID)?
+Two sub-questions: how does the host actually reject it, and should the disconnect be graceful or
+immediate?
+
+### Decision
+
+A new `IDirectPlayTransport::RejectPendingConnection()` method, mirroring
+`AssignPendingConnection(DPID id)`'s shape exactly but with no `DPID` parameter (there is nothing
+to assign - the connection is being turned away, not admitted): pops the oldest pending peer and
+calls `enet_peer_disconnect(peer, 0)` on it - the same **graceful** disconnect
+`Shutdown()`/`AssignPendingConnection`'s counterpart use elsewhere in this class, not
+`enet_peer_disconnect_now`. Graceful was chosen over immediate because this is an ordinary,
+expected outcome (the session is full), not a fault or a misbehaving peer - the same reasoning
+`Shutdown()` already applies to every peer it tears down. The rejected peer is popped out of
+`pendingPeers_` immediately (so it can never be reconsidered for assignment while its disconnect
+is in flight); `Service()`'s existing `ENET_EVENT_TYPE_DISCONNECT` handling harmlessly finds no
+match for it in `pendingPeers_`/`connectedPeers_` once the disconnect completes, which is correct -
+a rejected connection was never assigned a `DPID`, so (per Decision 8) it must not be reported via
+`TakeDisconnectedPeer()` either; nothing outside the transport ever knew about it.
+
+`DirectPlay2AImpl::Receive()` (`DirectPlay.cpp`) gains a second loop after the existing
+DPID-assignment loop, only entered when there is a *real* cap (`session_.maxPlayers != 0` - `0`
+means "no limit", so nothing is ever rejected in that case) and the session is at or over it:
+repeatedly reject pending connections until none remain.
+
+`LoopbackDirectPlayTransport::RejectPendingConnection()` is trivially `false` - loopback never has
+a pending connection to reject.
+
+**No join-rejected explanation packet is sent** - the rejected peer only observes a disconnect,
+with no way (yet) to know *why*. Sending an actual `DirectPlayWirePacketType::JoinReject` packet
+(`plan.md`'s separate "send a join-rejected packet..." task) needs per-DPID-addressed `Send()`,
+which does not exist yet (`plan.md` Phase 10, per Decision 7's sub-question 3) - a pending
+connection has no DPID to address a packet to in the first place, so that task cannot be
+implemented before DPID-addressed send exists regardless. This decision only covers the
+ENet-level rejection; the explanation packet remains a distinct, still-blocked task.
+
+### Implemented
+
+`src/directplay/DirectPlayTransport.hpp` (`RejectPendingConnection()` added to
+`IDirectPlayTransport`; `LoopbackDirectPlayTransport` implements it trivially, always `false`),
+`src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, and `src/directplay/DirectPlay.cpp`
+(`DirectPlay2AImpl::Receive()`'s new post-assignment rejection loop). **Verified for real** with a
+standalone smoke test (not committed): with `dwMaxPlayers` set to a small cap, more real ENet
+clients connect than fit; the clients within the cap complete normally, and the excess client
+genuinely observes a real `ENET_EVENT_TYPE_DISCONNECT` (not a timeout, not silence) - proof the
+rejection is a real ENet-protocol-level disconnect, not just an internal bookkeeping no-op. Both
+CMake build configurations and the 14/14 `tests/directplay_tests.cpp` suite (unaffected)
+re-verified.
