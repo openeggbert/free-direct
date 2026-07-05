@@ -19,6 +19,8 @@
  */
 #pragma once
 
+#include "dplay.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -67,6 +69,24 @@ public:
      * this a no-op.
      */
     virtual void Service() = 0;
+
+    /**
+     * @brief True if a peer has connected but not yet been assigned a DPID via
+     * AssignPendingConnection() (`docs/directplay-design.md` Decision 7). Backends with
+     * no real incoming-connection concept (e.g. loopback, or a joining-role instance)
+     * always return `false` - DPID allocation is deliberately kept out of the
+     * transport; this only reports the raw connection-shaped fact.
+     */
+    virtual bool HasPendingConnection() const = 0;
+
+    /**
+     * @brief Assigns `id` to the oldest pending connection, moving it from "connected
+     * but unidentified" to "a known peer this transport can be told about again by
+     * DPID" in later Phase 10 addressing work. Returns `false` (no-op) if there was no
+     * pending connection - callers should check HasPendingConnection() first, or treat
+     * a `false` return as "nothing to assign right now."
+     */
+    virtual bool AssignPendingConnection(DPID id) = 0;
 
     /** @brief Tears down all connections and releases backend resources. */
     virtual void Shutdown() = 0;

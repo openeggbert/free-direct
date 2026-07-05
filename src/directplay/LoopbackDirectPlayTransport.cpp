@@ -35,6 +35,15 @@ void LoopbackDirectPlayTransport::Service() {
     // No-op: loopback has no real network events - Send() already delivers synchronously.
 }
 
+bool LoopbackDirectPlayTransport::HasPendingConnection() const {
+    // Loopback has no incoming-connection concept at all - it only ever talks to itself.
+    return false;
+}
+
+bool LoopbackDirectPlayTransport::AssignPendingConnection(DPID /*id*/) {
+    return false;
+}
+
 void LoopbackDirectPlayTransport::Shutdown() { buffered_.clear(); }
 
 } // namespace free_direct_directplay

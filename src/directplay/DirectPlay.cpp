@@ -194,6 +194,28 @@ namespace {
             // Service() is a no-op; EnetDirectPlayTransport's drains pending ENet events
             // (peer connect/disconnect bookkeeping) non-blockingly.
             if (session_.transport) session_.transport->Service();
+            // Assign a real DPID to each pending incoming connection, up to dwMaxPlayers
+            // (docs/directplay-design.md Decision 7) - the transport only reports "a peer
+            // connected but has no DPID yet"; allocation policy (which counter, the cap,
+            // player-list bookkeeping) stays here, not in the transport. Explicitly
+            // rejecting/disconnecting a pending connection once full is a separate,
+            // still-open plan.md Phase 6 task - left pending (connected at the ENet
+            // level, unassigned) for now, not disconnected.
+            if (session_.transport && session_.isHost) {
+                // dwMaxPlayers == 0 means "no limit" (real DirectPlay's documented
+                // convention) - free-eggbert never actually relies on this (it always
+                // sets a concrete MAXNETPLAYER), but nothing else validates dwMaxPlayers
+                // anywhere in this codebase yet, so this is the one place that gives the
+                // field its first real meaning; getting the well-known zero case wrong
+                // here would be a landmine for later, not a deliberate scope decision.
+                while ((session_.maxPlayers == 0 || session_.currentPlayers < session_.maxPlayers) &&
+                       session_.transport->HasPendingConnection()) {
+                    const DPID newId = session_.nextPlayerId++;
+                    if (!session_.transport->AssignPendingConnection(newId)) break;
+                    session_.remotePlayerIds.push_back(newId);
+                    session_.currentPlayers++;
+                }
+            }
             // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
             // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
             // be exercised directly by tests/directplay_tests.cpp without needing a way to

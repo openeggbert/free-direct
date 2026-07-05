@@ -22,16 +22,24 @@
  * (no listen address) and calls `enet_host_connect` (implemented together, since a
  * created-but-never-connected client host is not independently testable); `Shutdown()`
  * (and the destructor) perform a real graceful disconnect (`enet_peer_disconnect` +
- * a bounded wait for `ENET_EVENT_TYPE_DISCONNECT`) before destroying whatever
- * host/peer `Listen()`/`Connect()` created; `Send()` sends a real ENet packet
- * (`ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED`, selected by its
- * `reliable` parameter) to the single `peer_` this class tracks; `Service()`
- * (`docs/directplay-design.md` Decision 6) drains pending ENet events - adopting a
- * newly-connected peer as `peer_` (host role) if none is tracked yet, clearing `peer_`
- * on disconnect, and discarding (not delivering) received packets, since transport-level
- * `Receive()` is still an honest `false` stub - no `plan.md` task covers it yet.
- * All of this is scoped to the single `peer_` this class tracks; multiple connected
- * peers (a real multi-player host) is Phase 6/10's job.
+ * a bounded wait for `ENET_EVENT_TYPE_DISCONNECT`, generalized to every peer this
+ * instance still knows about - see below) before destroying the host; `Send()` sends a
+ * real ENet packet (`ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED`,
+ * selected by its `reliable` parameter) to `hostPeer_` (client role only - see below);
+ * `Service()` (`docs/directplay-design.md` Decision 6) drains pending ENet events.
+ *
+ * Hosting (`Listen()`) and joining (`Connect()`) are not symmetric
+ * (`docs/directplay-design.md` Decision 7), and are tracked separately:
+ * - **Joining role**: `hostPeer_`, a single `ENetPeer*` - the one host this instance
+ *   connected to. `Send()`/`Shutdown()`/`HasPeer()` all operate on this field only.
+ * - **Hosting role**: `connectedPeers_` (a `DPID → ENetPeer*` map, populated only via
+ *   `AssignPendingConnection()` - the transport never allocates a DPID itself) and
+ *   `pendingPeers_` (a queue of connected-but-unidentified peers, populated by
+ *   `Service()` on `ENET_EVENT_TYPE_CONNECT`). A hosting instance's `hostPeer_` stays
+ *   null forever, so `Send()`/`Receive()` always return `false` for it today - real
+ *   per-DPID-addressed send/receive to a specific connected peer is `plan.md` Phase
+ *   10's job, not this one's (this is an intentional, documented limitation, not a
+ *   silent regression - see Decision 7's sub-question 3).
  * `Open(..., DPOPEN_CREATE)` constructs this class under `FREE_DIRECT_ENABLE_ENET`, calls
  * `Listen(kDefaultDirectPlayEnetPort)` when hosting, and calls `Service()` once per
  * `IDirectPlay2A::Receive()` call - see `kDefaultDirectPlayEnetPort` below.
@@ -42,7 +50,9 @@
 #include "DirectPlayTransport.hpp"
 
 #include <cstdint>
+#include <deque>
 #include <enet/enet.h>
+#include <unordered_map>
 
 namespace free_direct_directplay {
 
@@ -67,6 +77,8 @@ public:
     bool Send(const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Service() override;
+    bool HasPendingConnection() const override;
+    bool AssignPendingConnection(DPID id) override;
     void Shutdown() override;
 
     /// True once this instance's constructor successfully joined the process-wide
@@ -82,17 +94,31 @@ public:
     /// true.
     bool HasHost() const { return host_ != nullptr; }
 
-    /// True once a peer_ is tracked: either Connect() queued a connection attempt (does
-    /// *not* by itself mean that attempt completed - checking ENetPeer::state directly
-    /// is out of scope), or Service() adopted a newly-connected peer on the hosting
-    /// side (this *does* mean a real connection completed, since Service() only adopts
-    /// on a genuine ENET_EVENT_TYPE_CONNECT event).
-    bool HasPeer() const { return peer_ != nullptr; }
+    /// True once Connect() has queued a connection attempt (does *not* by itself mean
+    /// that attempt completed - checking ENetPeer::state directly is out of scope) or
+    /// Service() adopted the resulting connection (this *does* mean it completed).
+    /// Client-role (Connect()) only - a hosting instance's hostPeer_ stays null
+    /// forever; use HasPendingConnection()/ConnectedPeerCount() for the hosting role
+    /// (docs/directplay-design.md Decision 7).
+    bool HasPeer() const { return hostPeer_ != nullptr; }
+
+    /// Number of peers this instance has assigned a DPID to via AssignPendingConnection()
+    /// (hosting role only). Test-only purpose, mirroring HasHost()/HasPeer().
+    std::size_t ConnectedPeerCount() const { return connectedPeers_.size(); }
 
 private:
     bool enetReady_ = false;
+    /// True once Listen() has succeeded - distinguishes the hosting role from the
+    /// joining role for Service()'s CONNECT/DISCONNECT handling, since both roles
+    /// share the same host_/Service() code path but track peers differently.
+    bool listening_ = false;
     ENetHost* host_ = nullptr;
-    ENetPeer* peer_ = nullptr;
+    /// Joining-role only (Connect()) - the one host this instance connected to.
+    ENetPeer* hostPeer_ = nullptr;
+    /// Hosting-role only (Listen()) - peers with an assigned DPID.
+    std::unordered_map<DPID, ENetPeer*> connectedPeers_;
+    /// Hosting-role only (Listen()) - connected peers not yet assigned a DPID.
+    std::deque<ENetPeer*> pendingPeers_;
 };
 
 } // namespace free_direct_directplay

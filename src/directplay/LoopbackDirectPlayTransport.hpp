@@ -41,6 +41,8 @@ public:
     bool Send(const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Service() override;
+    bool HasPendingConnection() const override;
+    bool AssignPendingConnection(DPID id) override;
     void Shutdown() override;
 
 private:

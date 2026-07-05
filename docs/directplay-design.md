@@ -501,3 +501,121 @@ test confirmed the connect/disconnect bookkeeping directly: a first client is ad
 (`HasPeer()` becomes `true`); a second, concurrently-connecting client is not adopted (no
 corruption of the existing single-peer tracking); the first client's graceful `Shutdown()` is
 observed and clears `HasPeer()` back to `false`.
+
+---
+
+## Decision 7: multi-peer hosting via a DPID-keyed peer map, with DPID assignment left outside the transport
+
+**Status:** Decided and implemented. Asked of, and confirmed by, the user directly: a
+`DPID → ENetPeer*` map (over a plain list, or documenting-only). This elaborates that choice with
+the concrete mechanics it requires - the question as asked did not by itself resolve several real
+sub-questions the design forces, so those are resolved here too, following the same pattern as
+every other Decision in this document.
+
+### The question
+
+`EnetDirectPlayTransport` today tracks exactly one `peer_` total, shared ambiguously between the
+hosting role (`Listen()`) and the joining role (`Connect()`). `plan.md` Phase 6 wants the host to
+accept multiple incoming client connections, up to `dwMaxPlayers`. What replaces `peer_`, and how
+does DPID assignment - which is `DirectPlaySession`'s job (`nextPlayerId`, shared with local
+`CreatePlayer()` calls so DPIDs never collide) - reach a class that is intentionally
+backend-agnostic and knows nothing about DPID/session semantics?
+
+### Sub-question 1: hosting and joining are not symmetric
+
+A single `EnetDirectPlayTransport` instance is used *either* as a host (`Listen()`) *or* as a
+joining client (`Connect()`) - never both (each method already refuses to run if `host_` is
+already set). The two roles have fundamentally different peer cardinality: a joining client has
+exactly one relationship (to the host it connected to); a host can have zero-to-many. Trying to
+force both into one `DPID → ENetPeer*` map would require the client role to also carry a DPID for
+"the host" before it has one (DPID assignment for a joining client happens later, via a
+join-accepted packet - `plan.md`'s next two Phase 6 tasks, not implemented yet).
+
+**Decision:** keep them separate. `hostPeer_` (renamed from `peer_`) remains a single-`ENetPeer*`
+field, used *only* by the client role (`Connect()`/`Send()`/`Shutdown()` for that role, `HasPeer()`
+still reports on it - unchanged behavior for every currently-passing test). A new
+`std::unordered_map<DPID, ENetPeer*> connectedPeers_` is used *only* by the host role, populated
+only after a caller explicitly assigns a DPID (sub-question 2).
+
+### Sub-question 2: where does an incoming peer's DPID come from?
+
+`Service()`'s `ENET_EVENT_TYPE_CONNECT` handling cannot allocate a DPID itself: `DirectPlaySession
+::nextPlayerId` is the single shared counter that must also serve local `CreatePlayer()` calls
+(so a local player and a remote peer never end up with the same DPID), and that counter lives in
+`DirectPlaySession` (`DirectPlay.cpp`), not in the transport - moving it into the transport would
+violate the standing invariant that `IDirectPlayTransport` implementations stay backend-agnostic
+and know nothing about DPID/session semantics (`NEXT.md`'s architecture notes; this decision
+narrows, but does not remove, that boundary - see "What stays out of the transport" below).
+
+**Decision:** a newly-connected, not-yet-assigned peer is queued in a new
+`std::deque<ENetPeer*> pendingPeers_` (host role only). Two new `IDirectPlayTransport` methods let
+a caller resolve a pending connection *without the transport ever exposing an `ENetPeer*`* (which
+would leak an ENet type across the abstraction boundary the whole `IDirectPlayTransport`
+abstraction exists to prevent):
+
+- `virtual bool HasPendingConnection() const = 0;` - true if at least one connected-but-unassigned
+  peer is waiting.
+- `virtual bool AssignPendingConnection(DPID id) = 0;` - pops the oldest pending peer and registers
+  it under `id`; returns `false` if there was no pending connection to assign.
+
+`DirectPlay2AImpl::Receive()` (already the one call site `Service()` piggybacks on, per Decision
+6) is extended: after `Service()`, while `session_.isHost` and the transport reports a pending
+connection and `session_.currentPlayers < session_.maxPlayers`, allocate the next DPID
+(`session_.nextPlayerId++`), call `AssignPendingConnection(id)`, add `id` to
+`session_.remotePlayerIds`, and increment `session_.currentPlayers`. If the cap is already
+reached, the pending connection is simply left pending (connected at the ENet level, but never
+assigned a DPID) - explicitly rejecting/disconnecting it once full is `plan.md`'s separate
+"enforce `dwMaxPlayers` by rejecting new joins" task, not this one's. Decrementing
+`currentPlayers`/removing from `remotePlayerIds` on disconnect is likewise `plan.md`'s separate
+"update `dwCurrentPlayers` as players join and leave" task - this decision's `Service()` only
+removes the ENet-level peer bookkeeping (`connectedPeers_`/`pendingPeers_`) on disconnect, not the
+DirectPlay-level player-count bookkeeping.
+
+`LoopbackDirectPlayTransport` implements both new methods trivially: `HasPendingConnection()`
+always `false`, `AssignPendingConnection()` always `false` - loopback has no concept of an
+incoming connection to accept.
+
+### Sub-question 3: what does `Send()`/`Receive()` mean for a host with multiple peers now?
+
+Before this decision, `Service()` adopted the *first* connecting peer into the single `peer_`
+field regardless of role, which made `Send()` incidentally work for a host's first (and only)
+connected client - an accident of the single-peer model, not a designed capability (already
+flagged in earlier comments as "a host with multiple connected peers... needs its own per-peer
+addressing, which is Phase 6/10's job"). This decision makes that accident go away: a host-role
+instance's `hostPeer_` is now always null (host role never touches it), so `Send()`/`Receive()`
+return `false` for a `Listen()`-ed instance unconditionally, regardless of how many peers are in
+`connectedPeers_`. **This is an intentional, documented behavior change, not a silent regression**
+- no committed test exercised host-role `Send()` before this decision (only connection/disconnect
+completion were tested that way), and per-DPID-addressed `Send()`/`Receive()` for a multi-peer
+host is explicitly `plan.md` Phase 10's job.
+
+### What stays out of the transport
+
+`EnetDirectPlayTransport` now knows about `DPID` as an opaque map key (it already did, in a
+narrower sense, for `DirectPlayWireProtocol.hpp`'s wire header fields) - but it never allocates
+one, never validates one against session state (`dwMaxPlayers`, duplicate detection, etc.), and
+never decides *whether* to accept a pending connection. All of that policy stays in
+`DirectPlay.cpp`/`DirectPlaySession`, exactly matching the existing boundary. The transport's job
+stays "move bytes and report connection-shaped facts (pending, assigned, gone)"; DirectPlay-level
+meaning is layered on top, same as before.
+
+### Implemented
+
+`src/directplay/DirectPlayTransport.hpp` (`HasPendingConnection()`/`AssignPendingConnection(DPID)`
+added to `IDirectPlayTransport`; `LoopbackDirectPlayTransport` implements both trivially, always
+`false`), `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp` (`hostPeer_`/`connectedPeers_`/
+`pendingPeers_` split, `Service()`'s `CONNECT`/`DISCONNECT` handling updated for both roles,
+`Send()` now always `false` for a hosting-role instance, `Shutdown()` generalized to disconnect
+every known peer), and `src/directplay/DirectPlay.cpp` (`DirectPlay2AImpl::Receive()` extends its
+`Service()` call with the DPID-assignment loop, gated on `dwMaxPlayers` with the `0`-means-
+unlimited real-DirectPlay convention). **Verified for real** with two standalone smoke tests (not
+committed): (1) directly against `EnetDirectPlayTransport`, three real ENet clients all connect
+and queue as pending; two are assigned DPIDs (simulating a cap), the third stays pending;
+disconnecting one of the two assigned peers correctly shrinks `connectedPeers_` without disturbing
+the still-pending third, which is then assigned successfully. (2) End-to-end through the real
+`Open()`/`CreatePlayer()`/`Receive()` path: two independent real ENet clients both complete a
+genuine connection to the same hosted session simultaneously - impossible under the previous
+single-`peer_` model. `dwMaxPlayers` enforcement itself is verified at the transport level only,
+since `IDirectPlay2A` has no player-count-observing method to check it through end-to-end. Both
+CMake build configurations and the 14/14 `tests/directplay_tests.cpp` suite (unaffected)
+re-verified throughout.

@@ -1139,7 +1139,46 @@ whichever transport is configured.
       this phase, alongside Phase 9's identical requirement): `docs/directplay-design.md` Decision
       3 - host's first player gets DPID `0`, subsequent joiners get sequential `1, 2, 3, ...`. The
       actual wiring into `Open(..., DPOPEN_CREATE)`'s real implementation is still this task's job.
-- [ ] Allow the host to accept incoming client connections up to `dwMaxPlayers`.
+- [x] Allow the host to accept incoming client connections up to `dwMaxPlayers`. **Done, after
+      asking the user** (DPID-keyed peer map, chosen over a plain list or documentation-only):
+      `docs/directplay-design.md` Decision 7 covers the full design, including sub-questions the
+      literal ask didn't resolve by itself (host/client role asymmetry, where DPID assignment
+      comes from without leaking `ENetPeer*` out of the transport, what `Send()`/`Receive()` mean
+      for a multi-peer host). `EnetDirectPlayTransport` now splits `peer_` into `hostPeer_`
+      (joining role only, unchanged behavior) and `connectedPeers_`
+      (`std::unordered_map<DPID, ENetPeer*>`) + `pendingPeers_` (`std::deque<ENetPeer*>`, hosting
+      role only). Two new `IDirectPlayTransport` methods -
+      `HasPendingConnection()`/`AssignPendingConnection(DPID)` - let a caller resolve a pending
+      connection without the transport ever exposing an `ENetPeer*`. `DirectPlay2AImpl::Receive()`
+      (`DirectPlay.cpp`) extends its existing `Service()` call (Decision 6) with a loop:
+      while hosting, under `dwMaxPlayers` (`0` correctly means "no limit", matching real
+      DirectPlay - discovered this was never validated anywhere in the codebase before), and a
+      pending connection exists, allocate the next DPID (`session_.nextPlayerId++`), assign it,
+      and record it in `session_.remotePlayerIds`/`session_.currentPlayers`. A pending connection
+      left over the cap stays connected-but-unassigned - explicit rejection is the separate,
+      still-open "enforce `dwMaxPlayers` by rejecting new joins" task, not this one's; likewise
+      decrementing `currentPlayers`/removing from `remotePlayerIds` on disconnect is the separate
+      "update `dwCurrentPlayers` as players join and leave" task. `Send()`/`Receive()` on a
+      hosting-role instance now always return `false` (no single implicit recipient exists with
+      potentially many `connectedPeers_`) - an intentional, documented behavior change from the
+      old single-`peer_` model's incidental single-peer send, not a silent regression (no
+      committed test exercised it). `Shutdown()` generalizes its graceful-disconnect loop to every
+      peer this instance still knows about (`hostPeer_`, all of `connectedPeers_`, all of
+      `pendingPeers_`), not just one. **Verified for real** with two standalone smoke tests (not
+      committed): (1) directly against `EnetDirectPlayTransport` with three real ENet clients -
+      all three genuinely connect and queue as pending; two are assigned DPIDs (simulating a cap),
+      the third stays pending; disconnecting one of the two assigned peers correctly shrinks
+      `connectedPeers_` (removal by `ENetPeer*` match, not insertion order) without disturbing the
+      still-pending third; the previously-pending third is then assigned successfully; assigning
+      with nothing pending correctly fails. (2) End-to-end through the real, public
+      `Open()`/`CreatePlayer()`/`Receive()` path: two independent real ENet clients both complete
+      a genuine connection to the same hosted session simultaneously - something the previous
+      single-`peer_` model could not do. (`IDirectPlay2A` has no player-count-observing method in
+      this narrow subset, so the `dwMaxPlayers`-cap-enforcement logic itself is verified at the
+      transport level, not through this end-to-end path.) Also re-verified both CMake build
+      configurations (`ENET=OFF`/`ON`) end-to-end, the 14/14 `tests/directplay_tests.cpp` suite
+      (unaffected - no committed test touches multi-peer hosting), and that `include/dplay.h` has
+      zero ENet/SDL identifiers.
 - [ ] Send a join-accepted packet (Phase 5 protocol) to a connecting client once accepted.
 - [ ] Send a join-rejected packet to a connecting client when the session is full or the
       application GUID does not match.
