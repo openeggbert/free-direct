@@ -815,7 +815,33 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       re-verified both the `FREE_DIRECT_ENABLE_ENET=ON` CMake build (fresh configure+build) and the
       default `OFF` build, re-ran the 11/11 `tests/directplay_tests.cpp` suite (unaffected), and
       re-confirmed `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Add ENet host creation (`enet_host_create` in listen mode) for the hosting role.
+- [x] Add ENet host creation (`enet_host_create` in listen mode) for the hosting role. **Done:**
+      `EnetDirectPlayTransport::Listen(std::uint16_t port)` now calls `enet_host_create` with
+      `ENetAddress{ENET_HOST_ANY, port}`, a placeholder `kMaxPeers = 32`, and `kChannelLimit = 1`
+      (both provisional - not derived from a specific `free-eggbert`/`planetblupi` requirement;
+      the channel count in particular is still pending the separate, still-unchecked "decide the
+      default ENet channel layout" task below, and `kMaxPeers` is pending Phase 6's real
+      `DPSESSIONDESC2::dwMaxPlayers` wiring). Returns `false` (no host created) if
+      `enet_initialize()` never succeeded for this instance, or if a host already exists (prevents
+      a silent leak/replace on a second `Listen()` call). `IDirectPlayTransport::Listen()`'s
+      signature changed from no-argument to `Listen(std::uint16_t port)` - the only two overrides
+      (`LoopbackDirectPlayTransport`, which ignores the new parameter, and this one) were updated;
+      grepped and confirmed there were zero callers of the old signature anywhere in the codebase
+      (Loopback's `Listen()`/`Connect()` are themselves never called yet - `Open()` only uses
+      `Send()`/`Receive()`/`Shutdown()` on the transport it creates), so this was a safe signature
+      change with no call-site fallout. Also added a `HasHost()` accessor (test-only purpose) and
+      made `Shutdown()`/the destructor actually destroy the `ENetHost` `Listen()` created
+      (`enet_host_destroy`) - necessary cleanup for the resource this task starts creating, not a
+      separate task. **Verified for real** (not just "returned true") with a standalone whitebox
+      smoke test compiled outside the repo (not committed): `Listen()` creates a host; a second
+      `Listen()` call while already hosting correctly fails; a genuine raw ENet client
+      (`enet_host_connect` to `127.0.0.1:<port>`) completes a real handshake with the host `Listen()`
+      created, observed via `ENET_EVENT_TYPE_CONNECT` on both sides after servicing both hosts (the
+      test reaches the private `host_` member via a `#define private public` whitebox trick, since
+      there is no public "service this host" method yet - that is a later task). Also re-verified
+      both the default (`FREE_DIRECT_ENABLE_ENET=OFF`) and `ON` CMake builds end-to-end, re-ran the
+      11/11 `tests/directplay_tests.cpp` suite (unaffected), and re-confirmed `include/dplay.h` has
+      zero ENet/SDL identifiers.
 - [ ] Add ENet client creation (`enet_host_create` with no listen address) for the joining role.
 - [ ] Add ENet peer connection (`enet_host_connect`) for the joining role.
 - [ ] Add ENet disconnect handling (`enet_peer_disconnect` plus processing the resulting

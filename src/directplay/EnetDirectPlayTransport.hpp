@@ -14,23 +14,27 @@
  * ever included by `.cpp` files (as this one is, today) is allowed to name ENet types
  * directly - the policy bans ENet from reaching `include/`, not from internal headers.
  *
- * The constructor/destructor now do real work: they join/leave a process-wide
+ * The constructor/destructor do real work: they join/leave a process-wide
  * `enet_initialize()`/`enet_deinitialize()` reference count (see the `.cpp` file),
  * since ENet requires that pair to be called exactly once per process, not once per
  * instance - multiple `EnetDirectPlayTransport` instances (e.g. a host and a client
- * transport in the same process) must share one real init/deinit pair. Every other
- * method is still an honest stub for this task: all backend-selecting/routing
- * behavior (Open()) still uses `LoopbackDirectPlayTransport` exclusively, so
- * returning `false` here (rather than a fake success) does not regress any
- * currently-reachable code path. Real ENet host/peer creation, connect, send,
- * receive, and disconnect handling are separate, later tasks in this same `plan.md`
- * Phase 5.
+ * transport in the same process) must share one real init/deinit pair. `Listen()` now
+ * does real work too: it creates a real `ENetHost` via `enet_host_create` in listen
+ * mode. `Connect()`/`Send()`/`Receive()` are still honest stubs - all
+ * backend-selecting/routing behavior (`Open()`) still uses
+ * `LoopbackDirectPlayTransport` exclusively, so returning `false` from them (rather
+ * than a fake success) does not regress any currently-reachable code path. `Shutdown()`
+ * (and the destructor) now destroy the `ENetHost` created by `Listen()`, if any -
+ * cleanup for a resource this class creates isn't a separate task, it's the other half
+ * of creating it. Real client host/peer creation, connect, send, receive, and
+ * disconnect handling are separate, later tasks in this same `plan.md` Phase 5.
  * @note Status: STUB
  */
 #pragma once
 
 #include "DirectPlayTransport.hpp"
 
+#include <cstdint>
 #include <enet/enet.h>
 
 namespace free_direct_directplay {
@@ -44,7 +48,7 @@ public:
     EnetDirectPlayTransport();
     ~EnetDirectPlayTransport() override;
 
-    bool Listen() override;
+    bool Listen(std::uint16_t port) override;
     bool Connect() override;
     bool Send(const void* data, std::size_t size) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
@@ -55,6 +59,12 @@ public:
     /// Exists so tests can observe real init behavior without needing a way to drive
     /// Listen()/Connect() yet (both are still stubs - see the class comment above).
     bool IsEnetReady() const { return enetReady_; }
+
+    /// True once Listen() has created a real ENetHost that has not yet been torn down
+    /// by Shutdown(). Exists purely so a test can observe real host-creation behavior
+    /// directly - there is no other public way to tell a genuinely-created ENetHost
+    /// apart from Listen() having merely returned true.
+    bool HasHost() const { return host_ != nullptr; }
 
 private:
     bool enetReady_ = false;

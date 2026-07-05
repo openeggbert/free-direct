@@ -34,6 +34,8 @@ EnetDirectPlayTransport::EnetDirectPlayTransport() {
 }
 
 EnetDirectPlayTransport::~EnetDirectPlayTransport() {
+    Shutdown();
+
     if (!enetReady_) return;
     std::lock_guard<std::mutex> lock(g_enetLifecycleMutex);
     if (--g_enetLiveInstances == 0) {
@@ -42,7 +44,24 @@ EnetDirectPlayTransport::~EnetDirectPlayTransport() {
     }
 }
 
-bool EnetDirectPlayTransport::Listen() { return false; }
+bool EnetDirectPlayTransport::Listen(std::uint16_t port) {
+    if (!enetReady_ || host_) return false;
+
+    ENetAddress address;
+    address.host = ENET_HOST_ANY;
+    address.port = port;
+
+    // Peer count and channel limit are provisional placeholders, not derived from a
+    // specific free-eggbert/planetblupi requirement: plan.md's "decide the default
+    // ENet channel layout" task (still unchecked) and Phase 6's real
+    // DPSESSIONDESC2::dwMaxPlayers wiring are what should eventually replace these
+    // constants.
+    constexpr std::size_t kMaxPeers = 32;
+    constexpr std::size_t kChannelLimit = 1;
+
+    host_ = enet_host_create(&address, kMaxPeers, kChannelLimit, 0, 0);
+    return host_ != nullptr;
+}
 
 bool EnetDirectPlayTransport::Connect() { return false; }
 
@@ -53,6 +72,11 @@ bool EnetDirectPlayTransport::Receive(void* /*buffer*/, std::size_t /*bufferSize
     return false;
 }
 
-void EnetDirectPlayTransport::Shutdown() {}
+void EnetDirectPlayTransport::Shutdown() {
+    if (host_) {
+        enet_host_destroy(host_);
+        host_ = nullptr;
+    }
+}
 
 } // namespace free_direct_directplay

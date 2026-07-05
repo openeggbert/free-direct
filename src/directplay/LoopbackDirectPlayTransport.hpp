@@ -36,7 +36,7 @@ namespace free_direct_directplay {
  */
 class LoopbackDirectPlayTransport final : public IDirectPlayTransport {
 public:
-    bool Listen() override;
+    bool Listen(std::uint16_t port) override;
     bool Connect() override;
     bool Send(const void* data, std::size_t size) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;

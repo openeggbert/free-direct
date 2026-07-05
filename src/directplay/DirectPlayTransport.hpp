@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace free_direct_directplay {
 
@@ -33,8 +34,12 @@ class IDirectPlayTransport {
 public:
     virtual ~IDirectPlayTransport() = default;
 
-    /** @brief Starts hosting, so future peers can Connect() to this transport. */
-    virtual bool Listen() = 0;
+    /**
+     * @brief Starts hosting on `port`, so future peers can Connect() to this transport.
+     * `port` is meaningless to backends with no real network concept (e.g. loopback),
+     * which accept and ignore it.
+     */
+    virtual bool Listen(std::uint16_t port) = 0;
 
     /** @brief Connects to a host previously started with Listen(). */
     virtual bool Connect() = 0;

@@ -9,7 +9,7 @@
 
 namespace free_direct_directplay {
 
-bool LoopbackDirectPlayTransport::Listen() { return true; }
+bool LoopbackDirectPlayTransport::Listen(std::uint16_t /*port*/) { return true; }
 
 bool LoopbackDirectPlayTransport::Connect() { return true; }
 
