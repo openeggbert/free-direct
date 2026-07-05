@@ -889,7 +889,27 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds end-to-end, the 11/11
       `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero
       ENet/SDL identifiers.
-- [ ] Add reliable packet send using `ENET_PACKET_FLAG_RELIABLE`.
+- [x] Add reliable packet send using `ENET_PACKET_FLAG_RELIABLE`. **Done:**
+      `EnetDirectPlayTransport::Send(data, size)` now calls `enet_packet_create(data, size,
+      ENET_PACKET_FLAG_RELIABLE)`, `enet_peer_send(peer_, 0, packet)` (channel `0` - the single
+      channel `Listen()`/`Connect()` already assume via `kChannelLimit = 1`; the "decide the
+      default ENet channel layout" task below remains open and unchanged by this), then
+      `enet_host_flush(host_)` so the packet is actually pushed out promptly rather than waiting
+      for the next service call. Fails cleanly (`false`, no crash, no leaked packet) if there is
+      no `peer_` yet, or if `enet_packet_create`/`enet_peer_send` themselves fail - scoped, like
+      `Shutdown()`'s disconnect handling, to the single `peer_` this class tracks (the one
+      `Connect()` created); a host with multiple connected peers is Phase 6/10's job, not this
+      one's. `Receive()` is deliberately left as the existing `false` stub - `plan.md` Phase 5 has
+      no separate "implement transport-level receive" checkbox (confirmed by re-reading this
+      phase's full task list); real receive-side wiring is implied by later phases, not this task.
+      **Verified for real**, not just "returned true", with a standalone whitebox smoke test (not
+      committed): a real `Listen()`/`Connect()` pair establishes a connection; the client's
+      `Send()` transmits a payload that the server, serviced independently via raw
+      `enet_host_service`, receives as a genuine `ENET_EVENT_TYPE_RECEIVE` event with the exact
+      same bytes (`memcmp`-verified); `Send()` on an instance with no `peer_` (a lonely
+      `Listen()`-only host) fails cleanly rather than crashing. Also re-verified the
+      `FREE_DIRECT_ENABLE_ENET=ON` CMake build end-to-end, the 11/11 `tests/directplay_tests.cpp`
+      suite (unaffected), and that `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Add unreliable packet send **only if needed**: Phase 0 found every observed `free-eggbert`
       `Send` call site uses a truthy flag that collapses to `DPSEND_GUARANTEED`, so unreliable send
       may not be required at all. Re-check the Phase 0 audit and ask the user before implementing

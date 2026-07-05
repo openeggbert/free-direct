@@ -25,11 +25,11 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
     with `LoopbackDirectPlayTransport` (implemented, in-process, no sockets) and
     `EnetDirectPlayTransport` (real `enet_initialize`/`enet_deinitialize` process-wide lifecycle,
     real host creation via `Listen(port)`, real client creation + peer connection via
-    `Connect(address, port)`, and real graceful disconnect in `Shutdown()`; `Send`/`Receive` still
-    honest `false` stubs; not yet selected by `Open()`) as concrete backends.
-    `IDirectPlayTransport::Listen()`/`Connect()` now take `std::uint16_t port` /
-    `(const char* address, std::uint16_t port)` parameters (both were no-argument before this
-    phase).
+    `Connect(address, port)`, real graceful disconnect in `Shutdown()`, and real reliable send via
+    `Send()`; `Receive` still an honest `false` stub - no separate `plan.md` Phase 5 task covers
+    it; not yet selected by `Open()`) as concrete backends. `IDirectPlayTransport::Listen()`/
+    `Connect()` now take `std::uint16_t port` / `(const char* address, std::uint16_t port)`
+    parameters (both were no-argument before this phase).
   - `plan.md` is the authoritative English task list (every task atomic, one thing each);
     `CLAUDE.md` is the standing project charter/policy; this file (`NEXT.md`) is the living status
     snapshot.
@@ -78,20 +78,21 @@ defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHead
 `EnetDirectPlayTransport` class skeleton, now with a real process-wide
 `enet_initialize`/`enet_deinitialize` reference count in its constructor/destructor, real ENet
 host creation in `Listen(port)`, real client creation + peer connection in `Connect(address,
-port)`, and real graceful disconnect handling in `Shutdown()` - a `Listen()`-created server and a
-`Connect()`-created client (both real `EnetDirectPlayTransport` instances) were verified to
-complete a genuine ENet handshake, and the server was verified to observe a genuine
-`ENET_EVENT_TYPE_DISCONNECT` when the client's `Shutdown()` gracefully disconnects.
+port)`, real graceful disconnect handling in `Shutdown()`, and real reliable send in `Send()` -
+verified end-to-end: a `Listen()`-created server and a `Connect()`-created client complete a
+genuine handshake, the server observes a real `ENET_EVENT_TYPE_DISCONNECT` when the client's
+`Shutdown()` runs, and a payload sent via the client's `Send()` arrives byte-for-byte at the
+server as a real `ENET_EVENT_TYPE_RECEIVE`.
 
 **What does not work yet / is not implemented**:
-- `EnetDirectPlayTransport` — real lifecycle, `Listen()` (host creation), `Connect()` (client
-  creation + peer connection), and `Shutdown()` (graceful disconnect) exist and are verified
-  end-to-end against each other, but `Send`/`Receive` still both return `false` - no real
-  send/receive exists yet, and nothing services a host's events outside of a connection/disconnect
-  attempt (no general "pump" method exists - that's implied by the Send/Receive tasks).
-  `DirectPlay2AImpl::Open()` still unconditionally uses `LoopbackDirectPlayTransport`; nothing
-  constructs an `EnetDirectPlayTransport` anywhere outside its own smoke tests. There is currently
-  no networked (cross-process) DirectPlay of any kind — only same-object loopback self-send works.
+- `EnetDirectPlayTransport` — real lifecycle, `Listen()`, `Connect()`, `Shutdown()`, and `Send()`
+  all exist and are verified end-to-end against each other, but `Receive()` still returns `false`
+  unconditionally (no `plan.md` Phase 5 task covers it - that's implied by later phases), and
+  nothing services a host's events outside of the connection/disconnect/send paths themselves (no
+  general "pump" method exists). `DirectPlay2AImpl::Open()` still unconditionally uses
+  `LoopbackDirectPlayTransport`; nothing constructs an `EnetDirectPlayTransport` anywhere outside
+  its own smoke tests. There is currently no networked (cross-process) DirectPlay of any kind —
+  only same-object loopback self-send works.
 - The wire packet header (`DirectPlayWirePacketHeader`) exists, round-trips correctly, and
   validates buffer size/payload-length consistency on receive, but nothing constructs one from a
   real `DPSESSIONDESC2`/session yet, and `magic`/`version` mismatches are not rejected yet either
@@ -226,6 +227,18 @@ complete a genuine ENet handshake, and the server was verified to observe a genu
   independently, to observe a genuine `ENET_EVENT_TYPE_DISCONNECT`; calling `Shutdown()` again on
   either instance afterward is safe. Also re-verified both CMake build configurations end-to-end
   and the 11/11 test suite.
+- **Added real reliable packet send** to `EnetDirectPlayTransport::Send()`. Now calls
+  `enet_packet_create(data, size, ENET_PACKET_FLAG_RELIABLE)` + `enet_peer_send(peer_, 0, packet)`
+  (channel `0`, matching `Listen()`/`Connect()`'s existing single-channel assumption) +
+  `enet_host_flush(host_)` so the packet is pushed out promptly. Scoped, like `Shutdown()`, to the
+  single `peer_` this class tracks; fails cleanly (no leak, no crash) with no `peer_`, or if
+  `enet_packet_create`/`enet_peer_send` fail. `Receive()` deliberately left untouched -
+  `plan.md` Phase 5 has no separate "implement transport-level receive" checkbox. **Verified for
+  real** with a standalone whitebox smoke test (not committed): a real `Listen()`/`Connect()` pair
+  connects; the client's `Send()` transmits a payload the server receives byte-for-byte
+  (`memcmp`-verified) via a genuine `ENET_EVENT_TYPE_RECEIVE`, serviced independently; `Send()` on
+  a peer-less instance fails cleanly. Also re-verified the `FREE_DIRECT_ENABLE_ENET=ON` CMake build
+  end-to-end, the 11/11 test suite, and `include/dplay.h`'s zero ENet/SDL identifiers.
 
 ## 4. Current blocker / main problem
 
@@ -274,11 +287,10 @@ currently blocking anything, since the vendored path is the proven, working defa
   `NetStartPlay` all have zero callers anywhere in that game's current source. Only gameplay-time
   `Send`/`Receive` are reachable. This is a `free-eggbert` source-completeness gap, out of
   `free-direct`'s scope to fix (game source must not be modified).
-- **Incomplete**: `EnetDirectPlayTransport` has real init/shutdown lifecycle, real `Listen()` (host
-  creation), real `Connect()` (client creation + peer connection), and real graceful disconnect in
-  `Shutdown()`, but no real send/receive exists yet, nothing services a host's events outside of a
-  connection/disconnect attempt, and it is not selected by `Open()` — no networked DirectPlay of
-  any kind yet.
+- **Incomplete**: `EnetDirectPlayTransport` has real `Listen()`, `Connect()`, `Shutdown()`, and
+  `Send()`, but `Receive()` still unconditionally returns `false`, nothing services a host's
+  events outside of the connection/disconnect/send paths themselves, and it is not selected by
+  `Open()` — no networked DirectPlay of any kind yet.
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -337,10 +349,12 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     `Listen(port)` (creates a listening `ENetHost`, refuses a second call while already hosting,
     `HasHost()` accessor), real `Connect(address, port)` (creates a client `ENetHost` +
     `enet_host_connect`s to a peer, refuses a second call while already connecting/connected,
-    `HasPeer()` accessor), and real graceful disconnect in `Shutdown()` (`enet_peer_disconnect` +
-    a bounded wait for `ENET_EVENT_TYPE_DISCONNECT`, scoped to the single `peer_` this class
-    tracks). `Send`/`Receive` still return `false`. No general event servicing (a "pump") exists
-    outside of the connection/disconnect attempts themselves. Compiled only under
+    `HasPeer()` accessor), real graceful disconnect in `Shutdown()` (`enet_peer_disconnect` + a
+    bounded wait for `ENET_EVENT_TYPE_DISCONNECT`, scoped to the single `peer_` this class
+    tracks), and real reliable send in `Send()` (`enet_packet_create` + `enet_peer_send` +
+    `enet_host_flush`, same `peer_`-only scoping). `Receive()` still returns `false`. No general
+    event servicing (a "pump") exists outside of the connection/disconnect/send paths themselves.
+    Compiled only under
     `-DFREE_DIRECT_ENABLE_ENET=ON`;
     not selected by `Open()` (Phase 6, not started).
 
@@ -402,22 +416,25 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-1. **Add reliable packet send** using `ENET_PACKET_FLAG_RELIABLE`, as `Send()`'s first real
-   (non-stub) behavior.
-   - Files: `src/directplay/EnetDirectPlayTransport.cpp`. `enet_packet_create(data, size,
-     ENET_PACKET_FLAG_RELIABLE)` + `enet_peer_send(peer_, 0, packet)` (channel `0` - the single
-     channel `Listen()`/`Connect()` already use via `kChannelLimit = 1`) + likely
-     `enet_host_flush(host_)` so the packet is actually pushed out promptly rather than waiting
-     for the next service call. Fails cleanly (no crash, `false` return) if there is no `peer_`
-     yet (nothing to send to).
-   - Verify: `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
-     cmake --build cmake-build-debug -j4` succeeds, plus a standalone smoke test: connect a real
-     client/server pair (same pattern as the `Connect()`/disconnect smoke tests), have the client
-     `Send()` a payload, and confirm the server actually receives it byte-for-byte via
-     `enet_host_service` (whitebox, same `#define private public` trick as before).
-   - Note: the very next `plan.md` task after this ("Add unreliable packet send") explicitly says
-     to re-check the Phase 0 audit and **ask the user** before implementing - do not implement it
-     without asking, even though it's textually adjacent.
+**Blocked on a user decision before more `plan.md` Phase 5 code can proceed**: the next unchecked
+code task in Phase 5's list is "Add unreliable packet send", which the plan itself says to
+re-check against the Phase 0 audit and **ask the user** about before implementing (Phase 0 found
+every observed `free-eggbert` `Send` call site collapses to `DPSEND_GUARANTEED` - real-only, so
+unreliable send may not be needed at all). The task after that, "Map `DPSEND_GUARANTEED` to
+`ENET_PACKET_FLAG_RELIABLE` in the transport layer", is only meaningful once that decision is
+made (if unreliable send is never added, there is nothing to map - `Send()` already always sends
+reliably). Do not implement either without asking first.
+
+Two tasks remain that do **not** need that decision first:
+
+1. **Decide the default ENet channel layout and document it** (`plan.md`: "a single channel is
+   likely sufficient given both target games' simple message patterns"). This is arguably already
+   decided in practice - `Listen()`/`Connect()`/`Send()` all already use `kChannelLimit = 1`/channel
+   `0` - but the decision has never been written down with rationale, which `plan.md` explicitly
+   requires.
+   - Files: `docs/directplay-design.md` (new decision entry, matching the existing "Decision 1"
+     format).
+   - Verify: none — documentation task, not code.
 
 2. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
    - Files: `docs/directplay-design.md` (add a new decision entry, matching the existing
@@ -447,10 +464,13 @@ behavior; this has not been attempted.
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first. Inspect only the files needed for the first task in "Next smallest tasks"
-(currently: reliable packet send via ENET_PACKET_FLAG_RELIABLE for Send()). Do not refactor
-unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Make one small, verified improvement - implement just that one task. Run the
-relevant build/test command from "Useful commands" (or the task's own "Verify" step) and confirm
-it actually passes before considering the task done. Then update NEXT.md to reflect the new state.
+Read NEXT.md first. Before touching code, check whether the user has answered the still-open
+question in "Next smallest tasks" about unreliable ENet packet send - do not implement unreliable
+send or the DPSEND_GUARANTEED mapping task without an explicit answer. If unanswered, do the
+channel-layout documentation task first (no code, no permission needed) or ask the user directly.
+Do not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify
+../free-eggbert or ../planetblupi. Make one small, verified improvement - implement just that one
+task. Run the relevant build/test command from "Useful commands" (or the task's own "Verify" step)
+and confirm it actually passes before considering the task done. Then update NEXT.md to reflect
+the new state.
 ```

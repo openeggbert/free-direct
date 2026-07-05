@@ -98,7 +98,32 @@ bool EnetDirectPlayTransport::Connect(const char* address, std::uint16_t port) {
     return true;
 }
 
-bool EnetDirectPlayTransport::Send(const void* /*data*/, std::size_t /*size*/) { return false; }
+bool EnetDirectPlayTransport::Send(const void* data, std::size_t size) {
+    // Only the peer_ this class itself tracks (the one Connect() created) can be sent
+    // to - a host with multiple connected peers (Listen()'s eventual real multi-peer
+    // role) needs its own per-peer addressing, which is Phase 6/10's job, not this
+    // one's. This mirrors Shutdown()'s existing peer_-only scoping.
+    if (!peer_) return false;
+
+    ENetPacket* packet = enet_packet_create(data, size, ENET_PACKET_FLAG_RELIABLE);
+    if (!packet) return false;
+
+    // Channel 0 - the single channel Listen()/Connect() already assume via
+    // kChannelLimit = 1. plan.md's "decide the default ENet channel layout" task is
+    // still open; this reuses that same provisional single-channel assumption rather
+    // than introducing a second, undocumented one.
+    if (enet_peer_send(peer_, 0, packet) != 0) {
+        // enet_peer_send() takes ownership of the packet only on success; on failure
+        // it does not, so it must be destroyed here to avoid leaking it.
+        enet_packet_destroy(packet);
+        return false;
+    }
+
+    // Push the packet out now rather than waiting for the next service call, so a
+    // caller that never separately services the host still actually transmits.
+    enet_host_flush(host_);
+    return true;
+}
 
 bool EnetDirectPlayTransport::Receive(void* /*buffer*/, std::size_t /*bufferSize*/,
                                        std::size_t* /*outSize*/) {
