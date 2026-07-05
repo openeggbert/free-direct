@@ -14,27 +14,23 @@
  * ever included by `.cpp` files (as this one is, today) is allowed to name ENet types
  * directly - the policy bans ENet from reaching `include/`, not from internal headers.
  *
- * The constructor/destructor do real work: they join/leave a process-wide
- * `enet_initialize()`/`enet_deinitialize()` reference count (see the `.cpp` file),
- * since ENet requires that pair to be called exactly once per process, not once per
- * instance - multiple `EnetDirectPlayTransport` instances (e.g. a host and a client
- * transport in the same process) must share one real init/deinit pair. `Listen()` does
- * real work too: it creates a real `ENetHost` via `enet_host_create` in listen mode.
- * `Connect()` does real work: it creates a client-role `ENetHost` (no listen address)
- * and calls `enet_host_connect` to initiate a connection to a peer - `plan.md` lists
- * "client creation" and "peer connection" as two separate checkboxes, but they are
- * implemented together here because a created-but-never-connected client host is not
- * independently meaningful or testable (there is nothing to observe about it beyond
- * "not null", unlike `Listen()`'s host, which a real peer can independently connect
- * to). `Send()`/`Receive()` are still honest stubs - all backend-selecting/routing
- * behavior (`Open()`) still uses `LoopbackDirectPlayTransport` exclusively, so
- * returning `false` from them (rather than a fake success) does not regress any
- * currently-reachable code path. `Shutdown()` (and the destructor) destroy the
- * `ENetHost` created by either `Listen()` or `Connect()`, if any - cleanup for a
- * resource this class creates isn't a separate task, it's the other half of creating
- * it. Real send, receive, and graceful disconnect handling are separate, later tasks in
- * this same `plan.md` Phase 5.
- * @note Status: STUB
+ * Real behavior implemented so far (`plan.md` Phase 5, in order): the
+ * constructor/destructor join/leave a process-wide `enet_initialize()`/
+ * `enet_deinitialize()` reference count (see the `.cpp` file); `Listen(port)` creates a
+ * real listening `ENetHost`; `Connect(address, port)` creates a client-role `ENetHost`
+ * (no listen address) and calls `enet_host_connect` (implemented together, since a
+ * created-but-never-connected client host is not independently testable); `Shutdown()`
+ * (and the destructor) perform a real graceful disconnect (`enet_peer_disconnect` +
+ * a bounded wait for `ENET_EVENT_TYPE_DISCONNECT`) before destroying whatever
+ * host/peer `Listen()`/`Connect()` created; `Send()` sends a real ENet packet
+ * (`ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED`, selected by its
+ * `reliable` parameter) to the single `peer_` this class tracks. `Receive()` is still
+ * an honest `false` stub - no `plan.md` Phase 5 task covers transport-level receive.
+ * All of this is scoped to the single `peer_` a `Connect()`-role instance tracks; a
+ * `Listen()`-role host tracking multiple connected peers is Phase 6/10's job. None of
+ * this is wired into `DirectPlay.cpp` yet - `Open()` still unconditionally uses
+ * `LoopbackDirectPlayTransport` (selecting this backend is Phase 6).
+ * @note Status: PARTIAL
  */
 #pragma once
 
@@ -46,8 +42,8 @@
 namespace free_direct_directplay {
 
 /**
- * @brief `IDirectPlayTransport` implemented over real ENet reliable UDP.
- * @note Status: STUB
+ * @brief `IDirectPlayTransport` implemented over real ENet reliable/unreliable UDP.
+ * @note Status: PARTIAL
  */
 class EnetDirectPlayTransport final : public IDirectPlayTransport {
 public:
@@ -56,14 +52,14 @@ public:
 
     bool Listen(std::uint16_t port) override;
     bool Connect(const char* address, std::uint16_t port) override;
-    bool Send(const void* data, std::size_t size) override;
+    bool Send(const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Shutdown() override;
 
     /// True once this instance's constructor successfully joined the process-wide
     /// enet_initialize() reference count; false if enet_initialize() itself failed.
     /// Exists so tests can observe real init behavior without needing a way to drive
-    /// Listen()/Connect() yet (both are still stubs - see the class comment above).
+    /// Listen()/Connect() yet.
     bool IsEnetReady() const { return enetReady_; }
 
     /// True once Listen() or Connect() has created a real ENetHost that has not yet

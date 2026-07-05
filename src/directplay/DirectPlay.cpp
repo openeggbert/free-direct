@@ -113,7 +113,12 @@ namespace {
                 // LoopbackDirectPlayTransport's own Send()/Receive() are genuinely exercised
                 // (matching the eventual shape of a real backend), even though for loopback the
                 // round-trip is synchronous and same-process.
-                if (!session_.transport->Send(lpData, dwDataSize)) return DPERR_GENERIC;
+                // Always reliable for now: dwFlags (DPSEND_GUARANTEED) isn't examined
+                // yet - mapping it to the transport's reliable/unreliable choice is a
+                // separate, still-open plan.md Phase 5 task.
+                if (!session_.transport->Send(lpData, dwDataSize, /*reliable=*/true)) {
+                    return DPERR_GENERIC;
+                }
 
                 std::vector<std::uint8_t> received(dwDataSize);
                 std::size_t receivedSize = 0;

@@ -49,8 +49,12 @@ public:
      */
     virtual bool Connect(const char* address, std::uint16_t port) = 0;
 
-    /** @brief Sends a payload to a peer; reliability semantics are backend-defined for now. */
-    virtual bool Send(const void* data, std::size_t size) = 0;
+    /**
+     * @brief Sends a payload to a peer. `reliable` selects guaranteed, ordered
+     * delivery vs. best-effort delivery; backends with no such distinction (e.g.
+     * loopback) accept and ignore it.
+     */
+    virtual bool Send(const void* data, std::size_t size, bool reliable) = 0;
 
     /** @brief Retrieves the next received payload, if any, without blocking. */
     virtual bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) = 0;

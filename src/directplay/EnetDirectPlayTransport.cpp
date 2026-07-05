@@ -98,14 +98,21 @@ bool EnetDirectPlayTransport::Connect(const char* address, std::uint16_t port) {
     return true;
 }
 
-bool EnetDirectPlayTransport::Send(const void* data, std::size_t size) {
+bool EnetDirectPlayTransport::Send(const void* data, std::size_t size, bool reliable) {
     // Only the peer_ this class itself tracks (the one Connect() created) can be sent
     // to - a host with multiple connected peers (Listen()'s eventual real multi-peer
     // role) needs its own per-peer addressing, which is Phase 6/10's job, not this
     // one's. This mirrors Shutdown()'s existing peer_-only scoping.
     if (!peer_) return false;
 
-    ENetPacket* packet = enet_packet_create(data, size, ENET_PACKET_FLAG_RELIABLE);
+    // ENET_PACKET_FLAG_UNSEQUENCED (not just "no RELIABLE bit") for the unreliable
+    // path: it also skips ENet's ordering guarantee, matching "best-effort" as
+    // distinctly as ENet's flag set allows. No free-eggbert/planetblupi call site
+    // observed in the Phase 0 audit actually needs this path (every real Send() call
+    // site collapses to DPSEND_GUARANTEED) - this exists for IDirectPlayTransport
+    // interface completeness, per explicit user direction, not a concrete requirement.
+    const enet_uint32 flags = reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED;
+    ENetPacket* packet = enet_packet_create(data, size, flags);
     if (!packet) return false;
 
     // Channel 0 - the single channel Listen()/Connect() already assume via

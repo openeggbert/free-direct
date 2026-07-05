@@ -910,10 +910,29 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       `Listen()`-only host) fails cleanly rather than crashing. Also re-verified the
       `FREE_DIRECT_ENABLE_ENET=ON` CMake build end-to-end, the 11/11 `tests/directplay_tests.cpp`
       suite (unaffected), and that `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Add unreliable packet send **only if needed**: Phase 0 found every observed `free-eggbert`
+- [x] Add unreliable packet send **only if needed**: Phase 0 found every observed `free-eggbert`
       `Send` call site uses a truthy flag that collapses to `DPSEND_GUARANTEED`, so unreliable send
       may not be required at all. Re-check the Phase 0 audit and ask the user before implementing
-      this task.
+      this task. **Done, after asking:** re-confirmed the Phase 0 finding still holds (no
+      `free-eggbert`/`planetblupi` call site needs unreliable send), then explicitly asked the
+      user whether to implement it anyway for interface completeness despite no concrete
+      requirement; the user said yes. `IDirectPlayTransport::Send()`'s signature changed from
+      `Send(data, size)` to `Send(data, size, bool reliable)` (confirmed by grep there was exactly
+      one existing caller, `DirectPlay.cpp`'s self-send path, updated to pass `/*reliable=*/true` -
+      preserving its current behavior exactly, since `dwFlags`/`DPSEND_GUARANTEED` mapping is the
+      next, separate task). `LoopbackDirectPlayTransport::Send()` accepts and ignores the new
+      parameter (loopback has no reliability distinction). `EnetDirectPlayTransport::Send()` now
+      chooses `ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED` based on `reliable`.
+      **Verified for real** with a standalone whitebox smoke test (not committed): sent one
+      payload with `reliable=true` and one with `reliable=false` over a real connected
+      client/server pair; inspected the *received* packet's `flags` field on the server side for
+      both (ENet preserves packet flags through delivery) and confirmed the reliable packet has
+      `ENET_PACKET_FLAG_RELIABLE` set while the unreliable one does not (and has
+      `ENET_PACKET_FLAG_UNSEQUENCED` set instead) - proof the parameter actually changes
+      ENet-protocol-level behavior, not just a local bookkeeping value. Also re-verified both
+      `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds end-to-end, the 11/11
+      `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero
+      ENet/SDL identifiers.
 - [ ] Map `DPSEND_GUARANTEED` to `ENET_PACKET_FLAG_RELIABLE` in the transport layer.
 - [ ] Decide the default ENet channel layout (a single channel is likely sufficient given both
       target games' simple message patterns) and document the decision with rationale.

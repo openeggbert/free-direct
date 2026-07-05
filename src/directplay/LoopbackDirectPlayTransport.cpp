@@ -15,7 +15,7 @@ bool LoopbackDirectPlayTransport::Connect(const char* /*address*/, std::uint16_t
     return true;
 }
 
-bool LoopbackDirectPlayTransport::Send(const void* data, std::size_t size) {
+bool LoopbackDirectPlayTransport::Send(const void* data, std::size_t size, bool /*reliable*/) {
     const auto* bytes = static_cast<const std::uint8_t*>(data);
     buffered_.emplace_back(bytes, bytes + size);
     return true;

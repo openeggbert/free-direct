@@ -38,7 +38,7 @@ class LoopbackDirectPlayTransport final : public IDirectPlayTransport {
 public:
     bool Listen(std::uint16_t port) override;
     bool Connect(const char* address, std::uint16_t port) override;
-    bool Send(const void* data, std::size_t size) override;
+    bool Send(const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Shutdown() override;
 
