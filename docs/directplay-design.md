@@ -139,13 +139,13 @@ channel as a durable decision, not a placeholder to "eventually" expand.
 
 ## Decision 3: `DPID` must be a 4-byte `DWORD`, and the host's first player must be assigned `DPID` `0`
 
-**Status:** Decided, **not yet implemented**. This document records the decision only, per
-`plan.md` Phase 9's acceptance criteria ("the DPID-vs-index conflict has an explicit written
-decision in `docs/directplay-design.md` merged *before* any other Phase 9 code lands"). Two
-separate pieces of code still need to change before this decision is actually in effect:
-`include/dplay.h`'s `DPID` typedef (currently `DWORD_PTR`), and
-`DirectPlaySession::nextPlayerId`'s placeholder initial value (currently `1`) — both are real
-Phase 9 (or a dedicated preparatory) tasks, not done here.
+**Status:** Decided and implemented (the code landed in `plan.md` Phase 6's "assign the host
+player-ID namespace" task, after confirming with the user first since it touches a *public*
+header). This document originally recorded the decision only, per `plan.md` Phase 9's acceptance
+criteria ("the DPID-vs-index conflict has an explicit written decision in `docs/
+directplay-design.md` merged *before* any other Phase 9 code lands") - `include/dplay.h`'s `DPID`
+typedef is now `DWORD` (was `DWORD_PTR`), and `DirectPlaySession::nextPlayerId`'s initial value
+(and `Close()`'s reset value) is now `0` (was the placeholder `1`).
 
 This decision bundles two questions `docs/directplay-callsite-audit.md` treats separately (§5,
 size; §6, starting value) because they both resolve to the same practical requirement once traced
@@ -238,16 +238,21 @@ This part is **not** independently confirmed against `free-eggbert` source the w
 best-available, honestly-labeled-provisional choice for remote players until a more complete
 `free-eggbert` source (or a real multi-peer integration test) confirms or contradicts it.
 
-### When this gets implemented
+### Implemented
 
-`plan.md` Phase 9 ("Implement stable DPID allocation... Reserve an invalid DPID value... and
-explicitly resolve the conflict"): change `include/dplay.h`'s `DPID` typedef to `DWORD`, and
-change `DirectPlaySession::nextPlayerId`'s initial value from the current placeholder `1` to `0`.
-Both changes should land together, since a `DPID` `0` returned by a still-8-byte-wide `DPID`
-carries no benefit and only the size-plus-value combination together satisfies `free-eggbert`'s
-observed assumptions. `src/directplay/DirectPlayWireProtocol.hpp`'s wire header (`plan.md` Phase 5)
-serializes `idFrom`/`idTo` using the local `sizeof(DPID)` as-is, so its wire format changes with
-this decision automatically — no separate wire-protocol task is needed for that.
+Landed in `plan.md` Phase 6's "assign the host player-ID namespace" task (also closing out Phase
+9's identically-worded "reserve an invalid DPID value" task, in the opposite direction from that
+task's own title - see its `plan.md` annotation): `include/dplay.h`'s `DPID` typedef changed to
+`DWORD`, and `DirectPlaySession::nextPlayerId`'s initial value (and `Close()`'s reset value)
+changed from the placeholder `1` to `0`. Both changed together, since a `DPID` `0` returned by a
+still-8-byte-wide `DPID` would have carried no benefit - only the size-plus-value combination
+together satisfies `free-eggbert`'s observed assumptions.
+`src/directplay/DirectPlayWireProtocol.hpp`'s wire header (`plan.md` Phase 5) serializes
+`idFrom`/`idTo` using the local `sizeof(DPID)` as-is (never a hardcoded byte count), so its wire
+format changed with this decision automatically - no separate wire-protocol code change was
+needed. `tests/directplay_tests.cpp`'s DPID-uniqueness test was updated (`0` is now the correct
+first value to assert, not an error). **Verified for real**: confirmed `sizeof(DPID) == 4`
+directly (was `8`); both CMake build configurations and the 14/14 test suite re-verified.
 
 ### Caveat
 

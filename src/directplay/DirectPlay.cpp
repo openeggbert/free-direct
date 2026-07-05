@@ -139,9 +139,10 @@ namespace {
             // its size is validated when one is actually provided.
             if (lpPlayerName && lpPlayerName->dwSize != sizeof(DPNAME)) return DPERR_INVALIDPARAMS;
 
-            // Placeholder allocation strategy: a simple incrementing counter starting at 1
-            // (0 is left unassigned, matching real DirectPlay's DPID_SYSMSG/DPID_ALLPLAYERS
-            // convention). Phase 9 revisits this against the Phase 0 DPID-vs-array-index finding.
+            // Sequential allocator starting at 0 (docs/directplay-design.md Decision 3) -
+            // the host's own first local player gets DPID 0, matching free-eggbert's own
+            // comparison pattern, not real DirectPlay's DPID_SYSMSG/DPID_ALLPLAYERS
+            // reservation convention.
             const DPID newId = session_.nextPlayerId++;
             session_.localPlayerIds.push_back(newId);
             session_.currentPlayers++;
@@ -250,7 +251,7 @@ namespace {
             session_.messageQueue.Clear();
             session_.localPlayerIds.clear();
             session_.remotePlayerIds.clear();
-            session_.nextPlayerId = 1;
+            session_.nextPlayerId = 0;
             session_.sessionName.clear();
             session_.password.clear();
             session_.applicationGuid = GUID{};

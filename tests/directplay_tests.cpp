@@ -189,18 +189,22 @@ void Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue() {
     dp->Release();
 }
 
-// plan.md Phase 4: "Add a unit test for CreatePlayer against a loopback session, asserting a
-// non-zero DPID is returned and is unique among players already created in that session."
-void Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids() {
+// plan.md Phase 4/9: originally "asserting a non-zero DPID is returned and is unique" -
+// updated per docs/directplay-design.md Decision 3, now implemented: the host's first
+// local player gets DPID 0 (not an error, the correct, expected value, breaking with
+// real DirectPlay's DPID_SYSMSG/DPID_ALLPLAYERS reservation to match free-eggbert's own
+// comparison pattern), so this asserts the real allocation sequence (0, 1, ...) and
+// uniqueness, not "non-zero".
+void Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero() {
     LPDIRECTPLAY dp = nullptr;
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
     DPID p1 = 0, p2 = 0;
     CHECK(dp2->CreatePlayer(&p1, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
-    CHECK(p1 != 0);
+    CHECK(p1 == 0); // Decision 3: the host's first local player gets DPID 0
     CHECK(dp2->CreatePlayer(&p2, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
-    CHECK(p2 != 0);
+    CHECK(p2 == 1);
     CHECK(p1 != p2);
 
     dp2->Release();
@@ -393,7 +397,7 @@ int main() {
     Test_ReceiveSuccessfulCopy_MatchesQueuedPacket();
     Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid();
     Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue();
-    Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids();
+    Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();

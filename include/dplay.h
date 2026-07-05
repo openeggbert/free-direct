@@ -90,10 +90,17 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 /**
  * @brief DirectPlay player identifier type.
  *
- * Uses pointer-sized storage to stay ABI-safe on both 32-bit and 64-bit hosts.
+ * A 4-byte `DWORD`, matching real Microsoft DirectPlay's `DPID` exactly (not
+ * pointer-sized storage, despite an earlier version of this comment claiming that was
+ * needed "to stay ABI-safe on both 32-bit and 64-bit hosts" - FreeDirect's own DPID
+ * allocator never encodes a pointer in a DPID, so that rationale never actually
+ * applied). Matching the real 4-byte width is required for `../free-eggbert`'s
+ * `NetPlayer` struct, which its own `event.cpp` walks using a hardcoded 32-byte
+ * pointer-arithmetic stride derived from a 4-byte `DPID` - see
+ * `docs/directplay-callsite-audit.md` §5 and `docs/directplay-design.md` Decision 3.
  * @note Status: PARTIAL
  */
-typedef DWORD_PTR DPID, *LPDPID;
+typedef DWORD DPID, *LPDPID;
 
 /**
  * @brief Player/group display names used by DirectPlay APIs.

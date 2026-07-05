@@ -1133,12 +1133,27 @@ whichever transport is configured.
       re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end, the 12/12
       `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero
       ENet/SDL identifiers.
-- [ ] Assign the host player-ID namespace: decide and document the starting DPID value and
+- [x] Assign the host player-ID namespace: decide and document the starting DPID value and
       increment rule for host-allocated players, consistent with Phase 0's finding about
-      `free-eggbert`'s index-based DPID comparison. **Written decision now exists** (done ahead of
-      this phase, alongside Phase 9's identical requirement): `docs/directplay-design.md` Decision
-      3 - host's first player gets DPID `0`, subsequent joiners get sequential `1, 2, 3, ...`. The
-      actual wiring into `Open(..., DPOPEN_CREATE)`'s real implementation is still this task's job.
+      `free-eggbert`'s index-based DPID comparison. **Done**, after confirming with the user before
+      touching a public header (the decision itself, `docs/directplay-design.md` Decision 3, was
+      already written; this task is where it was actually coded): `include/dplay.h`'s `DPID`
+      typedef changed from `DWORD_PTR` (`uintptr_t`, pointer-sized - 8 bytes on this platform) to
+      `DWORD` (`uint32_t`, a real, portable, always-4-byte type), matching real Microsoft
+      DirectPlay's `DPID` exactly and resolving the `NetPlayer`-hardcoded-32-byte-stride hazard
+      from `docs/directplay-callsite-audit.md` §5. `DirectPlaySession::nextPlayerId`'s initial
+      value (and `Close()`'s reset value) changed from `1` to `0` - the host's first local player
+      (via `CreatePlayer`) now genuinely gets DPID `0`, matching `free-eggbert`'s own comparison
+      pattern instead of real DirectPlay's `DPID_SYSMSG`/`DPID_ALLPLAYERS` reservation convention.
+      Updated `tests/directplay_tests.cpp`'s `Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids`
+      (renamed `...ReturnsUniqueSequentialDpidsStartingAtZero`): `0` is now the correct, asserted
+      first value, not an error to assert against. **Verified for real**: confirmed
+      `sizeof(DPID) == 4` directly (was `8` before this change); `DirectPlayWireProtocol.hpp`'s
+      `kDirectPlayWireHeaderSize` computation already used `sizeof(DPID)` dynamically (never a
+      hardcoded byte count), so its round-trip test needed no changes and still passes. Also
+      re-verified both full CMake builds (`ENET=OFF`/`ON`) end-to-end, the 14/14
+      `tests/directplay_tests.cpp` suite, and that `include/dplay.h` has zero ENet/SDL
+      identifiers.
 - [x] Allow the host to accept incoming client connections up to `dwMaxPlayers`. **Done, after
       asking the user** (DPID-keyed peer map, chosen over a plain list or documentation-only):
       `docs/directplay-design.md` Decision 7 covers the full design, including sub-questions the
@@ -1308,18 +1323,20 @@ Phase 0 DPID-vs-index finding.
 - [ ] Implement stable DPID allocation in `DirectPlaySession`/`DirectPlayPlayer`, using the
       strategy documented in Phase 0/Phase 6 (host-assigned sequential small integers in join
       order).
-- [ ] Reserve an invalid DPID value (`0`, matching real DirectPlay's `DPID_SYSMSG`/
+- [x] Reserve an invalid DPID value (`0`, matching real DirectPlay's `DPID_SYSMSG`/
       `DPID_ALLPLAYERS` convention) so it is never assigned to a real player — **and explicitly
       resolve the conflict** with Phase 0's finding that `free-eggbert`'s receive-side code
       compares `from == i` starting at index `0`: document in writing whether the host's first
       real player must be DPID `1` (reserving `0`) or DPID `0` (matching the game's apparent
-      assumption), since these two choices are mutually exclusive. **Written decision now exists**
-      (a prerequisite `plan.md`/`NEXT.md` task, done ahead of this one): `docs/
-      directplay-design.md` Decision 3 resolves this in favor of DPID `0` (matching the game's
-      apparent assumption, not real DirectPlay's reservation convention) — the actual code
-      (`include/dplay.h`'s `DPID` typedef to `DWORD`, and `DirectPlaySession::nextPlayerId`'s
-      initial value from `1` to `0`) is still this task's job, not done yet. Do not mark this box
-      done until that code lands.
+      assumption), since these two choices are mutually exclusive. **Resolved, in the opposite
+      direction from this task's own literal title** - `docs/directplay-design.md` Decision 3
+      decided DPID `0` is *not* reserved; it is assigned to the host's first real (local) player,
+      matching `free-eggbert`'s own comparison pattern rather than real DirectPlay's reservation
+      convention. That decision is now fully coded (`plan.md` Phase 6's "assign the host
+      player-ID namespace" task): `include/dplay.h`'s `DPID` typedef is `DWORD` (4 bytes), and
+      `DirectPlaySession::nextPlayerId` starts at `0`. Checked done because the conflict this task
+      asks to resolve **is** resolved and implemented - just not in the "reserve 0" direction the
+      task's own title assumed going in.
 - [ ] Register a local player on `CreatePlayer`, storing it in `DirectPlaySession`'s local-player
       list.
 - [ ] Register a remote player when a join-accepted/player-joined notification arrives from the

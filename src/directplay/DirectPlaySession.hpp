@@ -56,9 +56,12 @@ public:
     std::vector<DPID> localPlayerIds;
     std::vector<DPID> remotePlayerIds;
 
-    /// Placeholder DPID allocator (starts at 1, skipping the real-DirectPlay-reserved 0);
-    /// `plan.md` Phase 9 revisits this against the Phase 0 DPID-vs-array-index finding.
-    DPID nextPlayerId = 1;
+    /// Sequential DPID allocator, starting at 0: the first player created in a session
+    /// (the host's own local player, via CreatePlayer) gets DPID 0, breaking with real
+    /// DirectPlay's DPID_SYSMSG/DPID_ALLPLAYERS reservation convention, to match
+    /// `free-eggbert`'s own comparison pattern - see `docs/directplay-design.md`
+    /// Decision 3 for the full citation trail and rationale.
+    DPID nextPlayerId = 0;
 
     std::string sessionName;
     std::string password;

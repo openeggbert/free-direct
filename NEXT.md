@@ -22,7 +22,12 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
   **multiple simultaneous** real ENet client connections, each assigned a real DPID up to
   `dwMaxPlayers`, and (as of this session) correctly updates `dwCurrentPlayers`/`remotePlayerIds`
   when an assigned peer disconnects, via a new `TakeDisconnectedPeer()` transport method that
-  mirrors the pending-connection design without ever exposing `ENetPeer*`.
+  mirrors the pending-connection design without ever exposing `ENetPeer*`. **Also this session**:
+  `include/dplay.h`'s `DPID` typedef changed from `DWORD_PTR` (8 bytes on this platform) to
+  `DWORD` (a real, portable 4 bytes, matching real Microsoft DirectPlay exactly), and
+  `DirectPlaySession::nextPlayerId` now starts at `0` instead of the placeholder `1` - the host's
+  first local player genuinely gets DPID `0` now, closing out a decision (Decision 3) that had
+  been written but not coded since earlier in this session.
 - **Important architectural decisions**:
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net type or symbol may ever appear in them.
@@ -87,15 +92,17 @@ per-task notes and Section 3 below; this list is intentionally a summary, not a 
 `plan.md` Phases 0-5 complete (call-site audit, COM correctness fixes, `DirectPlaySession` state
 model, `DirectPlayMessageQueue`, `LoopbackDirectPlayTransport`, and a fully-real
 `EnetDirectPlayTransport` - lifecycle/`Listen`/`Connect`/`Shutdown`/reliable+unreliable `Send`);
-the SDL3 build blocker fixed. Eight decisions recorded in `docs/directplay-design.md` (single ENet
-channel; `DPID` must become a `DWORD` with the host's first player at `DPID` `0`; build-time
-backend selection; a fixed default ENet port; event servicing via `Service()`; multi-peer hosting
-via a `DPID → ENetPeer*` map; disconnect notification via a mirrored `DPID` queue). Phase 6 well
-underway: `Open()` build-time-selects its backend, genuinely starts the ENet listener (real
-OS-level `bind()`), generates a real `guidInstance` when hosting, and - verified with real
-external ENet clients driven purely through the public `IDirectPlay2A::Receive()` - **accepts
-multiple simultaneous real connections, each assigned a real DPID up to `dwMaxPlayers`, and
-correctly updates `dwCurrentPlayers`/`remotePlayerIds` when an assigned peer disconnects**.
+the SDL3 build blocker fixed. Eight decisions recorded in `docs/directplay-design.md`, **all now
+implemented**: single ENet channel; `DPID` is a `DWORD` with the host's first player at `DPID`
+`0` (`include/dplay.h`'s typedef and `DirectPlaySession::nextPlayerId`'s start value both changed
+this session - `sizeof(DPID)` confirmed `4`, was `8`); build-time backend selection; a fixed
+default ENet port; event servicing via `Service()`; multi-peer hosting via a `DPID → ENetPeer*`
+map; disconnect notification via a mirrored `DPID` queue. Phase 6 well underway: `Open()`
+build-time-selects its backend, genuinely starts the ENet listener (real OS-level `bind()`),
+generates a real `guidInstance` when hosting, and - verified with real external ENet clients
+driven purely through the public `IDirectPlay2A::Receive()` - accepts multiple simultaneous real
+connections, each assigned a real DPID up to `dwMaxPlayers`, and correctly updates
+`dwCurrentPlayers`/`remotePlayerIds` on both join and disconnect.
 
 **What does not work yet / is not implemented**:
 - Transport-level `Receive()` (`EnetDirectPlayTransport::Receive()`, distinct from
@@ -448,41 +455,34 @@ correctly updates `dwCurrentPlayers`/`remotePlayerIds` when an assigned peer dis
   (a second local `CreatePlayer()` still succeeds afterward). `remotePlayerIds`/`currentPlayers`
   correctness itself could only be verified at the transport level. Both CMake build
   configurations and the 14/14 test suite (unaffected) re-verified.
+- **Implemented Decision 3** (asked the user first, since it touches a *public* header, even
+  though the decision itself was already written earlier this session). `include/dplay.h`'s
+  `DPID` typedef changed from `DWORD_PTR` (`uintptr_t`, pointer-sized) to `DWORD` (`uint32_t`, a
+  real, portable, always-4-byte type) - matching real Microsoft DirectPlay's `DPID` exactly and
+  resolving the `NetPlayer` hardcoded-32-byte-stride hazard. `DirectPlaySession::nextPlayerId`'s
+  initial value (and `Close()`'s reset value) changed from the placeholder `1` to `0` - the host's
+  first local player (via `CreatePlayer`) now genuinely gets DPID `0`. Renamed/updated
+  `tests/directplay_tests.cpp`'s DPID-uniqueness test (`...ReturnsUniqueSequentialDpidsStartingAtZero`,
+  was `...ReturnsUniqueNonZeroDpids`): `0` is now the correct, asserted first value, not
+  something to assert *against*. **Verified for real**: confirmed `sizeof(DPID) == 4` directly
+  (was `8`); `DirectPlayWireProtocol.hpp`'s `kDirectPlayWireHeaderSize` already used `sizeof(DPID)`
+  dynamically (never hardcoded), so its round-trip test needed no changes and still passes. Also
+  re-verified both CMake build configurations end-to-end, the 14/14 test suite, and that
+  `include/dplay.h` has zero ENet/SDL identifiers. This closes out both the Phase 6 "assign the
+  host player-ID namespace" task and the identically-worded Phase 9 task (in the opposite
+  direction from that task's own title - see its `plan.md` annotation).
 
 ## 4. Current blocker / main problem
 
-**There is no build- or test-breaking blocker right now.** The most recently-active blocker (the
-SDL3 CMake target-visibility bug) was found and fixed this session (Section 3), and is verified
-working. The closest thing to an open problem is an **unresolved design decision**, not a failure:
-
-- **Symptom**: none observed yet (no test reproduces it) — this is a hazard identified by static
-  audit, not a runtime failure.
-- **Issue**: `include/dplay.h` defines `DPID` as `DWORD_PTR` (8 bytes on 64-bit), but real
-  DirectPlay's `DPID` is `DWORD` (4 bytes). `../free-eggbert/src/event.cpp`'s `NetSearchPlayer`
-  and `NetStartPlay` walk arrays of its own `NetPlayer` struct using **hardcoded 32-byte
-  pointer-arithmetic strides** that only match the original 4-byte `DPID` layout. If
-  `free-eggbert` is ever compiled against `free-direct`'s current `dplay.h` on a 64-bit target,
-  these two functions would silently read the wrong memory offsets.
-- **Failing command/test**: none — not yet reproduced by any test; found via static analysis in
-  `docs/directplay-callsite-audit.md` §5.
-- **Affected files**: `include/dplay.h` (the `DPID` typedef), and (read-only, not to be modified)
-  `../free-eggbert/src/event.cpp`'s `NetSearchPlayer`/`NetStartPlay`.
-- **Suspected cause**: `DPID` was originally typedef'd as `DWORD_PTR` "to stay ABI-safe on both
-  32-bit and 64-bit hosts" (per its own header comment), without accounting for `free-eggbert`'s
-  raw-pointer-arithmetic assumption about struct layout.
-  A second, related but separate question (DPID *starting value*, not size) was also open: whether
-  DPID `0` must stay reserved (matching real DirectPlay's `DPID_SYSMSG`/`DPID_ALLPLAYERS`
-  convention, and `DirectPlaySession::nextPlayerId`'s current placeholder default of `1`) or
-  whether it must be assignable to the first real player to match `free-eggbert`'s own
-  `CNetwork::Receive`'s `from == i` index-based comparison.
-- **What has already been tried**: **both questions now have an explicit written decision** —
-  `docs/directplay-design.md` Decision 3 (added this session): `DPID` should become a 4-byte
-  `DWORD` (matching real DirectPlay and `free-eggbert`'s layout assumption), and the host's first
-  player should get `DPID` `0` (matching `free-eggbert`'s apparent assumption, breaking with real
-  DirectPlay's reservation convention). **The decision is written but not yet implemented** —
-  `include/dplay.h`'s typedef and `DirectPlaySession::nextPlayerId`'s initial value are both
-  unchanged. It still does not block current work, since no code yet depends on the answer
-  (`plan.md` Phase 9, real DPID allocation, has not started).
+**There is no build- or test-breaking blocker right now, and no open design decision either.**
+The most recently-active blocker (the SDL3 CMake target-visibility bug) was found and fixed
+earlier this session, and is verified working. The `DPID` size/starting-value hazard that used to
+be documented here (`include/dplay.h`'s `DPID` was `DWORD_PTR`, 8 bytes; `free-eggbert`'s
+`NetPlayer`-walking code assumes a 4-byte `DPID` via a hardcoded 32-byte stride - `docs/
+directplay-callsite-audit.md` §5) **is now resolved and implemented**: `DPID` is `typedef DWORD
+DPID` (confirmed `sizeof(DPID) == 4` directly), and `DirectPlaySession::nextPlayerId` starts at
+`0` (`docs/directplay-design.md` Decision 3). See Section 3's most recent entry for the full
+verification.
 
 A secondary, much smaller open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet
 path) has never been exercised successfully in this environment, since no `libenet` system
@@ -500,10 +500,10 @@ currently blocking anything, since the vendored path is the proven, working defa
   matters if FreeDirect ever needs wire-compatible `GUID` serialization across platforms with
   different `unsigned long` widths (e.g. a 32-bit Windows peer talking to this 64-bit Linux build),
   which is not a current, demonstrated need.
-- **Confirmed hazard, decision written, not yet fixed**: `DPID` size mismatch (`DWORD_PTR` vs. real
-  DirectPlay's `DWORD`) — see Section 4. `docs/directplay-callsite-audit.md` §5;
-  `docs/directplay-design.md` Decision 3 records the fix (`DPID` should become `DWORD`) but the
-  typedef itself is unchanged.
+- **Resolved this session** (previously listed here as a confirmed, unfixed hazard): `DPID` is now
+  a real 4-byte `DWORD` (`sizeof(DPID) == 4`, confirmed directly), matching real DirectPlay and
+  `../free-eggbert`'s `NetPlayer`-walking-code assumption - `docs/directplay-callsite-audit.md` §5;
+  `docs/directplay-design.md` Decision 3.
 - **Confirmed, not a FreeDirect bug**: `../free-eggbert`'s own DirectPlay lobby/session UI
   (`WM_PHASE_DP_*` handlers in `src/event.cpp`) is unwired — ten empty placeholder bodies, and a
   whole-repository grep confirms `NetCreate`/`NetEnumSessions`/`JoinSession`/`CreateSession`/
@@ -686,31 +686,42 @@ servicing (Decision 6), session-instance-GUID generation, and multi-peer hosting
 assignment up to `dwMaxPlayers` (Decision 7) are all implemented and verified. "Store the session
 descriptor" needed no new code (confirmed already satisfied).
 
-Disconnect notification (Decision 8) is now also implemented and verified -
-`dwCurrentPlayers`/`remotePlayerIds` correctly update on both join and leave.
+Disconnect notification (Decision 8) and Decision 3's `DPID` width/starting-value implementation
+are now also both done and verified - `dwCurrentPlayers`/`remotePlayerIds` correctly update on
+both join and leave, and `DPID` is a genuine 4-byte `DWORD` starting at `0`.
 
-**Next task touches a *public* header (`include/dplay.h`) - flag before doing, even though the
-decision itself is already made** (Decision 3, from an earlier batch):
+Remaining `plan.md` Phase 6 tasks, in order, and why the first is the right one to do next:
 
-1. **Assign the host player-ID namespace** (the next unchecked `plan.md` Phase 6 task, overlapping
-   with Phase 9's identical requirement) - implement what Decision 3 already decided but never
-   coded: change `include/dplay.h`'s `DPID` typedef from `DWORD_PTR` to `DWORD` (4 bytes, matching
-   real DirectPlay and `free-eggbert`'s hardcoded-32-byte-stride `NetPlayer` layout assumption),
-   and change `DirectPlaySession::nextPlayerId`'s initial value from `1` to `0` (the host's first
-   local player gets DPID `0`, matching `free-eggbert`'s own comparison pattern - see Decision 3's
-   full citation trail). Both should land together - a `DPID` `0` on an unchanged 8-byte `DPID`
-   carries no benefit.
-   - This is a real, consequential change to a public header's type - confirm with the user before
-     touching `include/dplay.h`, the same way every other Decision-driven change in this phase was
-     confirmed first, even though the decision itself already exists.
-   - Files: `include/dplay.h`, `src/directplay/DirectPlaySession.hpp`.
-   - Verify: full rebuild of both CMake configurations (a `DPID` width change could ripple through
-     `DirectPlayWireProtocol.hpp`'s `sizeof(DPID)`-based serialization - re-check
-     `kDirectPlayWireHeaderSize` still computes correctly and the wire-header round-trip test still
-     passes); re-run the 14/14 `tests/directplay_tests.cpp` suite, paying attention to whether any
-     existing test's hardcoded DPID expectations (e.g. "first `CreatePlayer()` returns a non-zero
-     DPID") need updating now that `0` is a valid, expected first value instead of an error
-     sentinel.
+- "Send a join-accepted packet to a connecting client once accepted" and "Send a join-rejected
+  packet..." are both **blocked**: sending a packet to one *specific* connected peer requires
+  per-DPID-addressed `Send()`, which is explicitly `plan.md` Phase 10's job (Decision 7's
+  sub-question 3) - a hosting-role instance's `Send()` always returns `false` today. Do not
+  implement these before that addressing capability exists.
+- "Enforce `dwMaxPlayers` by rejecting new joins" does **not** need that capability - rejecting a
+  pending connection just means disconnecting it before it is ever assigned a DPID, which the
+  transport can already do without addressing anything by DPID. This is next.
+- The three test tasks (host session creation/invalid params/closing+`EnumSessions`) are
+  loopback-specific and mostly self-contained, but the third ("closing a host session... a
+  subsequent `EnumSessions`... no longer finds it") needs `EnumSessions` to track real sessions
+  first (`plan.md` Phase 8, not started) to be meaningful - check before assuming it's doable now.
+
+1. **Enforce `dwMaxPlayers` by rejecting new joins once `dwCurrentPlayers` reaches the configured
+   maximum.**
+   - Small design question: how does the host actually reject a pending connection? Likely a new
+     `IDirectPlayTransport::RejectPendingConnection()` (mirroring
+     `AssignPendingConnection(DPID)`'s shape but with no DPID - pops the oldest pending peer and
+     calls `enet_peer_disconnect`/`enet_peer_disconnect_now` on it without ever adding it to
+     `connectedPeers_`). Decide gracefully-disconnect (`enet_peer_disconnect`, symmetric with
+     `Shutdown()`'s existing approach) vs. immediate (`enet_peer_disconnect_now`, since this
+     connection was never really "accepted") before implementing - write it down if it's not
+     obvious which the user prefers.
+   - Files: `src/directplay/DirectPlayTransport.hpp` (new interface method),
+     `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp` (call it
+     from the existing `dwMaxPlayers`-gated loop in `Receive()` instead of just leaving the
+     connection pending forever once full).
+   - Verify: a smoke test with `dwMaxPlayers` set low and more real clients connecting than fit -
+     confirm the excess connection(s) are genuinely disconnected (observable from the *client*
+     side via `ENET_EVENT_TYPE_DISCONNECT`), not just left dangling as today.
 
 ## 9. Do not do yet
 
@@ -729,12 +740,11 @@ decision itself is already made** (Decision 3, from an earlier batch):
   build-time-only (`FREE_DIRECT_ENABLE_ENET`), and the "run-time instead" idea was deliberately
   rejected for now, not left open.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
-- Do not change `include/dplay.h`'s `DPID` typedef or `DirectPlaySession::nextPlayerId`'s starting
-  value (Section 8's task) without first confirming with the user - it is a real, consequential
-  change to a *public* header, even though the decision itself (Decision 3) already exists.
-- Do not implement `Send()`/`Receive()` addressing a *specific* connected peer, or explicit
-  rejection of an over-the-cap pending connection - both are separate, still-open `plan.md` Phase
-  6/10 tasks, not implied by the multi-peer tracking that now exists.
+- Do not implement `Send()`/`Receive()` addressing a *specific* connected peer - `plan.md` Phase
+  10's job, and specifically what blocks the "send a join-accepted/rejected packet" tasks from
+  being attempted yet (see Section 8).
+- Do not implement the join-accepted/join-rejected wire packet tasks before per-DPID-addressed
+  `Send()` exists - they need it and will need a real design pass of their own when that exists.
 - Do not add DirectX API surface, flags, or behavior beyond what `../free-eggbert`/
   `../planetblupi` call sites actually require (`CLAUDE.md` scope policy) — ask before expanding.
 - Do not attempt a mass rewrite or "cleanup" pass — this codebase is being built up incrementally,
@@ -746,15 +756,14 @@ decision itself is already made** (Decision 3, from an earlier batch):
 Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is well underway -
 build-time backend selection (Decision 4), starting the ENet listener (Decision 5), event
 servicing (Decision 6), session-instance-GUID generation, multi-peer hosting with real DPID
-assignment (Decision 7), and disconnect notification (Decision 8) are all implemented and
-verified. The next task (Section 8: implementing Decision 3's already-made DPID width/starting-
-value decision - changing include/dplay.h's DPID typedef to DWORD and DirectPlaySession::
-nextPlayerId's start to 0) touches a *public* header - confirm with the user before making the
-change, even though the decision itself already exists; do not just proceed because it was
-"already decided." Note: this will require updating the existing loopback DPID tests, since 0
-becomes a valid first DPID instead of an implicit error sentinel. Do not refactor unrelated code,
-do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one
-small, verified improvement - implement just that one task. Run the relevant build/test command
-from "Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
-considering the task done. Then update NEXT.md to reflect the new state.
+assignment (Decision 7), disconnect notification (Decision 8), and Decision 3's DPID width/
+starting-value implementation are all done and verified. The next task (Section 8: enforce
+dwMaxPlayers by rejecting new joins once full) is NOT blocked on per-DPID-addressed Send() the way
+the join-accepted/rejected packet tasks are - read Section 8's explanation of why before picking a
+different task. It likely needs a new RejectPendingConnection()-style transport method; decide
+graceful vs. immediate disconnect before implementing if it's not obvious. Do not refactor
+unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
+../planetblupi. Make one small, verified improvement - implement just that one task. Run the
+relevant build/test command from "Useful commands" (or the task's own "Verify" step) and confirm
+it actually passes before considering the task done. Then update NEXT.md to reflect the new state.
 ```
