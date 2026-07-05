@@ -7,11 +7,13 @@
  * implementation: must never be included from `include/dplay.h` and must never be
  * installed.
  *
- * This header defines only the packet *header* fields and their flat (de)serialization.
- * Defensive size validation on the receive path (rejecting undersized buffers or a
- * `payloadLength` that disagrees with the actual received byte count) is `plan.md`
- * Phase 5's next task, not this one - `DeserializeDirectPlayWireHeader` below trusts its
- * precondition that `data` points at at least `kDirectPlayWireHeaderSize` bytes.
+ * This header defines the packet *header* fields, their flat (de)serialization, and
+ * defensive size validation for an untrusted receive buffer
+ * (`TryDeserializeDirectPlayWireHeader`). That validation deliberately does not check
+ * `magic`/`version` - a wrong-protocol/wrong-version packet is a different rejection
+ * reason than a malformed/truncated buffer, with its own `DPERR_*` mapping to be decided
+ * once a real transport (`EnetDirectPlayTransport`, still to be added in this same
+ * phase) actually receives packets.
  *
  * The `idFrom`/`idTo` fields are serialized using the local `sizeof(DPID)` as-is
  * (whatever `include/dplay.h` currently typedefs `DPID` to). This is tied to the open
@@ -25,6 +27,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 namespace free_direct_directplay {
@@ -106,9 +109,9 @@ inline void SerializeDirectPlayWireHeader(const DirectPlayWirePacketHeader& head
 }
 
 /// Parses a flat wire header out of `data`. Precondition: `data` points at at least
-/// `kDirectPlayWireHeaderSize` bytes - enforcing that precondition against an untrusted,
-/// possibly-truncated receive buffer is the next `plan.md` Phase 5 task, not this
-/// function's job.
+/// `kDirectPlayWireHeaderSize` bytes. Callers that cannot guarantee this (e.g. an
+/// untrusted, possibly-truncated receive buffer) must use
+/// `TryDeserializeDirectPlayWireHeader` below instead.
 inline DirectPlayWirePacketHeader DeserializeDirectPlayWireHeader(const std::uint8_t* data) {
     DirectPlayWirePacketHeader header;
     std::uint32_t type = 0;
@@ -130,6 +133,25 @@ inline DirectPlayWirePacketHeader DeserializeDirectPlayWireHeader(const std::uin
     std::memcpy(&header.idTo, p, sizeof(DPID));
     p += sizeof(DPID);
     std::memcpy(&header.payloadLength, p, sizeof(header.payloadLength));
+    return header;
+}
+
+/// Validates an untrusted received buffer before trusting it as a wire header, then
+/// parses it. Rejects (returns `std::nullopt`, without reading past `dataSize` bytes):
+///  - a buffer smaller than `kDirectPlayWireHeaderSize` (too small to even hold a
+///    header);
+///  - a buffer whose parsed `payloadLength` disagrees with the actual trailing byte
+///    count (`dataSize - kDirectPlayWireHeaderSize`) - i.e. the header claims a payload
+///    size that does not match what was actually received.
+/// Does not check `magic`/`version` - see the file-level comment above.
+inline std::optional<DirectPlayWirePacketHeader> TryDeserializeDirectPlayWireHeader(
+    const std::uint8_t* data, std::size_t dataSize) {
+    if (dataSize < kDirectPlayWireHeaderSize) return std::nullopt;
+
+    const DirectPlayWirePacketHeader header = DeserializeDirectPlayWireHeader(data);
+    const std::size_t actualPayloadSize = dataSize - kDirectPlayWireHeaderSize;
+    if (static_cast<std::size_t>(header.payloadLength) != actualPayloadSize) return std::nullopt;
+
     return header;
 }
 

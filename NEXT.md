@@ -45,9 +45,10 @@ now builds successfully, against a real vendored ENet copy (see Section 3).
 
 **Test status**: `tests/directplay_tests.cpp` is a standalone, dependency-light file with its own
 `main()` — **not yet wired into CMake/CTest** (that is `plan.md` Phase 15, not started). Last
-confirmed run (manual, per the file's own documented build command): **8/8 tests passing** (added
-this session: a wire-header serialize/deserialize round-trip test). No other automated tests exist
-in the repository.
+confirmed run (manual, per the file's own documented build command): **11/11 tests passing**
+(added this session: a wire-header serialize/deserialize round-trip test, plus three tests for the
+validating `TryDeserializeDirectPlayWireHeader` - truncated buffer, mismatched payload length,
+and the accept case). No other automated tests exist in the repository.
 
 **CLI/tools/apps/libraries currently available**:
 - `libfree-direct.a` (static library) — the compatibility layer itself.
@@ -64,15 +65,17 @@ pass; a real DirectPlay call-site audit (`docs/directplay-callsite-audit.md`); `
 `LoopbackDirectPlayTransport` supporting self-send/receive); the SDL3 build blocker fixed; `plan.md`
 Phase 5's CMake option/detection infrastructure for ENet, plus a real ENet copy now vendored and
 verified to build and function correctly; the internal DirectPlay wire packet header
-(`DirectPlayWireProtocol.hpp`) added as a pure data structure with a passing round-trip test.
+(`DirectPlayWireProtocol.hpp`) added as a pure data structure with a passing round-trip test, plus
+defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHeader`).
 
 **What does not work yet / is not implemented**:
 - `EnetDirectPlayTransport` — **no code exists yet**, only the CMake plumbing to build against
   ENet once it does, plus the wire packet header it will eventually use. There is currently no
   networked (cross-process) DirectPlay of any kind — only same-object loopback self-send works.
-- The wire packet header (`DirectPlayWirePacketHeader`) exists and round-trips correctly, but
-  nothing constructs one from a real `DPSESSIONDESC2`/session yet, and receive-side defensive size
-  validation (undersized buffer, mismatched `payloadLength`) is not implemented yet either.
+- The wire packet header (`DirectPlayWirePacketHeader`) exists, round-trips correctly, and
+  validates buffer size/payload-length consistency on receive, but nothing constructs one from a
+  real `DPSESSIONDESC2`/session yet, and `magic`/`version` mismatches are not rejected yet either
+  (deliberately deferred — see `DirectPlayWireProtocol.hpp`'s file comment).
 - General `Send()` routing (to a player other than the sender) is a silent no-op — real routing,
   broadcast, and player-ID/payload validation are `plan.md` Phase 10, not started.
 - `EnumSessions()` never finds anything (returns zero results) — real session discovery is
@@ -126,8 +129,13 @@ verified to build and function correctly; the internal DirectPlay wire packet he
   `CMakeLists.txt`'s `target_sources(free-direct ...)`. Added
   `Test_WireHeaderRoundTrip_PreservesAllFields` as an 8th test in `tests/directplay_tests.cpp`.
   Does **not** yet: populate a header from a real `DPSESSIONDESC2`/session (nothing constructs one
-  outside the test), or validate an untrusted receive buffer's size/length before deserializing
-  (next `plan.md` Phase 5 task).
+  outside the test).
+- **Added** `TryDeserializeDirectPlayWireHeader(data, dataSize)` to the same file — validates an
+  untrusted buffer before parsing it: rejects (`std::nullopt`) a buffer smaller than
+  `kDirectPlayWireHeaderSize`, or one whose parsed `payloadLength` disagrees with the actual
+  trailing byte count. Does not check `magic`/`version` (deliberately deferred, see the header's
+  file comment). Added three tests to `tests/directplay_tests.cpp` (now 11 total): truncated
+  buffer, mismatched payload length, and the accept case.
 
 ## 4. Current blocker / main problem
 
@@ -226,9 +234,10 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     unconditionally by `Open()` today (the only backend that exists).
   - `DirectPlayWireProtocol.hpp`/`.cpp` — `DirectPlayWirePacketType` enum and
     `DirectPlayWirePacketHeader` struct (magic/version/type/applicationGuid/sessionGuid/idFrom/
-    idTo/payloadLength) plus flat serialize/deserialize free functions. Pure data structure, zero
-    ENet dependency, not yet used by any transport (`EnetDirectPlayTransport` is what will
-    construct/consume these once it exists).
+    idTo/payloadLength) plus flat serialize/deserialize free functions, plus a validating
+    `TryDeserializeDirectPlayWireHeader` for untrusted receive buffers (size/length checks only,
+    not magic/version). Pure data structure, zero ENet dependency, not yet used by any transport
+    (`EnetDirectPlayTransport` is what will construct/consume these once it exists).
   - `EnetDirectPlayTransport` — **does not exist yet**.
 
 **Data flow for the one working networked-ish path (self-send)**: `Open(DPOPEN_CREATE)` →
@@ -289,28 +298,20 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-1. **Add defensive packet size validation** to the wire header's deserialize path: reject buffers
-   smaller than `kDirectPlayWireHeaderSize`, and reject a stated `payloadLength` that doesn't
-   match the actual received byte count.
-   - Files: `src/directplay/DirectPlayWireProtocol.hpp`/`.cpp`.
-   - Verify: extend `tests/directplay_tests.cpp`'s wire-header test (or add a new one) with a
-     truncated-buffer case and a mismatched-length case, both expected to fail cleanly (return an
-     error/`std::optional`-style "no value", not crash) — re-run the command in Section 7.
-
-2. **Add the `EnetDirectPlayTransport` class skeleton**, implementing `IDirectPlayTransport` with
+1. **Add the `EnetDirectPlayTransport` class skeleton**, implementing `IDirectPlayTransport` with
    stub method bodies (to be filled in by later tasks).
    - Files: new `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`; `CMakeLists.txt` (add the
      `.cpp` to `target_sources(free-direct ...)`, gated by `if(FREE_DIRECT_ENABLE_ENET)`).
    - Verify: `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
      cmake --build cmake-build-debug -j4` succeeds.
 
-3. **Add ENet init/shutdown lifecycle** (`enet_initialize`/`enet_deinitialize`, once per process
+2. **Add ENet init/shutdown lifecycle** (`enet_initialize`/`enet_deinitialize`, once per process
    regardless of instance count) as the skeleton's first real behavior.
    - Files: `src/directplay/EnetDirectPlayTransport.cpp`.
-   - Verify: same build command as task 2, plus a small standalone smoke test constructing and
+   - Verify: same build command as task 1, plus a small standalone smoke test constructing and
      destroying one or more `EnetDirectPlayTransport` instances without crashing.
 
-4. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
+3. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
    - Files: `docs/directplay-design.md` (add a new decision entry, matching the existing
      "Decision 1" format already in that file).
    - Verify: none — this is a documentation/decision task, not code.
@@ -339,9 +340,9 @@ behavior; this has not been attempted.
 
 ```
 Read NEXT.md first. Inspect only the files needed for the first task in "Next smallest tasks"
-(currently: defensive packet size validation on DirectPlayWireProtocol's deserialize path). Do not
-refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Make one small, verified improvement - implement just that one task. Run the
-relevant build/test command from "Useful commands" (or the task's own "Verify" step) and confirm
-it actually passes before considering the task done. Then update NEXT.md to reflect the new state.
+(currently: the EnetDirectPlayTransport class skeleton). Do not refactor unrelated code, do not
+touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
+verified improvement - implement just that one task. Run the relevant build/test command from
+"Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
+considering the task done. Then update NEXT.md to reflect the new state.
 ```

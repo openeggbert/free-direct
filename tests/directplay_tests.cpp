@@ -250,6 +250,54 @@ void Test_WireHeaderRoundTrip_PreservesAllFields() {
     CHECK(roundTripped.payloadLength == 1234);
 }
 
+// plan.md Phase 5: "Add defensive packet size validation on receive: reject packets
+// smaller than the fixed header size, ... both expected to fail cleanly (not crash)."
+void Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer() {
+    using namespace free_direct_directplay;
+
+    std::vector<std::uint8_t> wire(kDirectPlayWireHeaderSize - 1, 0);
+    CHECK(!TryDeserializeDirectPlayWireHeader(wire.data(), wire.size()).has_value());
+
+    std::vector<std::uint8_t> empty;
+    CHECK(!TryDeserializeDirectPlayWireHeader(empty.data(), empty.size()).has_value());
+}
+
+// plan.md Phase 5: "... and reject a stated payload length that does not match the
+// actual received byte count."
+void Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength() {
+    using namespace free_direct_directplay;
+
+    DirectPlayWirePacketHeader header;
+    header.payloadLength = 5; // claims 5 payload bytes...
+
+    std::vector<std::uint8_t> wire;
+    SerializeDirectPlayWireHeader(header, wire);
+    wire.resize(wire.size() + 3, 0xAB); // ...but only 3 actually follow.
+
+    CHECK(!TryDeserializeDirectPlayWireHeader(wire.data(), wire.size()).has_value());
+}
+
+void Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer() {
+    using namespace free_direct_directplay;
+
+    DirectPlayWirePacketHeader header;
+    header.idFrom = 3;
+    header.idTo = 4;
+    header.payloadLength = 2;
+
+    std::vector<std::uint8_t> wire;
+    SerializeDirectPlayWireHeader(header, wire);
+    wire.push_back(0x01);
+    wire.push_back(0x02);
+
+    const std::optional<DirectPlayWirePacketHeader> parsed =
+        TryDeserializeDirectPlayWireHeader(wire.data(), wire.size());
+    CHECK(parsed.has_value());
+    CHECK(parsed->idFrom == 3);
+    CHECK(parsed->idTo == 4);
+    CHECK(parsed->payloadLength == 2);
+}
+
 } // namespace
 
 int main() {
@@ -261,6 +309,9 @@ int main() {
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();
     Test_LoopbackClose_SendAndReceiveReportNoConnection();
     Test_WireHeaderRoundTrip_PreservesAllFields();
+    Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer();
+    Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength();
+    Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectPlay tests passed.\n");

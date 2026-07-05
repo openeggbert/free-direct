@@ -830,9 +830,24 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       -j4`) still succeeds end-to-end with the new `.cpp` added to `target_sources`, and that
       `include/dplay.h` still has zero ENet/SDL identifiers (`grep -niE "enet|SDL_|SdlNet"
       include/dplay.h`).
-- [ ] Add defensive packet size validation on receive: reject packets smaller than the fixed
+- [x] Add defensive packet size validation on receive: reject packets smaller than the fixed
       header size, and reject a stated payload length that does not match the actual received byte
-      count.
+      count. **Done:** `TryDeserializeDirectPlayWireHeader(data, dataSize)` in
+      `src/directplay/DirectPlayWireProtocol.hpp` — returns `std::nullopt` (without reading past
+      `dataSize` bytes) when `dataSize < kDirectPlayWireHeaderSize`, or when the parsed
+      `payloadLength` disagrees with `dataSize - kDirectPlayWireHeaderSize`; otherwise returns the
+      parsed header. Deliberately does not check `magic`/`version` here - a wrong-protocol/
+      wrong-version packet gets its own `DPERR_*` mapping once a real transport
+      (`EnetDirectPlayTransport`, still to be added) actually receives packets, rather than being
+      folded into this size-only check. The unchecked `DeserializeDirectPlayWireHeader` from the
+      previous task is unchanged (still precondition-based, used internally by the new function).
+      Verified with three new tests in `tests/directplay_tests.cpp` (now 11 total):
+      `Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer` (both a one-byte-short buffer and an
+      empty buffer), `Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength` (header claims
+      5 payload bytes, buffer has 3), and `Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer`
+      (a correctly-sized buffer round-trips through the validator). Built and run via the command
+      in `NEXT.md` Section 7 — `OK: all DirectPlay tests passed.`, exit code 0. Also confirmed the
+      full CMake build still succeeds and `include/dplay.h` still has zero ENet/SDL identifiers.
 - [ ] Add protocol documentation for the header layout above to `docs/directplay-protocol.md`
       (Phase 16).
 
