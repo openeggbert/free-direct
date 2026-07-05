@@ -19,6 +19,7 @@
  */
 #include "dplay.h"
 #include "DirectPlayMessageQueue.hpp"
+#include "DirectPlayWireProtocol.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -217,6 +218,38 @@ void Test_LoopbackClose_SendAndReceiveReportNoConnection() {
     dp->Release();
 }
 
+// plan.md Phase 5: "a unit test serializes and deserializes the internal packet header
+// and asserts round-trip equality."
+//
+// Pure data-structure test - no ENet dependency exists yet, and this header has none.
+void Test_WireHeaderRoundTrip_PreservesAllFields() {
+    using namespace free_direct_directplay;
+
+    DirectPlayWirePacketHeader header;
+    header.type = DirectPlayWirePacketType::Discovery;
+    header.applicationGuid = {0x11223344, 0x5566, 0x7788, {1, 2, 3, 4, 5, 6, 7, 8}};
+    header.sessionGuid = {0xaabbccdd, 0xeeff, 0x0011, {9, 8, 7, 6, 5, 4, 3, 2}};
+    header.idFrom = 42;
+    header.idTo = 99;
+    header.payloadLength = 1234;
+
+    std::vector<std::uint8_t> wire;
+    SerializeDirectPlayWireHeader(header, wire);
+    CHECK(wire.size() == kDirectPlayWireHeaderSize);
+
+    const DirectPlayWirePacketHeader roundTripped =
+        DeserializeDirectPlayWireHeader(wire.data());
+
+    CHECK(roundTripped.magic == kDirectPlayWireMagic);
+    CHECK(roundTripped.version == kDirectPlayWireProtocolVersion);
+    CHECK(roundTripped.type == DirectPlayWirePacketType::Discovery);
+    CHECK(std::memcmp(&roundTripped.applicationGuid, &header.applicationGuid, sizeof(GUID)) == 0);
+    CHECK(std::memcmp(&roundTripped.sessionGuid, &header.sessionGuid, sizeof(GUID)) == 0);
+    CHECK(roundTripped.idFrom == 42);
+    CHECK(roundTripped.idTo == 99);
+    CHECK(roundTripped.payloadLength == 1234);
+}
+
 } // namespace
 
 int main() {
@@ -227,6 +260,7 @@ int main() {
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();
     Test_LoopbackClose_SendAndReceiveReportNoConnection();
+    Test_WireHeaderRoundTrip_PreservesAllFields();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectPlay tests passed.\n");

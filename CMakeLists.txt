@@ -96,6 +96,7 @@ target_sources(free-direct
         src/directplay/DirectPlaySession.cpp
         src/directplay/DirectPlayPlayer.cpp
         src/directplay/DirectPlayMessageQueue.cpp
+        src/directplay/DirectPlayWireProtocol.cpp
         src/directplay/LoopbackDirectPlayTransport.cpp
         src/diagnostics/Diagnostics.cpp
 )

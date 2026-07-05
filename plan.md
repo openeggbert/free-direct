@@ -789,19 +789,47 @@ entirely gated behind a CMake option so the default build has no ENet dependency
 - [ ] Map `DPSEND_GUARANTEED` to `ENET_PACKET_FLAG_RELIABLE` in the transport layer.
 - [ ] Decide the default ENet channel layout (a single channel is likely sufficient given both
       target games' simple message patterns) and document the decision with rationale.
-- [ ] Add a packet type enum (e.g. `Join`, `JoinAccept`, `JoinReject`, `Data`, `Discovery`,
-      `DiscoveryResponse`) for the internal FreeDirect-to-FreeDirect wire protocol.
-- [ ] Add a protocol version field to the internal packet header.
-- [ ] Add a magic number field to the internal packet header, to reject non-FreeDirect traffic
-      early.
-- [ ] Add an application GUID field to the internal packet header, populated from
+- [x] Add a packet type enum (e.g. `Join`, `JoinAccept`, `JoinReject`, `Data`, `Discovery`,
+      `DiscoveryResponse`) for the internal FreeDirect-to-FreeDirect wire protocol. **Done:**
+      `DirectPlayWirePacketType` in new `src/directplay/DirectPlayWireProtocol.hpp` — exactly
+      these six values; only `Data` is exercised by any code today (it's the header's default),
+      the rest are placeholders for Phases 6-8.
+- [x] Add a protocol version field to the internal packet header. **Done:**
+      `DirectPlayWirePacketHeader::version`, defaulted to `kDirectPlayWireProtocolVersion = 1`.
+- [x] Add a magic number field to the internal packet header, to reject non-FreeDirect traffic
+      early. **Done:** `DirectPlayWirePacketHeader::magic`, defaulted to `kDirectPlayWireMagic`
+      ("FRDP"). Only the field exists so far; actually rejecting a mismatched magic on receive is
+      part of the next task (defensive packet size/content validation) and Phase 8/10 delivery,
+      not this one.
+- [x] Add an application GUID field to the internal packet header, populated from
       `DPSESSIONDESC2.guidApplication`, so peers running different target games can never join each
-      other's sessions.
-- [ ] Add a session GUID field to the internal packet header, populated from
-      `DPSESSIONDESC2.guidInstance`.
-- [ ] Add a sender player ID field to the internal packet header.
-- [ ] Add a recipient player ID field to the internal packet header.
-- [ ] Add a payload length field to the internal packet header.
+      other's sessions. **Done:** `DirectPlayWirePacketHeader::applicationGuid` (a plain `GUID`
+      field). Not yet actually populated from a live `DPSESSIONDESC2` anywhere — no code
+      constructs a real header yet, since `EnetDirectPlayTransport` (a later task in this same
+      phase) is what will do that.
+- [x] Add a session GUID field to the internal packet header, populated from
+      `DPSESSIONDESC2.guidInstance`. **Done:** `DirectPlayWirePacketHeader::sessionGuid`, same
+      caveat as `applicationGuid` above — field exists, not yet populated by any real code path.
+- [x] Add a sender player ID field to the internal packet header. **Done:**
+      `DirectPlayWirePacketHeader::idFrom` (type `DPID`, matching the local `dplay.h` typedef
+      as-is — see the open DPID-size question in `NEXT.md` Section 4 / Phase 9).
+- [x] Add a recipient player ID field to the internal packet header. **Done:**
+      `DirectPlayWirePacketHeader::idTo`, same `DPID` caveat as `idFrom`.
+- [x] Add a payload length field to the internal packet header. **Done:**
+      `DirectPlayWirePacketHeader::payloadLength` (`std::uint32_t`). The header does not carry the
+      payload bytes themselves, only this length; a caller appends/reads payload bytes separately.
+      All eight fields above serialize/deserialize via
+      `SerializeDirectPlayWireHeader`/`DeserializeDirectPlayWireHeader` (flat, padding-free,
+      per-field `memcpy` — deliberately not `sizeof(DirectPlayWirePacketHeader)`, to avoid
+      depending on compiler struct-padding behavior). Verified with a real round-trip test,
+      `Test_WireHeaderRoundTrip_PreservesAllFields` in `tests/directplay_tests.cpp` (now 8
+      tests total): every field, including both GUIDs, survives serialize→deserialize intact.
+      Built and run via the command in `NEXT.md` Section 7 — `OK: all DirectPlay tests passed.`,
+      exit code 0. Also confirmed the full CMake build
+      (`cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON && cmake --build cmake-build-debug
+      -j4`) still succeeds end-to-end with the new `.cpp` added to `target_sources`, and that
+      `include/dplay.h` still has zero ENet/SDL identifiers (`grep -niE "enet|SDL_|SdlNet"
+      include/dplay.h`).
 - [ ] Add defensive packet size validation on receive: reject packets smaller than the fixed
       header size, and reject a stated payload length that does not match the actual received byte
       count.
