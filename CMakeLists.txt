@@ -131,6 +131,11 @@ if(FREE_DIRECT_ENABLE_ENET)
     # Only compiled under this option, so the default build has zero ENet dependency -
     # EnetDirectPlayTransport.hpp is not (yet) included by anything else.
     target_sources(free-direct PRIVATE src/directplay/EnetDirectPlayTransport.cpp)
+    # Lets DirectPlay.cpp #ifdef its way to constructing EnetDirectPlayTransport instead of
+    # LoopbackDirectPlayTransport in Open() (docs/directplay-design.md Decision 4: build-time
+    # backend selection, driven by this exact option, no run-time switch). PRIVATE: this is an
+    # implementation detail of free-direct itself, not something consumers should see or set.
+    target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_ENET=1)
 endif()
 
 add_executable(FREE_DIRECT src/Main.cpp)

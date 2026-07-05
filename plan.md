@@ -1039,11 +1039,28 @@ whichever transport is configured.
       supply one.
 - [ ] Store the session descriptor supplied to `Open` on `DirectPlaySession` (per Phase 2).
 - [ ] Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when using
-      `EnetDirectPlayTransport`. **Written decision now exists** for the prerequisite "how does
-      `Open()` know to use `EnetDirectPlayTransport`" question: `docs/directplay-design.md`
-      Decision 4 - build-time selection via `FREE_DIRECT_ENABLE_ENET` (confirmed with the user
-      directly), no new API surface. The actual `#ifdef`-gated selection code in `Open()`, plus the
-      CMake compile definition Decision 4 notes is still missing, are still this task's job.
+      `EnetDirectPlayTransport`. **Partially done:** the build-time backend-selection half of this
+      task now exists - `CMakeLists.txt`'s `if(FREE_DIRECT_ENABLE_ENET)` block (the one already
+      linking `FreeDirect::ENet` and adding `EnetDirectPlayTransport.cpp`) now also adds
+      `target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_ENET=1)`;
+      `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) now `#ifdef FREE_DIRECT_ENABLE_ENET`s between
+      constructing an `EnetDirectPlayTransport` or a `LoopbackDirectPlayTransport`, replacing the
+      previous unconditional `LoopbackDirectPlayTransport` construction, per `docs/
+      directplay-design.md` Decision 4. **Still missing** (this task's actual title): `Open()`
+      never calls `Listen()` on the constructed `EnetDirectPlayTransport` with a real port - the
+      transport exists but never actually listens, so `EnetDirectPlayTransport::Send()`
+      immediately fails with `DPERR_GENERIC` (no `peer_`) for any `Send()` call today when this
+      backend is selected. Where the port comes from (a new `DPSESSIONDESC2`-adjacent field? A
+      fixed default? Something else?) is not yet decided - that is the next task, not resolved
+      here. **Verified for real**: a standalone smoke test (not committed) compiled the exact same
+      `DirectPlay.cpp` twice, once without and once with `-DFREE_DIRECT_ENABLE_ENET=1` (matching
+      what CMake defines), and confirmed observably different runtime behavior for the same
+      `Open(DPOPEN_CREATE)` → `CreatePlayer` → `Send(self)` sequence: `DP_OK` (loopback
+      self-send succeeds) vs. `DPERR_GENERIC` (ENet transport has no peer yet) - proof the
+      `#ifdef` actually selects a different concrete class at runtime, not just that both branches
+      compile. Also re-verified both full CMake builds (`ENET=OFF`/`ON`) end-to-end, the 12/12
+      `tests/directplay_tests.cpp` suite (built without the macro, so unaffected), and that
+      `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Assign the host player-ID namespace: decide and document the starting DPID value and
       increment rule for host-allocated players, consistent with Phase 0's finding about
       `free-eggbert`'s index-based DPID comparison. **Written decision now exists** (done ahead of

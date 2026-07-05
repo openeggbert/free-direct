@@ -6,6 +6,9 @@
 #include "dplay.h"
 #include "DirectPlaySession.hpp"
 #include "LoopbackDirectPlayTransport.hpp"
+#ifdef FREE_DIRECT_ENABLE_ENET
+#include "EnetDirectPlayTransport.hpp"
+#endif
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -77,10 +80,13 @@ namespace {
             if (lpSessionDesc->lpszSessionNameA) session_.sessionName = lpSessionDesc->lpszSessionNameA;
             session_.password.clear();
             if (lpSessionDesc->lpszPasswordA) session_.password = lpSessionDesc->lpszPasswordA;
-            // Loopback is the only transport backend that exists today (EnetDirectPlayTransport
-            // lands in Phase 5), so it is assigned unconditionally - there is no
-            // provider/backend selection mechanism yet (that's Phase 5/6/8's job).
+            // Backend selection is build-time-only (docs/directplay-design.md Decision 4), driven
+            // directly by FREE_DIRECT_ENABLE_ENET - no run-time switch, no new API parameter.
+#ifdef FREE_DIRECT_ENABLE_ENET
+            session_.transport = std::make_unique<free_direct_directplay::EnetDirectPlayTransport>();
+#else
             session_.transport = std::make_unique<free_direct_directplay::LoopbackDirectPlayTransport>();
+#endif
             session_.state = free_direct_directplay::DirectPlayObjectState::Open;
             return DP_OK;
         }
