@@ -262,9 +262,12 @@ made incorrectly given what was knowable at the time.
 
 ## Decision 4: `Open()` selects its transport backend at build time, via `FREE_DIRECT_ENABLE_ENET`
 
-**Status:** Decided, **not yet implemented**. Recorded ahead of `plan.md` Phase 6 ("Session
-hosting") writing any code that depends on it, per the same "decide before implementing" pattern
-as Decisions 2 and 3. Asked of, and confirmed by, the user directly (this is a FreeDirect-internal
+**Status:** Decided and implemented. Recorded ahead of `plan.md` Phase 6 ("Session hosting")
+writing any code that depends on it, per the same "decide before implementing" pattern as
+Decisions 2 and 3 - `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) now `#ifdef
+FREE_DIRECT_ENABLE_ENET`-selects `EnetDirectPlayTransport` vs. `LoopbackDirectPlayTransport`, and
+`CMakeLists.txt`'s `if(FREE_DIRECT_ENABLE_ENET)` block defines that macro via
+`target_compile_definitions`. Asked of, and confirmed by, the user directly (this is a FreeDirect-internal
 mechanism with no real DirectPlay equivalent to derive it from — see "The question" below).
 
 ### The question
@@ -316,12 +319,16 @@ preprocessor conditional (`#ifdef`/`#if`) fed by a compile definition CMake sets
 `EnetDirectPlayTransport.cpp` to `target_sources()` and links `FreeDirect::ENet`), so adding that
 compile definition is part of implementing this decision, not a separate task.
 
-### When this gets implemented
+### Implemented
 
-`plan.md` Phase 6, alongside "Implement `Open(..., DPOPEN_CREATE)` end-to-end on top of the
-configured transport" and "Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when
-using `EnetDirectPlayTransport`" — this decision is the missing piece those two tasks need before
-either can be written correctly.
+`CMakeLists.txt`'s existing `if(FREE_DIRECT_ENABLE_ENET)` block (the one already linking
+`FreeDirect::ENet` and adding `EnetDirectPlayTransport.cpp`) now also has
+`target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_ENET=1)`.
+`DirectPlay2AImpl::Open()` `#ifdef FREE_DIRECT_ENABLE_ENET`-guards both the
+`#include "EnetDirectPlayTransport.hpp"` and the transport construction itself. Verified with a
+standalone smoke test compiling the identical `DirectPlay.cpp` with and without the macro and
+observing genuinely different runtime behavior (see Decision 5's own verification, which reuses
+the same technique).
 
 ### Open idea — not decided, not scheduled
 
@@ -330,3 +337,82 @@ single build exercise both backends without reconfiguring CMake, which could sim
 integration testing (`plan.md` Phase 15). This was considered and explicitly rejected for now in
 favor of the simpler build-time mechanism, per the user's direct choice — revisit only if Phase 15
 finds the build-time mechanism genuinely blocks a specific testing need, not preemptively.
+
+---
+
+## Decision 5: fixed default ENet listen port `51321`
+
+**Status:** Decided and implemented. Asked of, and confirmed by, the user directly - like
+Decision 4, this is a FreeDirect-internal mechanism question with no real DirectPlay precedent to
+derive it from.
+
+### The question
+
+Once `Open(..., DPOPEN_CREATE)` selects `EnetDirectPlayTransport` (Decision 4), it needs to call
+`Listen(port)` to actually start hosting. What `port`?
+
+### The finding that forces the answer
+
+`DPSESSIONDESC2` (`include/dplay.h`) has no port, address, or any other network-addressing field
+at all - real Microsoft DirectPlay abstracts network addressing behind service providers, a
+concept FreeDirect's DirectPlay reimplementation does not have (per `CLAUDE.md`'s DirectPlay
+Policy, FreeDirect's compatibility goal is the `IDirectPlay`/`IDirectPlay2A` C++ API contract, not
+wire/protocol-level fidelity to real DirectPlay's service-provider architecture). There is
+therefore no DirectPlay API value a port could be derived from, unlike (for example) the DPID
+decisions in Decision 3, which were forced by concrete `free-eggbert` source citations. This is a
+pure FreeDirect-internal implementation choice.
+
+### Decision
+
+A single fixed constant, `kDefaultDirectPlayEnetPort = 51321`
+(`src/directplay/EnetDirectPlayTransport.hpp`), used by every hosting `Open(...,
+DPOPEN_CREATE)` call when `FREE_DIRECT_ENABLE_ENET` is on. Chosen from IANA's dynamic/private port
+range (49152-65535) specifically to minimize collision risk with registered services, since
+FreeDirect has no way to know what else might be running on a host machine. No configurability
+(environment variable, session-descriptor-adjacent field, etc.) is added - matching Decision 4's
+"no new mechanism beyond what's strictly needed" reasoning, and because nothing currently needs
+more than one FreeDirect session listening on one machine at a time.
+
+### Implemented
+
+`DirectPlay2AImpl::Open()` (`DirectPlay.cpp`), inside the `FREE_DIRECT_ENABLE_ENET` branch, calls
+`session_.transport->Listen(free_direct_directplay::kDefaultDirectPlayEnetPort)` only when
+`session_.isHost` (i.e. `DPOPEN_CREATE`) - a joining role calling `Connect()` instead is `plan.md`
+Phase 7's job, not wired up here. If `Listen()` fails, `Open()` resets the transport and returns
+`DPERR_CANTCREATESESSION` (the closest-matching real `DPERR_*` code: it means "the host attempt to
+create/set up the session itself failed," which is exactly what a failed `Listen()` represents at
+this level - not e.g. `DPERR_INVALIDPARAMS`, since nothing about the caller's parameters was
+wrong).
+
+**Verified for real**, not just "compiles", with two standalone smoke tests (not committed):
+(1) the identical `DirectPlay.cpp` compiled twice - once without and once with
+`-DFREE_DIRECT_ENABLE_ENET=1` - producing genuinely different `Open`/`CreatePlayer`/`Send`
+behavior each time (`DP_OK` for loopback self-send; `DPERR_GENERIC` for the ENet path, since
+`Send()` still has no peer - `Listen()` alone does not create one). (2) A port-conflict test under
+the ENet build: a first `Open(DPOPEN_CREATE)` succeeds; a *second*, independent `DirectPlayCreate`
+object's `Open(DPOPEN_CREATE)` (same default port) fails with `DPERR_CANTCREATESESSION`, because
+the OS-level UDP socket is already bound - real evidence `Listen()` performed a genuine `bind()`,
+not a no-op; releasing the first host and opening a third then succeeds again, proving the port
+was genuinely released. **An earlier attempt at a third kind of test - a real raw ENet client
+actually connecting to the hosted port - failed, and stayed failed after investigation, which is
+itself an important, now-documented finding** (see Caveat below), not a bug in `Listen()` or this
+decision. Also re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end and the
+12/12 `tests/directplay_tests.cpp` suite (built without the macro, unaffected).
+
+### Caveat
+
+`Listen()` succeeding means a real UDP socket is bound on port `51321` and ENet considers the host
+capable of accepting connections - but **no connection can actually complete today**, for a more
+fundamental reason than "nothing calls `Connect()`/`EnumSessions` yet" (Phases 7/8, not started):
+ENet is a poll-driven library with no internal thread - nothing happens on an `ENetHost` (accepting
+a pending connection, delivering a packet, anything) until something calls `enet_host_service()` on
+it. `Open()` calls `Listen()` and returns; nothing in `DirectPlay.cpp` ever services the
+constructed transport's host afterward, and `EnetDirectPlayTransport` has no general "pump" method
+for anything to call even if `DirectPlay.cpp` wanted to (only `Shutdown()`'s own bounded
+disconnect-wait loop services the host internally, and only during teardown). A real external ENet
+client attempting to connect today (verified directly - the connection genuinely never completes)
+would see its connection attempt time out, not get rejected - the socket is open but nothing is
+answering it. Some later task (implied by Phase 7/8/10's real message/connection handling, not
+explicitly named as its own checkbox anywhere yet) needs to give `Open()`'s hosted session an
+actual event loop or periodic service call before a real network connection can complete
+end-to-end.

@@ -3,10 +3,11 @@
  * @brief ENet-backed `IDirectPlayTransport` implementation (`plan.md` Phase 5).
  *
  * Compiled only when `FREE_DIRECT_ENABLE_ENET` is `ON` - `CMakeLists.txt` only adds
- * `EnetDirectPlayTransport.cpp` to `target_sources()` under that option. Nothing else
- * includes this header yet: `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) still
- * unconditionally assigns `LoopbackDirectPlayTransport` - actually selecting this
- * backend is a later `plan.md` Phase 6 task, not this one.
+ * `EnetDirectPlayTransport.cpp` to `target_sources()` under that option, and only defines
+ * the `FREE_DIRECT_ENABLE_ENET` macro `DirectPlay.cpp` `#ifdef`s on under the same option
+ * (`docs/directplay-design.md` Decision 4). `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`)
+ * now includes this header and constructs this class under that macro; it still always
+ * uses `LoopbackDirectPlayTransport` in the default (`FREE_DIRECT_ENABLE_ENET=OFF`) build.
  *
  * This header is intentionally private to the DirectPlay implementation: it must
  * never be included from `include/dplay.h` and must never be installed. Per
@@ -27,9 +28,9 @@
  * `reliable` parameter) to the single `peer_` this class tracks. `Receive()` is still
  * an honest `false` stub - no `plan.md` Phase 5 task covers transport-level receive.
  * All of this is scoped to the single `peer_` a `Connect()`-role instance tracks; a
- * `Listen()`-role host tracking multiple connected peers is Phase 6/10's job. None of
- * this is wired into `DirectPlay.cpp` yet - `Open()` still unconditionally uses
- * `LoopbackDirectPlayTransport` (selecting this backend is Phase 6).
+ * `Listen()`-role host tracking multiple connected peers is Phase 6/10's job.
+ * `Open(..., DPOPEN_CREATE)` constructs this class under `FREE_DIRECT_ENABLE_ENET` but does
+ * not yet call `Listen()` on it - see `kDefaultDirectPlayEnetPort` below.
  * @note Status: PARTIAL
  */
 #pragma once
@@ -40,6 +41,13 @@
 #include <enet/enet.h>
 
 namespace free_direct_directplay {
+
+/// Default ENet listen port `Open(..., DPOPEN_CREATE)` uses when hosting under
+/// `FREE_DIRECT_ENABLE_ENET` (`docs/directplay-design.md` Decision 5). A fixed,
+/// FreeDirect-internal constant, not derived from any real DirectPlay API value -
+/// `DPSESSIONDESC2` has no port-like field (real DirectPlay abstracts network
+/// addressing behind service providers FreeDirect does not implement).
+inline constexpr std::uint16_t kDefaultDirectPlayEnetPort = 51321;
 
 /**
  * @brief `IDirectPlayTransport` implemented over real ENet reliable/unreliable UDP.

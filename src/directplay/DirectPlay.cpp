@@ -84,6 +84,15 @@ namespace {
             // directly by FREE_DIRECT_ENABLE_ENET - no run-time switch, no new API parameter.
 #ifdef FREE_DIRECT_ENABLE_ENET
             session_.transport = std::make_unique<free_direct_directplay::EnetDirectPlayTransport>();
+            if (session_.isHost) {
+                // Fixed default port (docs/directplay-design.md Decision 5) - DPSESSIONDESC2
+                // has no port-like field to derive one from. Only the hosting role listens
+                // here; a joining role calling Connect() is Phase 7's job, not this one's.
+                if (!session_.transport->Listen(free_direct_directplay::kDefaultDirectPlayEnetPort)) {
+                    session_.transport.reset();
+                    return DPERR_CANTCREATESESSION;
+                }
+            }
 #else
             session_.transport = std::make_unique<free_direct_directplay::LoopbackDirectPlayTransport>();
 #endif

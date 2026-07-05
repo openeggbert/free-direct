@@ -13,7 +13,10 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
 - **Current development phase**: `plan.md` Phase 5 ("ENet integration planning") is now complete
   except for one item explicitly deferred to Phase 16 (protocol documentation). Phases 0-4 are
   complete. Phase 6 ("Session hosting") is in progress: `Open()` now build-time-selects its
-  transport backend, but does not yet start the ENet listener.
+  transport backend and genuinely starts the ENet listener (real OS-level `bind()`, verified via
+  a port-conflict test), but **a real connection still cannot complete end-to-end** - a
+  newly-discovered gap, not yet a scheduled task before this session: ENet is poll-driven with no
+  internal thread, and nothing services a hosted transport's events after `Listen()` returns.
 - **Important architectural decisions**:
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net type or symbol may ever appear in them.
@@ -29,7 +32,10 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
     real host creation via `Listen(port)`, real client creation + peer connection via
     `Connect(address, port)`, real graceful disconnect in `Shutdown()`, and real reliable/unreliable
     send via `Send(data, size, reliable)`; `Receive` still an honest `false` stub - no separate
-    `plan.md` Phase 5 task covers it; not yet selected by `Open()`) as concrete backends.
+    `plan.md` Phase 5 task covers it) as concrete backends. `Open(..., DPOPEN_CREATE)` now
+    build-time-selects (`docs/directplay-design.md` Decision 4) and, for the ENet backend,
+    actually calls `Listen()` (Decision 5) - but no connection can complete yet, since nothing
+    services the resulting host's ENet events (see "Current development phase" above).
     `IDirectPlayTransport::Listen()`/`Connect()`/`Send()` all gained parameters this phase
     (`port`; `address, port`; `reliable`) that they did not have before.
   - `plan.md` is the authoritative English task list (every task atomic, one thing each);
@@ -90,20 +96,29 @@ the client's `Shutdown()` runs, and payloads sent via `Send()` arrive byte-for-b
 correct ENet packet flags (`ENET_PACKET_FLAG_RELIABLE` vs `ENET_PACKET_FLAG_UNSEQUENCED`,
 inspected on the receiving end) depending on the `reliable` argument; `DirectPlay2AImpl::Send()`
 now maps the real `DPSEND_GUARANTEED` flag to that `reliable` argument instead of hardcoding it;
-three `plan.md`/`NEXT.md` decision write-ups added to `docs/directplay-design.md` (Decision 2:
+five `plan.md`/`NEXT.md` decision write-ups added to `docs/directplay-design.md` (Decision 2:
 single ENet channel; Decision 3: `DPID` must be a 4-byte `DWORD`, and the host's first player must
 get `DPID` `0`; Decision 4: `Open()` selects its transport backend at build time, via
-`FREE_DIRECT_ENABLE_ENET`, confirmed with the user). This closes out `plan.md` Phase 5's code
-tasks entirely, and starts Phase 6: `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) now
+`FREE_DIRECT_ENABLE_ENET`, confirmed with the user; Decision 5: a fixed default ENet listen port,
+`51321`, confirmed with the user). This closes out `plan.md` Phase 5's code tasks entirely, and
+makes real progress on Phase 6: `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) now
 `#ifdef FREE_DIRECT_ENABLE_ENET`s between constructing `EnetDirectPlayTransport` or
-`LoopbackDirectPlayTransport`, per Decision 4 - verified with a standalone smoke test showing the
-exact same source produces observably different `Send()` behavior depending on the flag.
+`LoopbackDirectPlayTransport` (Decision 4), and - when hosting under the ENet backend - genuinely
+calls `Listen(kDefaultDirectPlayEnetPort)` (Decision 5), verified with a real port-conflict test
+(a second host on the same port fails with `DPERR_CANTCREATESESSION` because the OS socket is
+already bound). **Discovered and documented a real, previously-unknown gap** while verifying this:
+a real ENet client's connection attempt to the hosted port never completes, because ENet is
+poll-driven and nothing services the hosted transport's events after `Listen()` returns - this
+blocks all real Phase 7/8/10 networking regardless of what those phases implement, and is now
+tracked as its own new `plan.md` Phase 6 task.
 
 **What does not work yet / is not implemented**:
-- `Open()` now selects `EnetDirectPlayTransport` when built with `FREE_DIRECT_ENABLE_ENET`, but
-  never calls `Listen()` on it with a real port - the transport exists but never actually listens,
-  so any `Send()` on a freshly `Open()`ed ENet-backed session fails immediately with
-  `DPERR_GENERIC` (no `peer_`). Where the port comes from is not yet decided (next task).
+- **Newly discovered, blocks all real ENet networking**: `Open()`'s hosted ENet transport is
+  listening (a real OS-level socket, verified) but nothing services its events
+  (`enet_host_service`) after `Listen()` returns, so no real connection can ever complete through
+  it today, regardless of `Connect()`/`EnumSessions` existing - see `docs/directplay-design.md`
+  Decision 5's Caveat and the new `plan.md` Phase 6 task recording this. `Send()` on a freshly
+  `Open()`ed ENet-backed session still fails with `DPERR_GENERIC` (no `peer_`), same as before.
 - `EnetDirectPlayTransport` — real lifecycle, `Listen()`, `Connect()`, `Shutdown()`, and
   reliable/unreliable `Send()` all exist and are verified end-to-end against each other, but
   `Receive()` still returns `false` unconditionally (no `plan.md` Phase 5 task covers it - that's
@@ -326,6 +341,25 @@ exact same source produces observably different `Send()` behavior depending on t
   call sequence. Also re-verified both full CMake builds (`ENET=OFF`/`ON`) end-to-end, the 12/12
   `tests/directplay_tests.cpp` suite (built without the macro, confirmed unaffected), and that
   `include/dplay.h` has zero ENet/SDL identifiers.
+- **Decided (asked the user) and implemented Decision 5** (default ENet listen port): added
+  `kDefaultDirectPlayEnetPort = 51321` to `EnetDirectPlayTransport.hpp` (`DPSESSIONDESC2` has no
+  port-like field, so this is a fixed FreeDirect-internal constant, not derived from any
+  DirectPlay value). `Open(..., DPOPEN_CREATE)` now calls
+  `session_.transport->Listen(kDefaultDirectPlayEnetPort)` when hosting under the ENet backend,
+  resetting the transport and returning `DPERR_CANTCREATESESSION` if `Listen()` fails.
+  **Verified for real** with two standalone smoke tests (not committed): a port-conflict test (a
+  second, independent host on the same default port fails with `DPERR_CANTCREATESESSION` because
+  the OS-level UDP socket is already bound by the first - real evidence of a genuine `bind()`;
+  releasing the first and opening a third succeeds again, proving the port is genuinely released).
+  **A third test - a real raw ENet client actually connecting to the hosted port - failed, and
+  investigating why surfaced a genuine, previously-undocumented gap**: ENet is poll-driven with no
+  internal thread, and `Open()` never services the hosted transport's `ENetHost` after `Listen()`
+  returns (only `Shutdown()`'s own internal disconnect-wait loop services it, and only during
+  teardown) - so no real connection can complete end-to-end today, independent of whether
+  `Connect()`/`EnumSessions` exist. Documented in `docs/directplay-design.md` Decision 5's Caveat
+  and added as a new, explicit `plan.md` Phase 6 task (inserted directly after this one) so it
+  isn't silently left implicit. Also re-verified both CMake builds end-to-end and the 12/12 test
+  suite.
 
 ## 4. Current blocker / main problem
 
@@ -380,12 +414,16 @@ currently blocking anything, since the vendored path is the proven, working defa
   `Send`/`Receive` are reachable. This is a `free-eggbert` source-completeness gap, out of
   `free-direct`'s scope to fix (game source must not be modified).
 - **Incomplete**: `EnetDirectPlayTransport` has real `Listen()`, `Connect()`, `Shutdown()`, and
-  reliable/unreliable `Send()`, but `Receive()` still unconditionally returns `false`, and nothing
-  services a host's events outside of the connection/disconnect/send paths themselves.
-- **Incomplete**: `Open()` now selects `EnetDirectPlayTransport` when built with
-  `FREE_DIRECT_ENABLE_ENET`, but never calls `Listen()` on it - the ENet-backed session never
-  actually starts listening, so every `Send()`/`Receive()` on it fails today. Only the default
-  (`FREE_DIRECT_ENABLE_ENET=OFF`) build's loopback self-send path is functional end-to-end.
+  reliable/unreliable `Send()`, but `Receive()` still unconditionally returns `false`.
+- **Confirmed real gap, newly discovered and documented, blocks all real ENet networking**:
+  `Open()` genuinely starts listening on `EnetDirectPlayTransport` (real OS-level socket bind,
+  verified via a port-conflict test), but nothing ever calls `enet_host_service()` on the hosted
+  transport afterward - ENet is poll-driven with no internal thread, so no real connection can
+  complete end-to-end today, independent of whether `Connect()`/`EnumSessions` are implemented.
+  See `docs/directplay-design.md` Decision 5's Caveat and the new `plan.md` Phase 6 task
+  ("give `EnetDirectPlayTransport` a way to actually service its events") this discovery added.
+  Only the default (`FREE_DIRECT_ENABLE_ENET=OFF`) build's loopback self-send path is functional
+  end-to-end.
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -421,7 +459,9 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     `Open()` now `#ifdef FREE_DIRECT_ENABLE_ENET`-selects `EnetDirectPlayTransport` vs.
     `LoopbackDirectPlayTransport` for `session_.transport` (`docs/directplay-design.md` Decision
     4) - the `#include "EnetDirectPlayTransport.hpp"` at the top of the file is behind the same
-    `#ifdef`, so the default build never sees an ENet header.
+    `#ifdef`, so the default build never sees an ENet header. When hosting (`session_.isHost`)
+    under the ENet backend, `Open()` also calls `Listen(kDefaultDirectPlayEnetPort)` (Decision 5),
+    resetting the transport and returning `DPERR_CANTCREATESESSION` on failure.
   - `DirectPlaySession.hpp` — per-object state: `DirectPlayObjectState` enum
     (`Created`/`Open`/`Closed`), `isHost`, `localPlayerIds`/`remotePlayerIds`, `nextPlayerId`
     (placeholder DPID counter), session descriptor fields (`sessionName`, `password`,
@@ -454,9 +494,11 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     (`enet_packet_create` with `ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED` +
     `enet_peer_send` + `enet_host_flush`, same `peer_`-only scoping). `Receive()` still returns
     `false`. No general event servicing (a "pump") exists outside of the
-    connection/disconnect/send paths themselves. Compiled only under
-    `-DFREE_DIRECT_ENABLE_ENET=ON`;
-    not selected by `Open()` (Phase 6, not started).
+    connection/disconnect/send paths themselves - this is exactly why a real connection to
+    `Open()`'s hosted listener cannot complete today (see Section 5). Also exposes
+    `kDefaultDirectPlayEnetPort = 51321` (Decision 5). Compiled only under
+    `-DFREE_DIRECT_ENABLE_ENET=ON`; now selected by `Open()` for both construction (Decision 4)
+    and, when hosting, `Listen()` (Decision 5).
 
 **Data flow for the one working networked-ish path (self-send)**: `Open(DPOPEN_CREATE)` →
 `session_.transport = make_unique<LoopbackDirectPlayTransport>()` → `CreatePlayer` allocates a
@@ -516,35 +558,34 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-`plan.md` Phase 5 is now done (its only remaining unchecked item, protocol documentation for the
-wire header, is explicitly deferred to Phase 16 by its own annotation). Phase 6 ("Session hosting")
-is next.
+`plan.md` Phase 5 is done. Phase 6 ("Session hosting") is in progress: build-time backend
+selection (Decision 4) and starting the ENet listener with a real default port (Decision 5) are
+both implemented and verified.
 
-Build-time backend selection (Decision 4) is now implemented - `Open()` really does construct
-`EnetDirectPlayTransport` under `FREE_DIRECT_ENABLE_ENET`, verified with a standalone smoke test.
-What's still missing before that path does anything useful:
+**Highest-priority next task, added after this session's discovery** (blocks all real Phase
+7/8/10 networking, not just Phase 6): give the ENet-backed session a way to actually service its
+`ENetHost`'s events. Nothing currently calls `enet_host_service()` on a hosted transport outside
+of `Shutdown()`'s own internal disconnect-wait loop, so a real connection can never complete
+end-to-end today, no matter what `Connect()`/`EnumSessions` logic gets added on top. This is
+tracked as a new `plan.md` Phase 6 task (inserted right after "start the ENet host listener").
 
-**Open design question**: `Open()` never calls `Listen()` on the `EnetDirectPlayTransport` it now
-constructs, so it never actually listens. `Listen()` needs a `std::uint16_t port` - and
-`DPSESSIONDESC2` (checked directly, `include/dplay.h`) has **no port-like field at all**: real
-DirectPlay abstracted network addressing behind service providers, which FreeDirect's DirectPlay
-does not implement. So there is no session-descriptor value to derive a port from - a fixed
-default port (a new FreeDirect-internal constant) is the only realistic option, and picking one
-is a small but real decision worth writing down (a short addition to Decision 4, or its own
-Decision 5), not something to hardcode inline without a comment explaining where the number came
-from.
-
-1. **Decide and document a default ENet listen port**, then call `Listen()` from `Open(...,
-   DPOPEN_CREATE)` when the ENet backend is selected.
-   - Files: `docs/directplay-design.md` (record the chosen port and why), `src/directplay/
-     DirectPlay.cpp` (`Open()` calls `session_.transport->Listen(port)` inside the existing
-     `#ifdef FREE_DIRECT_ENABLE_ENET` branch after constructing the transport; decide what `Open`
-     should return if `Listen()` fails - a new `DPERR_*` mapping, most likely `DPERR_GENERIC` or
-     `DPERR_CANTCREATEPROCESS`, needs picking here too).
-   - Verify: extend the standalone smoke test used to verify backend selection (not committed) so
-     that, under `FREE_DIRECT_ENABLE_ENET`, a real raw ENet client can successfully connect to the
-     port `Open()` started listening on - proof the listener is genuinely running, not just that
-     `Listen()` was called. Re-run both CMake build configurations and the 12/12 test suite.
+1. **Decide the event-servicing model, then implement it.**
+   - Open questions to resolve (write the answer down, e.g. as a new Decision in `docs/
+     directplay-design.md`, before implementing): who calls `enet_host_service()`, and when?
+     Options include: (a) a new `IDirectPlayTransport` method (e.g. `Service()`/`Pump()`) that
+     `DirectPlay.cpp`'s `Receive()` (or a new explicit API) calls on every invocation - closest to
+     how `free-eggbert`'s own game loop already calls `CNetwork::Receive()` repeatedly; (b) an
+     internal thread inside `EnetDirectPlayTransport` running its own service loop - simplest for
+     callers, but adds real thread-safety requirements to a class with none today; (c) something
+     else. Consider that `free-eggbert`'s `CNetwork::Receive()` is called from the game's own
+     polling loop (`docs/directplay-callsite-audit.md`), which argues for (a) unless a concrete
+     reason favors a background thread.
+   - Files: likely `src/directplay/DirectPlayTransport.hpp` (new interface method, if going with
+     option (a)), `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`.
+   - Verify: the standalone whitebox smoke tests already used throughout this phase reach `host_`
+     directly to service it manually - reuse that pattern to confirm the new *public* mechanism
+     produces the same real, observable result (a real raw ENet client connecting and the
+     connection actually completing, not timing out) without needing the whitebox trick anymore.
 
 2. **Create a session instance GUID (`guidInstance`) when hosting**, if the caller did not already
    supply one.
@@ -580,6 +621,9 @@ from.
   build-time-only (`FREE_DIRECT_ENABLE_ENET`), and the "run-time instead" idea was deliberately
   rejected for now, not left open.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
+- Do not pick the event-servicing model (Section 8's highest-priority task) unilaterally without
+  writing the decision down first - same "decide before implementing" pattern as every other
+  Decision in `docs/directplay-design.md` so far.
 - Do not add DirectX API surface, flags, or behavior beyond what `../free-eggbert`/
   `../planetblupi` call sites actually require (`CLAUDE.md` scope policy) — ask before expanding.
 - Do not attempt a mass rewrite or "cleanup" pass — this codebase is being built up incrementally,
@@ -589,11 +633,12 @@ from.
 
 ```
 Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is in progress -
-build-time backend selection in Open() (docs/directplay-design.md Decision 4) is implemented and
-verified. The next open item is picking a default ENet listen port (no DPSESSIONDESC2 field
-provides one) and calling Listen() from Open() - see Section 8's first task and its "Open design
-question" note. Do not pick the port unilaterally without writing the choice down. Do not refactor
-unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
+build-time backend selection (Decision 4) and starting the ENet listener on a real default port
+(Decision 5) are both implemented and verified. The highest-priority next item, discovered while
+verifying Decision 5, is that no real ENet connection can complete today because nothing services
+a hosted transport's events - see Section 8's first task. Decide the event-servicing model
+(document it, e.g. as a new Decision) before implementing it - do not pick it unilaterally. Do not
+refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
 ../planetblupi. Make one small, verified improvement - implement just that one task. Run the
 relevant build/test command from "Useful commands" (or the task's own "Verify" step) and confirm
 it actually passes before considering the task done. Then update NEXT.md to reflect the new state.

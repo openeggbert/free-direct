@@ -1038,29 +1038,48 @@ whichever transport is configured.
 - [ ] Create a session instance GUID (`guidInstance`) when hosting, if the caller did not already
       supply one.
 - [ ] Store the session descriptor supplied to `Open` on `DirectPlaySession` (per Phase 2).
-- [ ] Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when using
-      `EnetDirectPlayTransport`. **Partially done:** the build-time backend-selection half of this
-      task now exists - `CMakeLists.txt`'s `if(FREE_DIRECT_ENABLE_ENET)` block (the one already
-      linking `FreeDirect::ENet` and adding `EnetDirectPlayTransport.cpp`) now also adds
+- [x] Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when using
+      `EnetDirectPlayTransport`. **Done, in two batches:** batch 1 added build-time backend
+      selection - `CMakeLists.txt`'s `if(FREE_DIRECT_ENABLE_ENET)` block (the one already linking
+      `FreeDirect::ENet` and adding `EnetDirectPlayTransport.cpp`) now also adds
       `target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_ENET=1)`;
-      `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) now `#ifdef FREE_DIRECT_ENABLE_ENET`s between
-      constructing an `EnetDirectPlayTransport` or a `LoopbackDirectPlayTransport`, replacing the
-      previous unconditional `LoopbackDirectPlayTransport` construction, per `docs/
-      directplay-design.md` Decision 4. **Still missing** (this task's actual title): `Open()`
-      never calls `Listen()` on the constructed `EnetDirectPlayTransport` with a real port - the
-      transport exists but never actually listens, so `EnetDirectPlayTransport::Send()`
-      immediately fails with `DPERR_GENERIC` (no `peer_`) for any `Send()` call today when this
-      backend is selected. Where the port comes from (a new `DPSESSIONDESC2`-adjacent field? A
-      fixed default? Something else?) is not yet decided - that is the next task, not resolved
-      here. **Verified for real**: a standalone smoke test (not committed) compiled the exact same
-      `DirectPlay.cpp` twice, once without and once with `-DFREE_DIRECT_ENABLE_ENET=1` (matching
-      what CMake defines), and confirmed observably different runtime behavior for the same
-      `Open(DPOPEN_CREATE)` → `CreatePlayer` → `Send(self)` sequence: `DP_OK` (loopback
-      self-send succeeds) vs. `DPERR_GENERIC` (ENet transport has no peer yet) - proof the
-      `#ifdef` actually selects a different concrete class at runtime, not just that both branches
-      compile. Also re-verified both full CMake builds (`ENET=OFF`/`ON`) end-to-end, the 12/12
-      `tests/directplay_tests.cpp` suite (built without the macro, so unaffected), and that
-      `include/dplay.h` has zero ENet/SDL identifiers.
+      `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) `#ifdef FREE_DIRECT_ENABLE_ENET`s between
+      constructing an `EnetDirectPlayTransport` or a `LoopbackDirectPlayTransport` (`docs/
+      directplay-design.md` Decision 4). Batch 2 added the actual listener start: after asking the
+      user how to pick a port (`DPSESSIONDESC2` has no port-like field), `Open()` now calls
+      `session_.transport->Listen(free_direct_directplay::kDefaultDirectPlayEnetPort)` (a fixed
+      constant, `51321` - `docs/directplay-design.md` Decision 5) when `session_.isHost`, resets
+      the transport and returns `DPERR_CANTCREATESESSION` if `Listen()` fails.
+      **Verified for real**, in stages: (1) a standalone smoke test compiled the exact same
+      `DirectPlay.cpp` twice, once without and once with `-DFREE_DIRECT_ENABLE_ENET=1`, confirming
+      observably different runtime behavior for the same `Open`/`CreatePlayer`/`Send` sequence -
+      proof the `#ifdef` selects a different concrete class, not just that both branches compile.
+      (2) A port-conflict test: a first `Open(DPOPEN_CREATE)` succeeds; a second, independent
+      `DirectPlayCreate` object's `Open(DPOPEN_CREATE)` on the same default port fails with
+      `DPERR_CANTCREATESESSION` because the OS-level UDP socket is already bound (real evidence of
+      a genuine `bind()`, not a no-op); releasing the first and opening a third succeeds again.
+      (3) **An attempted test of a real raw ENet client actually connecting to the hosted port
+      failed, and the failure itself is a real, now-documented finding, not a test bug**: ENet is
+      poll-driven with no internal thread, and nothing in `Open()`'s current wiring ever calls
+      `enet_host_service()` on the hosted transport after `Listen()` returns, so no connection can
+      complete end-to-end today regardless of what calls `Connect()` (`docs/directplay-design.md`
+      Decision 5's Caveat spells this out - it is a gap beyond "Phase 7/8 don't exist yet"). Also
+      re-verified both full CMake builds (`ENET=OFF`/`ON`) end-to-end, the 12/12 `tests/
+      directplay_tests.cpp` suite (built without the macro, unaffected), and that `include/
+      dplay.h` has zero ENet/SDL identifiers.
+- [ ] **New task, added after discovering this gap while verifying the ENet host listener above:**
+      give `EnetDirectPlayTransport` (or whatever drives it - `DirectPlaySession`? A new
+      `DirectPlay.cpp`-level mechanism?) a way to actually service its `ENetHost`'s events
+      (`enet_host_service`) outside of `Shutdown()`'s own internal disconnect-wait loop. ENet is
+      poll-driven with no internal thread: nothing happens on a listening host - not accepting a
+      pending connection, not receiving a packet, nothing - until something calls
+      `enet_host_service()` on it. Confirmed by direct testing: a real external ENet client's
+      connection attempt to `Open()`'s hosted port never completes today, timing out instead of
+      connecting or being rejected (`docs/directplay-design.md` Decision 5's Caveat). This blocks
+      "allow the host to accept incoming client connections" (the next task below) and effectively
+      all of Phase 7/8/10's real networking from ever working, regardless of what those phases
+      implement on top - decide the servicing model (a call the game's message loop drives, an
+      internal thread, something else) before those phases assume one.
 - [ ] Assign the host player-ID namespace: decide and document the starting DPID value and
       increment rule for host-allocated players, consistent with Phase 0's finding about
       `free-eggbert`'s index-based DPID comparison. **Written decision now exists** (done ahead of
