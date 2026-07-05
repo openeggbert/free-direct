@@ -1067,7 +1067,7 @@ whichever transport is configured.
       re-verified both full CMake builds (`ENET=OFF`/`ON`) end-to-end, the 12/12 `tests/
       directplay_tests.cpp` suite (built without the macro, unaffected), and that `include/
       dplay.h` has zero ENet/SDL identifiers.
-- [ ] **New task, added after discovering this gap while verifying the ENet host listener above:**
+- [x] **New task, added after discovering this gap while verifying the ENet host listener above:**
       give `EnetDirectPlayTransport` (or whatever drives it - `DirectPlaySession`? A new
       `DirectPlay.cpp`-level mechanism?) a way to actually service its `ENetHost`'s events
       (`enet_host_service`) outside of `Shutdown()`'s own internal disconnect-wait loop. ENet is
@@ -1079,7 +1079,32 @@ whichever transport is configured.
       "allow the host to accept incoming client connections" (the next task below) and effectively
       all of Phase 7/8/10's real networking from ever working, regardless of what those phases
       implement on top - decide the servicing model (a call the game's message loop drives, an
-      internal thread, something else) before those phases assume one.
+      internal thread, something else) before those phases assume one. **Done, after asking the
+      user:** added `virtual void Service() = 0;` to `IDirectPlayTransport`
+      (`src/directplay/DirectPlayTransport.hpp`); `DirectPlay2AImpl::Receive()` (`DirectPlay.cpp`)
+      calls `session_.transport->Service()` once, unconditionally, before consulting the message
+      queue - piggybacking on `free-eggbert`'s own already-existing call-`Receive()`-repeatedly
+      polling pattern (`docs/directplay-callsite-audit.md`), per the user's chosen option, rather
+      than a new API or a background thread (`docs/directplay-design.md` Decision 6).
+      `LoopbackDirectPlayTransport::Service()` is a no-op. `EnetDirectPlayTransport::Service()`
+      drains pending events with a non-blocking `enet_host_service(host_, &event, 0)` loop:
+      `ENET_EVENT_TYPE_CONNECT` adopts the peer as `peer_` if none is tracked yet (extends the
+      single-peer model to the hosting role; a second concurrent connection is accepted at the
+      protocol level but not adopted - multi-peer hosting stays Phase 6/10's job);
+      `ENET_EVENT_TYPE_DISCONNECT` clears `peer_` if it matches; `ENET_EVENT_TYPE_RECEIVE` destroys
+      the packet without delivering it (transport-level `Receive()` remains an honest `false` stub
+      - no task covers it yet; buffering here would be speculative, half-finished code). **Verified
+      for real**, closing Decision 5's Caveat: (1) a standalone smoke test drove a real, external
+      (non-FreeDirect) ENet client to a *completed* connection with `Open()`'s hosted session,
+      using nothing but repeated calls to the **public** `IDirectPlay2A::Receive()` - exactly
+      `free-eggbert`'s own polling pattern, no whitebox tricks needed. (2) A second smoke test
+      confirmed `Service()`'s connect/disconnect bookkeeping directly: a first client's connection
+      is adopted (`HasPeer()` becomes `true`); a second client connecting concurrently is not
+      adopted (peer tracking untouched, no corruption); the first client's graceful `Shutdown()`
+      is observed by the server's `Service()`, clearing `HasPeer()` back to `false`. Also
+      re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end, the 12/12
+      `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero
+      ENet/SDL identifiers.
 - [ ] Assign the host player-ID namespace: decide and document the starting DPID value and
       increment rule for host-allocated players, consistent with Phase 0's finding about
       `free-eggbert`'s index-based DPID comparison. **Written decision now exists** (done ahead of

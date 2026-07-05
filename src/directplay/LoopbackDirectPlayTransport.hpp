@@ -40,6 +40,7 @@ public:
     bool Connect(const char* address, std::uint16_t port) override;
     bool Send(const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
+    void Service() override;
     void Shutdown() override;
 
 private:

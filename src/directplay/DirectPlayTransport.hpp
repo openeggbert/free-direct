@@ -59,6 +59,15 @@ public:
     /** @brief Retrieves the next received payload, if any, without blocking. */
     virtual bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) = 0;
 
+    /**
+     * @brief Processes any pending network events (connections, disconnections, incoming
+     * data) without blocking. `DirectPlay2AImpl::Receive()` calls this once before
+     * consulting its message queue (`docs/directplay-design.md` Decision 6) - backends
+     * with no real network concept (e.g. loopback, which is already synchronous) make
+     * this a no-op.
+     */
+    virtual void Service() = 0;
+
     /** @brief Tears down all connections and releases backend resources. */
     virtual void Shutdown() = 0;
 };

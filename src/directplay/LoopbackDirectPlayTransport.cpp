@@ -31,6 +31,10 @@ bool LoopbackDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, 
     return true;
 }
 
+void LoopbackDirectPlayTransport::Service() {
+    // No-op: loopback has no real network events - Send() already delivers synchronously.
+}
+
 void LoopbackDirectPlayTransport::Shutdown() { buffered_.clear(); }
 
 } // namespace free_direct_directplay

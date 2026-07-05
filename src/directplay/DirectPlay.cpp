@@ -154,6 +154,14 @@ namespace {
         HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) override {
             (void)dwFlags;
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
+            // Piggyback event servicing on the caller's own polling pattern rather than
+            // adding a new API or a background thread (docs/directplay-design.md
+            // Decision 6) - free-eggbert's own CNetwork::Receive() is already called
+            // repeatedly from the game's loop, so this is the one call site every real
+            // Receive() path already goes through. LoopbackDirectPlayTransport's
+            // Service() is a no-op; EnetDirectPlayTransport's drains pending ENet events
+            // (peer connect/disconnect bookkeeping) non-blockingly.
+            if (session_.transport) session_.transport->Service();
             // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
             // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
             // be exercised directly by tests/directplay_tests.cpp without needing a way to

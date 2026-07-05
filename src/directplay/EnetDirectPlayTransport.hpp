@@ -15,7 +15,7 @@
  * ever included by `.cpp` files (as this one is, today) is allowed to name ENet types
  * directly - the policy bans ENet from reaching `include/`, not from internal headers.
  *
- * Real behavior implemented so far (`plan.md` Phase 5, in order): the
+ * Real behavior implemented so far (`plan.md` Phase 5/6, in order): the
  * constructor/destructor join/leave a process-wide `enet_initialize()`/
  * `enet_deinitialize()` reference count (see the `.cpp` file); `Listen(port)` creates a
  * real listening `ENetHost`; `Connect(address, port)` creates a client-role `ENetHost`
@@ -25,12 +25,16 @@
  * a bounded wait for `ENET_EVENT_TYPE_DISCONNECT`) before destroying whatever
  * host/peer `Listen()`/`Connect()` created; `Send()` sends a real ENet packet
  * (`ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED`, selected by its
- * `reliable` parameter) to the single `peer_` this class tracks. `Receive()` is still
- * an honest `false` stub - no `plan.md` Phase 5 task covers transport-level receive.
- * All of this is scoped to the single `peer_` a `Connect()`-role instance tracks; a
- * `Listen()`-role host tracking multiple connected peers is Phase 6/10's job.
- * `Open(..., DPOPEN_CREATE)` constructs this class under `FREE_DIRECT_ENABLE_ENET` but does
- * not yet call `Listen()` on it - see `kDefaultDirectPlayEnetPort` below.
+ * `reliable` parameter) to the single `peer_` this class tracks; `Service()`
+ * (`docs/directplay-design.md` Decision 6) drains pending ENet events - adopting a
+ * newly-connected peer as `peer_` (host role) if none is tracked yet, clearing `peer_`
+ * on disconnect, and discarding (not delivering) received packets, since transport-level
+ * `Receive()` is still an honest `false` stub - no `plan.md` task covers it yet.
+ * All of this is scoped to the single `peer_` this class tracks; multiple connected
+ * peers (a real multi-player host) is Phase 6/10's job.
+ * `Open(..., DPOPEN_CREATE)` constructs this class under `FREE_DIRECT_ENABLE_ENET`, calls
+ * `Listen(kDefaultDirectPlayEnetPort)` when hosting, and calls `Service()` once per
+ * `IDirectPlay2A::Receive()` call - see `kDefaultDirectPlayEnetPort` below.
  * @note Status: PARTIAL
  */
 #pragma once
@@ -62,6 +66,7 @@ public:
     bool Connect(const char* address, std::uint16_t port) override;
     bool Send(const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
+    void Service() override;
     void Shutdown() override;
 
     /// True once this instance's constructor successfully joined the process-wide
@@ -77,10 +82,11 @@ public:
     /// true.
     bool HasHost() const { return host_ != nullptr; }
 
-    /// True once Connect() has queued a connection attempt (`enet_host_connect`
-    /// returned non-null). Does *not* mean the connection has completed - that would
-    /// require exposing ENetPeer::state, which is out of scope for this task; use only
-    /// to observe that Connect() attempted something real, not that it succeeded.
+    /// True once a peer_ is tracked: either Connect() queued a connection attempt (does
+    /// *not* by itself mean that attempt completed - checking ENetPeer::state directly
+    /// is out of scope), or Service() adopted a newly-connected peer on the hosting
+    /// side (this *does* mean a real connection completed, since Service() only adopts
+    /// on a genuine ENET_EVENT_TYPE_CONNECT event).
     bool HasPeer() const { return peer_ != nullptr; }
 
 private:

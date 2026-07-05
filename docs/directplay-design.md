@@ -415,4 +415,89 @@ would see its connection attempt time out, not get rejected - the socket is open
 answering it. Some later task (implied by Phase 7/8/10's real message/connection handling, not
 explicitly named as its own checkbox anywhere yet) needs to give `Open()`'s hosted session an
 actual event loop or periodic service call before a real network connection can complete
-end-to-end.
+end-to-end. **Resolved by Decision 6, below.**
+
+---
+
+## Decision 6: event servicing via a new `IDirectPlayTransport::Service()`, called from `Receive()`
+
+**Status:** Decided and implemented. Resolves Decision 5's Caveat. Asked of, and
+confirmed by, the user directly - like Decisions 4 and 5, this is a FreeDirect-internal mechanism
+question with no real DirectPlay equivalent (real DirectPlay's service providers hide however
+they pump their own network I/O; FreeDirect's ENet backend needs to expose this somehow, since
+ENet itself is poll-driven with no internal thread).
+
+### The question
+
+Something must call `enet_host_service()` on a hosted (or connecting) `EnetDirectPlayTransport`'s
+`ENetHost` periodically, or no ENet event (a peer connecting, a packet arriving, a peer
+disconnecting) is ever processed. What calls it, and when?
+
+### The finding that forces the answer
+
+`docs/directplay-callsite-audit.md` establishes that `free-eggbert`'s own `CNetwork::Receive()`
+(`src/network.cpp:262-289`) is called repeatedly from the game's own polling loop
+(`src/decnet.cpp`'s gameplay dispatch) - `free-eggbert` already has a "pump" of its own, driven by
+however often the game calls `Receive`. There is no equivalent existing call site that would drive
+a periodic "just service the network, regardless of whether the caller wants a message right now"
+operation - `free-eggbert` never calls anything like that.
+
+### Decision
+
+Add `virtual void Service() = 0;` to `IDirectPlayTransport` (`src/directplay/
+DirectPlayTransport.hpp`). `DirectPlay2AImpl::Receive()` (`DirectPlay.cpp`) calls
+`session_.transport->Service()` once, unconditionally, before consulting
+`session_.messageQueue.TryReceive()` - piggybacking on `free-eggbert`'s own existing
+call-`Receive()`-repeatedly pattern rather than introducing a new API the game would never call,
+or a background thread that would add real thread-safety requirements to classes that have none
+today (`EnetDirectPlayTransport`'s `host_`/`peer_` are accessed only from whatever thread calls
+`Send`/`Receive`/`Shutdown`/`Service` - a background thread servicing the same `ENetHost`
+concurrently would require locking that does not exist and should not be added speculatively).
+
+`LoopbackDirectPlayTransport::Service()` is a no-op - loopback has no real network events to
+process; everything already happens synchronously inside `Send()`/`Receive()`.
+
+`EnetDirectPlayTransport::Service()` drains all currently-pending events with a non-blocking
+`enet_host_service(host_, &event, 0)` loop (timeout `0`: process what's ready, never block
+`Receive()` waiting for network I/O - `free-eggbert`'s own `Receive()` call sites already expect
+`DPERR_NOMESSAGES` back immediately when nothing is available, not to block):
+
+- `ENET_EVENT_TYPE_CONNECT`: if `peer_` is currently null, adopt the newly-connected
+  `event.peer` as `peer_`. This naturally extends the existing single-peer model (documented
+  throughout `Listen`/`Connect`/`Send`/`Shutdown`'s own comments) to the hosting role for its
+  first (and, today, only) connecting client - multi-peer hosting remains `plan.md` Phase 6/10's
+  separate, later job, not expanded here. If `peer_` is already set, the new connection is
+  accepted at the ENet protocol level but not adopted (nothing tracks it) - an honest limitation
+  of the current single-peer scope, not a crash or silent corruption.
+- `ENET_EVENT_TYPE_DISCONNECT`: if the disconnecting `event.peer` is the tracked `peer_`, clear
+  it.
+- `ENET_EVENT_TYPE_RECEIVE`: the packet is destroyed (`enet_packet_destroy`) without being
+  delivered anywhere. Real transport-level `Receive()` (making `EnetDirectPlayTransport::Receive()`
+  do something other than unconditionally return `false`) is a separate, still-open task - no
+  `plan.md` Phase 5/6 task covers it, and inventing a half-finished buffering mechanism here to
+  make `Service()` "more complete" would be exactly the kind of speculative, undirected code
+  `CLAUDE.md` warns against. Dropping the packet is the honest choice until that task exists.
+
+### Consequence
+
+A connection can now genuinely complete end-to-end through `Open()`'s hosted listener, but only
+once something calls `IDirectPlay2A::Receive()` on it at least once after a peer starts
+connecting - matching exactly how `free-eggbert` already drives its own network polling. A host
+that is `Open()`ed but whose owner never calls `Receive()` still never processes any ENet event,
+which is consistent with `free-eggbert`'s own usage pattern (it always polls via `Receive()`), not
+a new limitation introduced here.
+
+### Implemented
+
+`IDirectPlayTransport::Service()` (`src/directplay/DirectPlayTransport.hpp`),
+`LoopbackDirectPlayTransport::Service()` (no-op), `EnetDirectPlayTransport::Service()` (drains
+pending events as described above), and `DirectPlay2AImpl::Receive()`'s call to it - all in
+`plan.md` Phase 6's "give `EnetDirectPlayTransport` a way to actually service its events" task.
+**Verified for real, closing Decision 5's Caveat**: a standalone smoke test (not committed) drove
+a real, external (non-FreeDirect) ENet client to a genuinely *completed* connection with `Open()`'s
+hosted session, using nothing but repeated calls to the public `IDirectPlay2A::Receive()` - the
+exact same call pattern `free-eggbert` already uses, no whitebox access needed. A second smoke
+test confirmed the connect/disconnect bookkeeping directly: a first client is adopted as `peer_`
+(`HasPeer()` becomes `true`); a second, concurrently-connecting client is not adopted (no
+corruption of the existing single-peer tracking); the first client's graceful `Shutdown()` is
+observed and clears `HasPeer()` back to `false`.

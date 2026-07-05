@@ -12,11 +12,12 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
   real call sites actually need, not by DirectX API coverage in general (`CLAUDE.md`).
 - **Current development phase**: `plan.md` Phase 5 ("ENet integration planning") is now complete
   except for one item explicitly deferred to Phase 16 (protocol documentation). Phases 0-4 are
-  complete. Phase 6 ("Session hosting") is in progress: `Open()` now build-time-selects its
-  transport backend and genuinely starts the ENet listener (real OS-level `bind()`, verified via
-  a port-conflict test), but **a real connection still cannot complete end-to-end** - a
-  newly-discovered gap, not yet a scheduled task before this session: ENet is poll-driven with no
-  internal thread, and nothing services a hosted transport's events after `Listen()` returns.
+  complete. Phase 6 ("Session hosting") is in progress: `Open()` build-time-selects its transport
+  backend, genuinely starts the ENet listener (real OS-level `bind()`), and - as of this session -
+  **a real ENet connection can now complete end-to-end**, driven purely by the caller repeatedly
+  calling the public `IDirectPlay2A::Receive()` (matching `free-eggbert`'s own polling pattern),
+  verified with a real external (non-FreeDirect) ENet client. The previous session's blocker (ENet
+  needs something to call `enet_host_service()`; nothing did) is resolved.
 - **Important architectural decisions**:
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net type or symbol may ever appear in them.
@@ -30,14 +31,15 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
     with `LoopbackDirectPlayTransport` (implemented, in-process, no sockets) and
     `EnetDirectPlayTransport` (real `enet_initialize`/`enet_deinitialize` process-wide lifecycle,
     real host creation via `Listen(port)`, real client creation + peer connection via
-    `Connect(address, port)`, real graceful disconnect in `Shutdown()`, and real reliable/unreliable
-    send via `Send(data, size, reliable)`; `Receive` still an honest `false` stub - no separate
-    `plan.md` Phase 5 task covers it) as concrete backends. `Open(..., DPOPEN_CREATE)` now
-    build-time-selects (`docs/directplay-design.md` Decision 4) and, for the ENet backend,
-    actually calls `Listen()` (Decision 5) - but no connection can complete yet, since nothing
-    services the resulting host's ENet events (see "Current development phase" above).
-    `IDirectPlayTransport::Listen()`/`Connect()`/`Send()` all gained parameters this phase
-    (`port`; `address, port`; `reliable`) that they did not have before.
+    `Connect(address, port)`, real graceful disconnect in `Shutdown()`, real reliable/unreliable
+    send via `Send(data, size, reliable)`, and real event servicing via `Service()`
+    (`docs/directplay-design.md` Decision 6, called from `DirectPlay2AImpl::Receive()`); `Receive`
+    (the transport-level method, distinct from `IDirectPlay2A::Receive`) still an honest `false`
+    stub - no separate `plan.md` task covers it) as concrete backends. `Open(..., DPOPEN_CREATE)`
+    build-time-selects (Decision 4), and for the ENet backend when hosting, calls `Listen()`
+    (Decision 5) - a real connection can now complete end-to-end, driven by `Receive()` calling
+    `Service()`. `IDirectPlayTransport` gained `Listen(port)`/`Connect(address, port)`/
+    `Send(data, size, reliable)` parameters and a new `Service()` method this phase.
   - `plan.md` is the authoritative English task list (every task atomic, one thing each);
     `CLAUDE.md` is the standing project charter/policy; this file (`NEXT.md`) is the living status
     snapshot.
@@ -107,25 +109,37 @@ makes real progress on Phase 6: `DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) no
 calls `Listen(kDefaultDirectPlayEnetPort)` (Decision 5), verified with a real port-conflict test
 (a second host on the same port fails with `DPERR_CANTCREATESESSION` because the OS socket is
 already bound). **Discovered and documented a real, previously-unknown gap** while verifying this:
-a real ENet client's connection attempt to the hosted port never completes, because ENet is
-poll-driven and nothing services the hosted transport's events after `Listen()` returns - this
-blocks all real Phase 7/8/10 networking regardless of what those phases implement, and is now
-tracked as its own new `plan.md` Phase 6 task.
+a real ENet client's connection attempt to the hosted port never completed, because ENet is
+poll-driven and nothing serviced the hosted transport's events after `Listen()` returned.
+**Resolved it the same session, after asking the user**: added `IDirectPlayTransport::Service()`
+(Decision 6), called from `DirectPlay2AImpl::Receive()` - piggybacking on `free-eggbert`'s own
+already-existing call-`Receive()`-repeatedly polling pattern rather than a new API or a background
+thread. `EnetDirectPlayTransport::Service()` drains pending ENet events, adopting a newly-connected
+peer (host role) if none is tracked yet, clearing it on disconnect, and dropping (not delivering)
+received packets, since transport-level `Receive()` remains a stub. **Verified for real, closing
+the gap**: a standalone smoke test drove a real, external (non-FreeDirect) ENet client to a
+genuinely completed connection with `Open()`'s hosted session, using nothing but repeated calls to
+the public `IDirectPlay2A::Receive()` - no whitebox access needed this time. A second smoke test
+confirmed connect/disconnect bookkeeping directly (peer adopted, a second concurrent connection
+not adopted, graceful disconnect observed and cleared).
 
 **What does not work yet / is not implemented**:
-- **Newly discovered, blocks all real ENet networking**: `Open()`'s hosted ENet transport is
-  listening (a real OS-level socket, verified) but nothing services its events
-  (`enet_host_service`) after `Listen()` returns, so no real connection can ever complete through
-  it today, regardless of `Connect()`/`EnumSessions` existing - see `docs/directplay-design.md`
-  Decision 5's Caveat and the new `plan.md` Phase 6 task recording this. `Send()` on a freshly
-  `Open()`ed ENet-backed session still fails with `DPERR_GENERIC` (no `peer_`), same as before.
-- `EnetDirectPlayTransport` — real lifecycle, `Listen()`, `Connect()`, `Shutdown()`, and
-  reliable/unreliable `Send()` all exist and are verified end-to-end against each other, but
-  `Receive()` still returns `false` unconditionally (no `plan.md` Phase 5 task covers it - that's
-  implied by later phases), and nothing services a host's events outside of the
-  connection/disconnect/send paths themselves (no general "pump" method exists). There is
-  currently no networked (cross-process) DirectPlay of any kind — only same-object loopback
-  self-send works (still true for the default, `FREE_DIRECT_ENABLE_ENET=OFF` build).
+- Transport-level `Receive()` (`EnetDirectPlayTransport::Receive()`, distinct from
+  `IDirectPlay2A::Receive`) still unconditionally returns `false` - `Service()` destroys any
+  received ENet packet without delivering it anywhere. No `plan.md` task covers real receive
+  delivery yet (implied by Phase 10). `Send()` on a freshly `Open()`ed ENet-backed session (before
+  any peer has connected) still fails with `DPERR_GENERIC` (no `peer_` yet) - expected, honest
+  behavior, not a bug.
+- Multi-peer hosting: `EnetDirectPlayTransport` only ever tracks one `peer_`. A second client
+  connecting to an already-occupied host is accepted at the ENet protocol level but never adopted
+  - `plan.md` Phase 6/10's job, not attempted here.
+- There is still no *DirectPlay-message-level* networked communication of any kind - `Send()`
+  routing to anyone other than the sender is a no-op (Phase 10), and `EnumSessions`/`Connect()` at
+  the `IDirectPlay2A` level don't exist yet (Phases 7/8), so nothing in `DirectPlay.cpp` itself
+  actually drives an ENet client to `Connect()` to a discovered host. Today's proof of a completed
+  ENet connection was done by a raw external ENet client and a hand-built session, not through any
+  FreeDirect-to-FreeDirect join flow. The default (`FREE_DIRECT_ENABLE_ENET=OFF`) build's loopback
+  self-send remains the only fully-FreeDirect-driven working path.
 - The wire packet header (`DirectPlayWirePacketHeader`) exists, round-trips correctly, and
   validates buffer size/payload-length consistency on receive, but nothing constructs one from a
   real `DPSESSIONDESC2`/session yet, and `magic`/`version` mismatches are not rejected yet either
@@ -360,6 +374,29 @@ tracked as its own new `plan.md` Phase 6 task.
   and added as a new, explicit `plan.md` Phase 6 task (inserted directly after this one) so it
   isn't silently left implicit. Also re-verified both CMake builds end-to-end and the 12/12 test
   suite.
+- **Decided (asked the user) and implemented Decision 6** (event servicing): added
+  `virtual void Service() = 0;` to `IDirectPlayTransport`; `DirectPlay2AImpl::Receive()`
+  (`DirectPlay.cpp`) calls `session_.transport->Service()` once, unconditionally, before
+  consulting the message queue - the user's chosen option (a new interface method called from
+  `Receive()`), matching `free-eggbert`'s own already-existing call-`Receive()`-repeatedly polling
+  pattern rather than a new API the game would never call, or a background thread that would add
+  real thread-safety requirements to classes that have none today.
+  `LoopbackDirectPlayTransport::Service()` is a no-op. `EnetDirectPlayTransport::Service()` drains
+  pending events with a non-blocking `enet_host_service(host_, &event, 0)` loop:
+  `ENET_EVENT_TYPE_CONNECT` adopts the peer as `peer_` if none is tracked yet (extends the
+  existing single-peer model to the hosting role); `ENET_EVENT_TYPE_DISCONNECT` clears `peer_` if
+  it matches; `ENET_EVENT_TYPE_RECEIVE` destroys the packet without delivering it (transport-level
+  `Receive()` remains an honest `false` stub). **Verified for real, closing Decision 5's Caveat**:
+  a standalone smoke test (not committed) drove a real, external (non-FreeDirect) ENet client to a
+  genuinely *completed* connection with `Open()`'s hosted session, using nothing but repeated
+  calls to the **public** `IDirectPlay2A::Receive()` - no whitebox access needed this time, unlike
+  every earlier `EnetDirectPlayTransport`-level verification in this phase. A second smoke test
+  confirmed the connect/disconnect bookkeeping directly: a first client is adopted (`HasPeer()`
+  becomes `true`); a second, concurrently-connecting client is not adopted (existing tracking
+  undisturbed); the first client's graceful `Shutdown()` is observed and clears `HasPeer()` back
+  to `false`. Also re-verified both CMake build configurations end-to-end, the 12/12
+  `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero ENet/SDL
+  identifiers.
 
 ## 4. Current blocker / main problem
 
@@ -413,17 +450,19 @@ currently blocking anything, since the vendored path is the proven, working defa
   `NetStartPlay` all have zero callers anywhere in that game's current source. Only gameplay-time
   `Send`/`Receive` are reachable. This is a `free-eggbert` source-completeness gap, out of
   `free-direct`'s scope to fix (game source must not be modified).
-- **Incomplete**: `EnetDirectPlayTransport` has real `Listen()`, `Connect()`, `Shutdown()`, and
-  reliable/unreliable `Send()`, but `Receive()` still unconditionally returns `false`.
-- **Confirmed real gap, newly discovered and documented, blocks all real ENet networking**:
-  `Open()` genuinely starts listening on `EnetDirectPlayTransport` (real OS-level socket bind,
-  verified via a port-conflict test), but nothing ever calls `enet_host_service()` on the hosted
-  transport afterward - ENet is poll-driven with no internal thread, so no real connection can
-  complete end-to-end today, independent of whether `Connect()`/`EnumSessions` are implemented.
-  See `docs/directplay-design.md` Decision 5's Caveat and the new `plan.md` Phase 6 task
-  ("give `EnetDirectPlayTransport` a way to actually service its events") this discovery added.
-  Only the default (`FREE_DIRECT_ENABLE_ENET=OFF`) build's loopback self-send path is functional
-  end-to-end.
+- **Incomplete**: `EnetDirectPlayTransport` has real `Listen()`, `Connect()`, `Shutdown()`,
+  reliable/unreliable `Send()`, and now real `Service()` (event servicing), but transport-level
+  `Receive()` still unconditionally returns `false` - any received ENet packet is destroyed by
+  `Service()`, not delivered anywhere.
+- **Incomplete**: `EnetDirectPlayTransport` only ever tracks one `peer_`. A host with a second
+  client connecting while one is already tracked accepts the connection at the ENet protocol level
+  but never adopts it - multi-peer hosting is `plan.md` Phase 6/10's job.
+- **Resolved this session** (previously listed here as a confirmed gap): a real ENet connection
+  can now complete end-to-end through `Open()`'s hosted listener, driven by repeated calls to the
+  public `IDirectPlay2A::Receive()` - see `docs/directplay-design.md` Decision 6. There is
+  currently no *FreeDirect-driven* way to reach that listener though (no `EnumSessions`/`Connect()`
+  at the `IDirectPlay2A` level yet - Phases 7/8), so today's verification used a raw external ENet
+  client, not a second FreeDirect instance joining.
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -474,9 +513,13 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     `DPERR_NOMESSAGES`/too-small/successful-copy logic that `DirectPlay2AImpl::Receive()`
     delegates to (extracted specifically so tests exercise the real logic, not a duplicate).
   - `DirectPlayTransport.hpp` — `IDirectPlayTransport` abstract interface
-    (`Listen`/`Connect`/`Send`/`Receive`/`Shutdown`), backend-agnostic, byte-buffer-oriented.
-  - `LoopbackDirectPlayTransport.hpp`/`.cpp` — real, in-memory implementation; assigned
-    unconditionally by `Open()` today (the only backend that exists).
+    (`Listen`/`Connect`/`Send`/`Receive`/`Service`/`Shutdown`), backend-agnostic,
+    byte-buffer-oriented. `Service()` (Decision 6) processes pending network events without
+    blocking; `DirectPlay2AImpl::Receive()` calls it unconditionally before consulting the
+    message queue.
+  - `LoopbackDirectPlayTransport.hpp`/`.cpp` — real, in-memory implementation; `Service()` is a
+    no-op (everything is already synchronous); assigned by `Open()` in the default
+    (`FREE_DIRECT_ENABLE_ENET=OFF`) build.
   - `DirectPlayWireProtocol.hpp`/`.cpp` — `DirectPlayWirePacketType` enum and
     `DirectPlayWirePacketHeader` struct (magic/version/type/applicationGuid/sessionGuid/idFrom/
     idTo/payloadLength) plus flat serialize/deserialize free functions, plus a validating
@@ -492,13 +535,15 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     bounded wait for `ENET_EVENT_TYPE_DISCONNECT`, scoped to the single `peer_` this class
     tracks), and real reliable/unreliable send in `Send(data, size, reliable)`
     (`enet_packet_create` with `ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED` +
-    `enet_peer_send` + `enet_host_flush`, same `peer_`-only scoping). `Receive()` still returns
-    `false`. No general event servicing (a "pump") exists outside of the
-    connection/disconnect/send paths themselves - this is exactly why a real connection to
-    `Open()`'s hosted listener cannot complete today (see Section 5). Also exposes
+    `enet_peer_send` + `enet_host_flush`, same `peer_`-only scoping), and real event servicing in
+    `Service()` (Decision 6: `enet_host_service(host_, &event, 0)` in a non-blocking drain loop -
+    `ENET_EVENT_TYPE_CONNECT` adopts a peer if none tracked, `ENET_EVENT_TYPE_DISCONNECT` clears
+    it, `ENET_EVENT_TYPE_RECEIVE` is destroyed/dropped). Transport-level `Receive()` still returns
+    `false` - `Service()` never delivers received packets anywhere. Also exposes
     `kDefaultDirectPlayEnetPort = 51321` (Decision 5). Compiled only under
-    `-DFREE_DIRECT_ENABLE_ENET=ON`; now selected by `Open()` for both construction (Decision 4)
-    and, when hosting, `Listen()` (Decision 5).
+    `-DFREE_DIRECT_ENABLE_ENET=ON`; selected by `Open()` for construction (Decision 4),
+    `Listen()` when hosting (Decision 5), and `Service()` from `IDirectPlay2A::Receive()`
+    (Decision 6).
 
 **Data flow for the one working networked-ish path (self-send)**: `Open(DPOPEN_CREATE)` →
 `session_.transport = make_unique<LoopbackDirectPlayTransport>()` → `CreatePlayer` allocates a
@@ -559,35 +604,12 @@ behavior; this has not been attempted.
 ## 8. Next smallest tasks
 
 `plan.md` Phase 5 is done. Phase 6 ("Session hosting") is in progress: build-time backend
-selection (Decision 4) and starting the ENet listener with a real default port (Decision 5) are
-both implemented and verified.
+selection (Decision 4), starting the ENet listener with a real default port (Decision 5), and
+event servicing so a real connection can complete (Decision 6) are all implemented and verified -
+a real external ENet client was driven to a completed connection purely via the public
+`IDirectPlay2A::Receive()`.
 
-**Highest-priority next task, added after this session's discovery** (blocks all real Phase
-7/8/10 networking, not just Phase 6): give the ENet-backed session a way to actually service its
-`ENetHost`'s events. Nothing currently calls `enet_host_service()` on a hosted transport outside
-of `Shutdown()`'s own internal disconnect-wait loop, so a real connection can never complete
-end-to-end today, no matter what `Connect()`/`EnumSessions` logic gets added on top. This is
-tracked as a new `plan.md` Phase 6 task (inserted right after "start the ENet host listener").
-
-1. **Decide the event-servicing model, then implement it.**
-   - Open questions to resolve (write the answer down, e.g. as a new Decision in `docs/
-     directplay-design.md`, before implementing): who calls `enet_host_service()`, and when?
-     Options include: (a) a new `IDirectPlayTransport` method (e.g. `Service()`/`Pump()`) that
-     `DirectPlay.cpp`'s `Receive()` (or a new explicit API) calls on every invocation - closest to
-     how `free-eggbert`'s own game loop already calls `CNetwork::Receive()` repeatedly; (b) an
-     internal thread inside `EnetDirectPlayTransport` running its own service loop - simplest for
-     callers, but adds real thread-safety requirements to a class with none today; (c) something
-     else. Consider that `free-eggbert`'s `CNetwork::Receive()` is called from the game's own
-     polling loop (`docs/directplay-callsite-audit.md`), which argues for (a) unless a concrete
-     reason favors a background thread.
-   - Files: likely `src/directplay/DirectPlayTransport.hpp` (new interface method, if going with
-     option (a)), `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`.
-   - Verify: the standalone whitebox smoke tests already used throughout this phase reach `host_`
-     directly to service it manually - reuse that pattern to confirm the new *public* mechanism
-     produces the same real, observable result (a real raw ENet client connecting and the
-     connection actually completing, not timing out) without needing the whitebox trick anymore.
-
-2. **Create a session instance GUID (`guidInstance`) when hosting**, if the caller did not already
+1. **Create a session instance GUID (`guidInstance`) when hosting**, if the caller did not already
    supply one.
    - Files: `src/directplay/DirectPlay.cpp` (`DirectPlay2AImpl::Open`), possibly
      `src/directplay/DirectPlaySession.hpp` if session-descriptor storage needs a field for it.
@@ -598,11 +620,20 @@ tracked as a new `plan.md` Phase 6 task (inserted right after "start the ENet ho
      mechanism - written back into the caller's struct, or just stored internally - needs
      checking against what `free-eggbert` actually reads back, if anything).
 
-3. **Store the session descriptor supplied to `Open`** on `DirectPlaySession`, if Phase 2 didn't
+2. **Store the session descriptor supplied to `Open`** on `DirectPlaySession`, if Phase 2 didn't
    already cover every field `Open`/`EnumSessions`/hosting will need.
    - Files: `src/directplay/DirectPlaySession.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`.
    - Verify: re-read `DirectPlaySession.hpp`'s existing session-descriptor fields first - this task
      may already be done or mostly done from Phase 2; confirm before writing new code.
+
+3. **Allow the host to accept incoming client connections up to `dwMaxPlayers`** (the next
+   unchecked `plan.md` Phase 6 task) - now unblocked, since `Service()` genuinely adopts a
+   connecting peer. Needs real multi-peer tracking (`EnetDirectPlayTransport` today tracks only
+   one `peer_`), which is a bigger change than anything above - scope it out explicitly (a
+   `std::vector<ENetPeer*>` or similar?) before writing code, rather than extending `peer_` ad hoc.
+   - Files: `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`.
+   - Verify: a smoke test with two real clients connecting to one host, confirming the host tracks
+     both (not just the first, as it does today).
 
 ## 9. Do not do yet
 
@@ -621,9 +652,10 @@ tracked as a new `plan.md` Phase 6 task (inserted right after "start the ENet ho
   build-time-only (`FREE_DIRECT_ENABLE_ENET`), and the "run-time instead" idea was deliberately
   rejected for now, not left open.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
-- Do not pick the event-servicing model (Section 8's highest-priority task) unilaterally without
-  writing the decision down first - same "decide before implementing" pattern as every other
-  Decision in `docs/directplay-design.md` so far.
+- Do not extend `EnetDirectPlayTransport`'s single-`peer_` model ad hoc when implementing
+  multi-peer hosting (Section 8, task 3) - scope the real data structure change out explicitly
+  first (same "decide before implementing" pattern as every Decision in `docs/
+  directplay-design.md` so far), don't just add a second `peer_`-like field.
 - Do not add DirectX API surface, flags, or behavior beyond what `../free-eggbert`/
   `../planetblupi` call sites actually require (`CLAUDE.md` scope policy) — ask before expanding.
 - Do not attempt a mass rewrite or "cleanup" pass — this codebase is being built up incrementally,
@@ -633,13 +665,12 @@ tracked as a new `plan.md` Phase 6 task (inserted right after "start the ENet ho
 
 ```
 Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is in progress -
-build-time backend selection (Decision 4) and starting the ENet listener on a real default port
-(Decision 5) are both implemented and verified. The highest-priority next item, discovered while
-verifying Decision 5, is that no real ENet connection can complete today because nothing services
-a hosted transport's events - see Section 8's first task. Decide the event-servicing model
-(document it, e.g. as a new Decision) before implementing it - do not pick it unilaterally. Do not
-refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Make one small, verified improvement - implement just that one task. Run the
-relevant build/test command from "Useful commands" (or the task's own "Verify" step) and confirm
-it actually passes before considering the task done. Then update NEXT.md to reflect the new state.
+build-time backend selection (Decision 4), starting the ENet listener on a real default port
+(Decision 5), and event servicing so a real connection can complete (Decision 6) are all
+implemented and verified. Inspect only the files needed for the first task in "Next smallest
+tasks" (currently: creating a session instance GUID when hosting). Do not refactor unrelated code,
+do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one
+small, verified improvement - implement just that one task. Run the relevant build/test command
+from "Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
+considering the task done. Then update NEXT.md to reflect the new state.
 ```

@@ -86,8 +86,8 @@ bool EnetDirectPlayTransport::Connect(const char* address, std::uint16_t port) {
 
     // enet_host_connect() only queues a CONNECT attempt and returns immediately - a
     // non-null peer_ means the attempt was queued, not that it has completed. Waiting
-    // for (or timing out on) an actual connection is a later concern (this class has
-    // no event-servicing method yet), not this task's.
+    // for (or timing out on) an actual connection happens via Service() (Decision 6),
+    // driven by whatever calls Receive() - not blocked on here.
     peer_ = enet_host_connect(host_, &enetAddress, kChannelLimit, 0);
     if (!peer_) {
         enet_host_destroy(host_);
@@ -135,6 +135,39 @@ bool EnetDirectPlayTransport::Send(const void* data, std::size_t size, bool reli
 bool EnetDirectPlayTransport::Receive(void* /*buffer*/, std::size_t /*bufferSize*/,
                                        std::size_t* /*outSize*/) {
     return false;
+}
+
+void EnetDirectPlayTransport::Service() {
+    if (!host_) return;
+
+    // Drain everything currently pending; timeout 0 means "don't block" - Receive()
+    // (the only caller today, per docs/directplay-design.md Decision 6) must return
+    // promptly regardless of whether any network I/O is ready.
+    ENetEvent event;
+    while (enet_host_service(host_, &event, 0) > 0) {
+        switch (event.type) {
+            case ENET_EVENT_TYPE_CONNECT:
+                // Adopt the first connecting peer as the peer_ this class tracks -
+                // extends the existing single-peer model to the hosting role. A second
+                // concurrent connection is accepted at the ENet protocol level but not
+                // adopted (nothing tracks it) - multi-peer hosting is Phase 6/10's job,
+                // not this one's.
+                if (!peer_) peer_ = event.peer;
+                break;
+            case ENET_EVENT_TYPE_DISCONNECT:
+                if (event.peer == peer_) peer_ = nullptr;
+                break;
+            case ENET_EVENT_TYPE_RECEIVE:
+                // Dropped, not delivered: transport-level Receive() is still an honest
+                // false stub - no plan.md task covers it yet. Buffering this packet for
+                // a Receive() that can't return it would be speculative, half-finished
+                // code, not a real capability.
+                enet_packet_destroy(event.packet);
+                break;
+            default:
+                break;
+        }
+    }
 }
 
 void EnetDirectPlayTransport::Shutdown() {
