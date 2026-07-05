@@ -771,9 +771,28 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       `enet_host_destroy()`, and `enet_deinitialize()` all succeed against the vendored copy.
       The system-ENet success path (option 2 above) remains unverified, since no `libenet` system
       package was installed — only the vendored path was pursued, per the user's explicit choice.
-- [ ] Add an `EnetDirectPlayTransport` class skeleton in `src/directplay/EnetDirectPlayTransport.hpp`/
+- [x] Add an `EnetDirectPlayTransport` class skeleton in `src/directplay/EnetDirectPlayTransport.hpp`/
       `.cpp`, implementing `IDirectPlayTransport` with method bodies to be filled in by later tasks
-      in this phase.
+      in this phase. **Done:** `EnetDirectPlayTransport final : public IDirectPlayTransport`, with
+      an `ENetHost*`/`ENetPeer*` pair of members (both null-initialized) and every interface method
+      stubbed to return `false` (`Listen`/`Connect`/`Send`/`Receive`) or no-op (`Shutdown`) —
+      honest stubs, not fake success, since `DirectPlay2AImpl::Open()` doesn't select this backend
+      yet (that's Phase 6). Constructor/destructor are trivial `= default` bodies; real
+      `enet_initialize`/`enet_deinitialize` lifecycle is the next task, not this one. Wired into
+      `CMakeLists.txt`: `EnetDirectPlayTransport.cpp` is added to `target_sources(free-direct ...)`
+      only inside the existing `if(FREE_DIRECT_ENABLE_ENET)` block, so the default (`OFF`) build
+      never compiles it. `EnetDirectPlayTransport.hpp` includes `<enet/enet.h>` directly — allowed
+      per `CLAUDE.md`'s Internal Backend Policy, since this header lives under `src/directplay/`
+      and (today) is only ever included by its own `.cpp` file, never by anything under `include/`.
+      **Verified for real, in two separate fresh configurations:** (1)
+      `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON && cmake --build cmake-build-debug -j4`
+      (the default, `FREE_DIRECT_ENABLE_ENET=OFF`) builds end-to-end, confirming zero ENet/`enet.h`
+      dependency is added by this task when the option is off. (2)
+      `cmake -B cmake-build-enet -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
+      cmake --build cmake-build-enet -j4` builds end-to-end, including
+      `EnetDirectPlayTransport.cpp` against the vendored ENet copy. Also re-ran the standalone
+      DirectPlay test suite (unaffected by this task, still 11/11 passing) and re-confirmed
+      `grep -rliE "enet|SDL_|SdlNet" include/dplay.h` is clean.
 - [ ] Add ENet initialization (`enet_initialize`) and shutdown (`enet_deinitialize`) handling,
       performed once per process regardless of how many `EnetDirectPlayTransport` instances exist.
 - [ ] Add ENet host creation (`enet_host_create` in listen mode) for the hosting role.

@@ -23,7 +23,8 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
     be able to host/join/exchange messages with each other.
   - Transport is abstracted behind `IDirectPlayTransport` (`src/directplay/DirectPlayTransport.hpp`),
     with `LoopbackDirectPlayTransport` (implemented, in-process, no sockets) and
-    `EnetDirectPlayTransport` (planned, not yet implemented) as concrete backends.
+    `EnetDirectPlayTransport` (class skeleton only - every method an honest `false`/no-op stub, not
+    yet selected by `Open()`) as concrete backends.
   - `plan.md` is the authoritative English task list (every task atomic, one thing each);
     `CLAUDE.md` is the standing project charter/policy; this file (`NEXT.md`) is the living status
     snapshot.
@@ -41,7 +42,9 @@ cmake --build cmake-build-debug -j4
 This was broken for most of this session (a CMake target-visibility bug) and was fixed; see
 Section 3. `free-api`, `free-direct` (static lib), and the `FREE_DIRECT` demo executable all
 compile and link successfully with the command above. Adding `-DFREE_DIRECT_ENABLE_ENET=ON` also
-now builds successfully, against a real vendored ENet copy (see Section 3).
+now builds successfully, against a real vendored ENet copy, and now also compiles the new
+`EnetDirectPlayTransport.cpp` skeleton (see Section 3). Both configurations (`ENET=OFF` default and
+`ENET=ON`) were freshly configured and built end-to-end this session to confirm this.
 
 **Test status**: `tests/directplay_tests.cpp` is a standalone, dependency-light file with its own
 `main()` — **not yet wired into CMake/CTest** (that is `plan.md` Phase 15, not started). Last
@@ -66,12 +69,16 @@ pass; a real DirectPlay call-site audit (`docs/directplay-callsite-audit.md`); `
 Phase 5's CMake option/detection infrastructure for ENet, plus a real ENet copy now vendored and
 verified to build and function correctly; the internal DirectPlay wire packet header
 (`DirectPlayWireProtocol.hpp`) added as a pure data structure with a passing round-trip test, plus
-defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHeader`).
+defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHeader`); the
+`EnetDirectPlayTransport` class skeleton (stub methods only, not yet selected by `Open()`).
 
 **What does not work yet / is not implemented**:
-- `EnetDirectPlayTransport` — **no code exists yet**, only the CMake plumbing to build against
-  ENet once it does, plus the wire packet header it will eventually use. There is currently no
-  networked (cross-process) DirectPlay of any kind — only same-object loopback self-send works.
+- `EnetDirectPlayTransport` — **class skeleton only**: `Listen`/`Connect`/`Send`/`Receive` all
+  return `false`, `Shutdown` no-ops, and no ENet host/peer is ever created (`enet_initialize` is
+  not even called yet - that's the next task). `DirectPlay2AImpl::Open()` still unconditionally
+  uses `LoopbackDirectPlayTransport`; nothing constructs an `EnetDirectPlayTransport` anywhere.
+  There is currently no networked (cross-process) DirectPlay of any kind — only same-object
+  loopback self-send works.
 - The wire packet header (`DirectPlayWirePacketHeader`) exists, round-trips correctly, and
   validates buffer size/payload-length consistency on receive, but nothing constructs one from a
   real `DPSESSIONDESC2`/session yet, and `magic`/`version` mismatches are not rejected yet either
@@ -136,6 +143,16 @@ defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHead
   trailing byte count. Does not check `magic`/`version` (deliberately deferred, see the header's
   file comment). Added three tests to `tests/directplay_tests.cpp` (now 11 total): truncated
   buffer, mismatched payload length, and the accept case.
+- **Added** `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp` — the `IDirectPlayTransport`
+  skeleton for the real ENet backend: an `ENetHost*`/`ENetPeer*` member pair (both
+  null-initialized) and every interface method stubbed (`Listen`/`Connect`/`Send`/`Receive` return
+  `false`; `Shutdown` no-ops; constructor/destructor are trivial). Not selected by `Open()` yet.
+  `EnetDirectPlayTransport.cpp` is added to `CMakeLists.txt`'s `target_sources(free-direct ...)`
+  only inside the existing `if(FREE_DIRECT_ENABLE_ENET)` block, so the default build is unaffected.
+  Verified with two fresh, separate configure+build runs: `-DFREE_DIRECT_ENABLE_ENET=OFF` (default)
+  and `-DFREE_DIRECT_ENABLE_ENET=ON`, both succeeding end-to-end; also re-ran the standalone
+  DirectPlay test suite (11/11, unaffected) and re-confirmed `include/dplay.h` has zero ENet/SDL
+  identifiers.
 
 ## 4. Current blocker / main problem
 
@@ -184,7 +201,8 @@ currently blocking anything, since the vendored path is the proven, working defa
   `NetStartPlay` all have zero callers anywhere in that game's current source. Only gameplay-time
   `Send`/`Receive` are reachable. This is a `free-eggbert` source-completeness gap, out of
   `free-direct`'s scope to fix (game source must not be modified).
-- **Incomplete**: `EnetDirectPlayTransport` does not exist — no networked DirectPlay yet.
+- **Incomplete**: `EnetDirectPlayTransport` is a stub-only skeleton (no ENet host/peer ever
+  created, not selected by `Open()`) — no networked DirectPlay yet.
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -238,7 +256,10 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     `TryDeserializeDirectPlayWireHeader` for untrusted receive buffers (size/length checks only,
     not magic/version). Pure data structure, zero ENet dependency, not yet used by any transport
     (`EnetDirectPlayTransport` is what will construct/consume these once it exists).
-  - `EnetDirectPlayTransport` — **does not exist yet**.
+  - `EnetDirectPlayTransport.hpp`/`.cpp` — **class skeleton only**. Holds an `ENetHost*`/`ENetPeer*`
+    pair (both null); `Listen`/`Connect`/`Send`/`Receive` all return `false`, `Shutdown` no-ops, no
+    `enet_initialize`/host/peer call exists yet. Compiled only under
+    `-DFREE_DIRECT_ENABLE_ENET=ON`; not selected by `Open()` (Phase 6, not started).
 
 **Data flow for the one working networked-ish path (self-send)**: `Open(DPOPEN_CREATE)` →
 `session_.transport = make_unique<LoopbackDirectPlayTransport>()` → `CreatePlayer` allocates a
@@ -298,20 +319,18 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-1. **Add the `EnetDirectPlayTransport` class skeleton**, implementing `IDirectPlayTransport` with
-   stub method bodies (to be filled in by later tasks).
-   - Files: new `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`; `CMakeLists.txt` (add the
-     `.cpp` to `target_sources(free-direct ...)`, gated by `if(FREE_DIRECT_ENABLE_ENET)`).
-   - Verify: `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
-     cmake --build cmake-build-debug -j4` succeeds.
-
-2. **Add ENet init/shutdown lifecycle** (`enet_initialize`/`enet_deinitialize`, once per process
-   regardless of instance count) as the skeleton's first real behavior.
+1. **Add ENet init/shutdown lifecycle** (`enet_initialize`/`enet_deinitialize`, once per process
+   regardless of instance count) to `EnetDirectPlayTransport`'s constructor/destructor, as its
+   first real (non-stub) behavior.
    - Files: `src/directplay/EnetDirectPlayTransport.cpp`.
-   - Verify: same build command as task 1, plus a small standalone smoke test constructing and
-     destroying one or more `EnetDirectPlayTransport` instances without crashing.
+   - Verify: `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
+     cmake --build cmake-build-debug -j4` succeeds, plus a small standalone smoke test
+     constructing and destroying one or more `EnetDirectPlayTransport` instances without crashing
+     (watch for the known ENet gotcha: `enet_initialize`/`enet_deinitialize` must be called once
+     per **process**, not once per instance — get the reference counting right if more than one
+     instance can exist concurrently).
 
-3. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
+2. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
    - Files: `docs/directplay-design.md` (add a new decision entry, matching the existing
      "Decision 1" format already in that file).
    - Verify: none — this is a documentation/decision task, not code.
@@ -323,13 +342,13 @@ behavior; this has not been attempted.
 - Do not touch DirectDraw or DirectSound source (`src/directdraw/`, `src/directsound/`) — separate
   subsystems on separate, not-yet-started `plan.md` phases (13/14).
 - Do not modify game source in `../free-eggbert` or `../planetblupi` under any circumstances.
-- Do not implement general `Send()` routing, host forwarding, or broadcast (`plan.md` Phase 10)
-  before the `EnetDirectPlayTransport` skeleton exists — Phase 10 depends on it. (The wire packet
-  header itself now exists, see Section 3.)
+- Do not implement general `Send()` routing, host forwarding, or broadcast (`plan.md` Phase 10) —
+  it depends on `EnetDirectPlayTransport` having real send/receive behavior, which does not exist
+  yet (still a stub).
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15) — deliberately
   deferred until more of Phases 5-11 exist to test.
 - Do not silently pick an answer to the DPID-size question — it must be written down explicitly
-  first (task 5 above), not decided implicitly inside implementation code.
+  first (task 2 above), not decided implicitly inside implementation code.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
 - Do not add DirectX API surface, flags, or behavior beyond what `../free-eggbert`/
   `../planetblupi` call sites actually require (`CLAUDE.md` scope policy) — ask before expanding.
@@ -340,8 +359,9 @@ behavior; this has not been attempted.
 
 ```
 Read NEXT.md first. Inspect only the files needed for the first task in "Next smallest tasks"
-(currently: the EnetDirectPlayTransport class skeleton). Do not refactor unrelated code, do not
-touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
+(currently: ENet init/shutdown lifecycle in EnetDirectPlayTransport's constructor/destructor). Do
+not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify
+../free-eggbert or ../planetblupi. Make one small,
 verified improvement - implement just that one task. Run the relevant build/test command from
 "Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
 considering the task done. Then update NEXT.md to reflect the new state.

@@ -126,10 +126,11 @@ target_link_libraries(free-direct
 
 if(FREE_DIRECT_ENABLE_ENET)
     # PRIVATE: ENet's include directories and link requirements must never propagate to
-    # consumers of the free-direct target (CLAUDE.md's Internal Backend Policy). The actual
-    # EnetDirectPlayTransport.cpp source file is added to target_sources() once it exists
-    # (a later plan.md Phase 5 task) - this only wires up the dependency itself.
+    # consumers of the free-direct target (CLAUDE.md's Internal Backend Policy).
     target_link_libraries(free-direct PRIVATE FreeDirect::ENet)
+    # Only compiled under this option, so the default build has zero ENet dependency -
+    # EnetDirectPlayTransport.hpp is not (yet) included by anything else.
+    target_sources(free-direct PRIVATE src/directplay/EnetDirectPlayTransport.cpp)
 endif()
 
 add_executable(FREE_DIRECT src/Main.cpp)
