@@ -63,6 +63,11 @@ public:
     std::string sessionName;
     std::string password;
     GUID applicationGuid{};
+    /// The session's instance GUID. When hosting (`DPOPEN_CREATE`) and the caller's
+    /// `DPSESSIONDESC2.guidInstance` is all-zero, `Open()` generates one and writes it
+    /// back into the caller's struct, matching real DirectPlay's `Open()` behavior of
+    /// filling in an instance GUID the caller didn't supply.
+    GUID sessionInstanceGuid{};
     DWORD maxPlayers = 0;
     DWORD currentPlayers = 0;
 

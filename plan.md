@@ -1035,9 +1035,37 @@ Goal: make `Open(..., DPOPEN_CREATE)` actually start a session other peers can j
 whichever transport is configured.
 
 - [ ] Implement `Open(..., DPOPEN_CREATE)` end-to-end on top of the configured transport.
-- [ ] Create a session instance GUID (`guidInstance`) when hosting, if the caller did not already
-      supply one.
-- [ ] Store the session descriptor supplied to `Open` on `DirectPlaySession` (per Phase 2).
+- [x] Create a session instance GUID (`guidInstance`) when hosting, if the caller did not already
+      supply one. **Done:** added `GenerateSessionInstanceGuid()` (anonymous namespace,
+      `DirectPlay.cpp`) - fills `Data1`/`Data2`/`Data3`/`Data4` individually from
+      `std::mt19937_64`/`std::random_device`, not a bulk `sizeof(GUID)` memcpy, since `GUID::Data1`
+      is `unsigned long` (8 bytes on this platform, not the 4 bytes real DirectPlay's `Data1`
+      documents - a real, previously-unnoted portability wrinkle, noted in `NEXT.md` but not fixed
+      here, since changing the typedef is a bigger, separate concern). No RFC 4122 version/variant
+      bits - not needed, since `CLAUDE.md` already establishes no real-DirectPlay wire
+      compatibility. `Open()` generates and writes back into the caller's `DPSESSIONDESC2` only
+      when hosting (`DPOPEN_CREATE`) and the caller's `guidInstance` is all-zero; a
+      caller-supplied non-zero value (or a joining call) is preserved as-is. Added
+      `DirectPlaySession::sessionInstanceGuid` (mirrors the existing `applicationGuid` field),
+      reset to zero in `Close()`. **Verified** with two new tests in `tests/directplay_tests.cpp`
+      (now 14 total): `Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid` (two separate
+      hosted sessions get different, non-zero, written-back GUIDs) and
+      `Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue`. Also re-verified both CMake
+      build configurations (`ENET=OFF`/`ON`) end-to-end and that `include/dplay.h` has zero
+      ENet/SDL identifiers.
+- [x] Store the session descriptor supplied to `Open` on `DirectPlaySession` (per Phase 2).
+      **Verified already satisfied, no new code needed:** cross-checked every `DPSESSIONDESC2`
+      field (`include/dplay.h`) against `DirectPlaySession`'s members. `guidApplication`,
+      `dwMaxPlayers`, `dwCurrentPlayers`, `lpszSessionNameA`, `lpszPasswordA` were already stored
+      (Phase 2); `guidInstance` is now stored too (the task directly above). `dwSize` is
+      validation-only, correctly never retained. `dwFlags` (e.g. `free-eggbert`'s own
+      `DPSESSION_KEEPALIVE | DPSESSION_MIGRATEHOST`), `dwUser1`-`dwUser4`, and
+      `dwReserved1`/`dwReserved2` are **not** stored, and per `CLAUDE.md`'s scope policy, must stay
+      that way until a concrete call site needs them: `free-eggbert`'s own source
+      (`src/network.cpp`) only ever *writes* `dwFlags` before calling `Open()` and never reads it
+      back afterward, no host-migration/keep-alive behavior exists anywhere in `plan.md`, and
+      `dwUser1`-`4`/reserved fields have zero observed `free-eggbert` usage. Storing any of these
+      now would be exactly the "for completeness" speculative storage `CLAUDE.md` prohibits.
 - [x] Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when using
       `EnetDirectPlayTransport`. **Done, in two batches:** batch 1 added build-time backend
       selection - `CMakeLists.txt`'s `if(FREE_DIRECT_ENABLE_ENET)` block (the one already linking

@@ -13,11 +13,34 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <random>
 #include <vector>
 
 namespace {
     bool IsEqualGuid(const GUID& a, const GUID& b) {
         return std::memcmp(&a, &b, sizeof(GUID)) == 0;
+    }
+
+    // Not a real UUID generator (no RFC 4122 version/variant bits) - FreeDirect's
+    // DirectPlay is explicitly not wire-compatible with real DirectPlay (CLAUDE.md), so
+    // there is no external protocol this needs to satisfy. Random bits in each named
+    // field are enough to make session instance GUIDs "very likely unique" for
+    // FreeDirect-to-FreeDirect sessions, which is all Open()'s guidInstance generation
+    // actually needs. Fills fields individually rather than bulk-memcpy'ing a fixed byte
+    // count, since GUID's Data1 is `unsigned long` - 8 bytes on this platform, not the 4
+    // bytes real DirectPlay's Data1 documents, so sizeof(GUID) isn't portably 16.
+    GUID GenerateSessionInstanceGuid() {
+        static std::mt19937_64 rng(std::random_device{}());
+        std::uniform_int_distribution<std::uint32_t> dist32;
+        std::uniform_int_distribution<std::uint16_t> dist16;
+        std::uniform_int_distribution<int> distByte(0, 255);
+
+        GUID guid{};
+        guid.Data1 = dist32(rng);
+        guid.Data2 = dist16(rng);
+        guid.Data3 = dist16(rng);
+        for (auto& byte : guid.Data4) byte = static_cast<unsigned char>(distByte(rng));
+        return guid;
     }
 
     class DirectPlay2AImpl final : public IDirectPlay2A {
@@ -74,6 +97,15 @@ namespace {
 
             session_.isHost = (dwFlags & DPOPEN_CREATE) != 0;
             session_.applicationGuid = lpSessionDesc->guidApplication;
+            // Only generate when hosting and the caller didn't already supply one -
+            // DPOPEN_JOIN/DPOPEN_OPENSESSION callers already know the target session's
+            // real instance GUID (from EnumSessions, plan.md Phase 8) and must not have
+            // it silently replaced. Written back into the caller's struct, matching real
+            // DirectPlay's Open() behavior for a caller-omitted instance GUID.
+            if (session_.isHost && IsEqualGuid(lpSessionDesc->guidInstance, GUID{})) {
+                lpSessionDesc->guidInstance = GenerateSessionInstanceGuid();
+            }
+            session_.sessionInstanceGuid = lpSessionDesc->guidInstance;
             session_.maxPlayers = lpSessionDesc->dwMaxPlayers;
             session_.currentPlayers = lpSessionDesc->dwCurrentPlayers;
             session_.sessionName.clear();
@@ -181,6 +213,7 @@ namespace {
             session_.sessionName.clear();
             session_.password.clear();
             session_.applicationGuid = GUID{};
+            session_.sessionInstanceGuid = GUID{};
             session_.maxPlayers = 0;
             session_.currentPlayers = 0;
             session_.isHost = false;

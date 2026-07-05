@@ -133,6 +133,62 @@ void OpenLoopbackSession(LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2) {
     CHECK((*outDp2)->Open(&desc, DPOPEN_CREATE) == DP_OK);
 }
 
+// plan.md Phase 6: "Create a session instance GUID (guidInstance) when hosting, if the caller
+// did not already supply one." Asserts an all-zero caller-supplied guidInstance is replaced
+// with a real, non-zero, written-back value, and that two separate hosted sessions get
+// different generated GUIDs (not some fixed/degenerate placeholder).
+void Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid() {
+    GUID zero{};
+
+    LPDIRECTPLAY dpA = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dpA, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2A = nullptr;
+    CHECK(dpA->QueryInterface(IID_IDirectPlay2A, (void**)&dp2A) == DP_OK);
+    DPSESSIONDESC2 descA{};
+    std::memset(&descA, 0, sizeof(descA));
+    descA.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2A->Open(&descA, DPOPEN_CREATE) == DP_OK);
+    CHECK(std::memcmp(&descA.guidInstance, &zero, sizeof(GUID)) != 0);
+
+    LPDIRECTPLAY dpB = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dpB, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2B = nullptr;
+    CHECK(dpB->QueryInterface(IID_IDirectPlay2A, (void**)&dp2B) == DP_OK);
+    DPSESSIONDESC2 descB{};
+    std::memset(&descB, 0, sizeof(descB));
+    descB.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2B->Open(&descB, DPOPEN_CREATE) == DP_OK);
+    CHECK(std::memcmp(&descB.guidInstance, &zero, sizeof(GUID)) != 0);
+
+    CHECK(std::memcmp(&descA.guidInstance, &descB.guidInstance, sizeof(GUID)) != 0);
+
+    dp2A->Release();
+    dpA->Release();
+    dp2B->Release();
+    dpB->Release();
+}
+
+// plan.md Phase 6: same task as above - a caller-supplied, already-non-zero guidInstance
+// must be preserved as-is, not silently overwritten.
+void Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    desc.guidInstance.Data1 = 0x12345678;
+    const GUID original = desc.guidInstance;
+
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DP_OK);
+    CHECK(std::memcmp(&desc.guidInstance, &original, sizeof(GUID)) == 0);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // plan.md Phase 4: "Add a unit test for CreatePlayer against a loopback session, asserting a
 // non-zero DPID is returned and is unique among players already created in that session."
 void Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids() {
@@ -335,6 +391,8 @@ int main() {
     Test_ReceiveOnEmptyQueue_ReturnsNoMessages();
     Test_ReceiveWithTooSmallBuffer_PreservesPacket();
     Test_ReceiveSuccessfulCopy_MatchesQueuedPacket();
+    Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid();
+    Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue();
     Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
