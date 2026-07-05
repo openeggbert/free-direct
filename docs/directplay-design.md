@@ -257,3 +257,76 @@ usage (confirmed by grep, `docs/directplay-callsite-audit.md` §3) and places no
 If a future, more complete audit of `free-eggbert` finds the remote-player index-assignment
 strategy above is wrong, that is a new finding to act on, not a sign this decision itself was
 made incorrectly given what was knowable at the time.
+
+---
+
+## Decision 4: `Open()` selects its transport backend at build time, via `FREE_DIRECT_ENABLE_ENET`
+
+**Status:** Decided, **not yet implemented**. Recorded ahead of `plan.md` Phase 6 ("Session
+hosting") writing any code that depends on it, per the same "decide before implementing" pattern
+as Decisions 2 and 3. Asked of, and confirmed by, the user directly (this is a FreeDirect-internal
+mechanism with no real DirectPlay equivalent to derive it from — see "The question" below).
+
+### The question
+
+`DirectPlay2AImpl::Open()` (`DirectPlay.cpp`) currently assigns `LoopbackDirectPlayTransport`
+unconditionally — it is the only backend that exists in a way `Open()` can reach. `plan.md` Phase
+6 wants `Open(..., DPOPEN_CREATE)` to "start the ENet host listener... when using
+`EnetDirectPlayTransport`", which presupposes some way for `Open()` to know *whether* it is using
+`EnetDirectPlayTransport`. Real Microsoft DirectPlay has no concept of a FreeDirect-internal
+transport backend at all, so this cannot be answered by "what does `free-eggbert` already call" —
+it is a FreeDirect-specific mechanism question with no real-DirectPlay precedent to defer to.
+
+### Decision
+
+Backend selection is a **build-time**, not run-time, choice, driven directly by the existing
+`FREE_DIRECT_ENABLE_ENET` CMake option (`CLAUDE.md`'s Networking Backend Decision; `plan.md` Phase
+5's CMake infrastructure):
+
+- When `FREE_DIRECT_ENABLE_ENET=ON`, `Open(..., DPOPEN_CREATE)` always constructs an
+  `EnetDirectPlayTransport`.
+- When `FREE_DIRECT_ENABLE_ENET=OFF` (the default), `Open()` always constructs a
+  `LoopbackDirectPlayTransport`, exactly as it does today — the default build's behavior is
+  unchanged by this decision.
+- No new `IDirectPlay`/`IDirectPlay2A`/`DPSESSIONDESC2` parameter, environment variable, or other
+  run-time switch is added. `DirectPlayCreate`'s signature and `Open`'s signature stay exactly as
+  real DirectPlay defines them.
+
+### Rationale
+
+- Simplicity: no new API surface, matching `CLAUDE.md`'s scope policy against adding
+  DirectPlay-shaped surface without a concrete call-site need — there is no `free-eggbert`/
+  `planetblupi` call site that could ever supply a "pick ENet vs. loopback" argument, since real
+  DirectPlay has no such concept.
+  `tests/directplay_tests.cpp`'s existing loopback-only tests keep working unmodified: they are
+  built and run without `FREE_DIRECT_ENABLE_ENET`, so they get `LoopbackDirectPlayTransport`
+  exactly as before. Whichever test program eventually exercises real ENet networking
+  end-to-end (`plan.md` Phase 15) is built *with* `FREE_DIRECT_ENABLE_ENET=ON` instead, and gets
+  `EnetDirectPlayTransport` automatically, no extra wiring needed on either side.
+- Matches the already-established pattern: every `EnetDirectPlayTransport`-touching line in
+  `CMakeLists.txt` is already gated behind this exact option; extending that gating into `Open()`'s
+  runtime behavior is a natural continuation, not a new mechanism, from the transport's own
+  build/link perspective.
+
+### Consequence for testing
+
+Because the choice is compile-time, `DirectPlay.cpp`'s `Open()` implementation needs a
+preprocessor conditional (`#ifdef`/`#if`) fed by a compile definition CMake sets when
+`FREE_DIRECT_ENABLE_ENET=ON` — `CMakeLists.txt` does not currently define one (it only adds
+`EnetDirectPlayTransport.cpp` to `target_sources()` and links `FreeDirect::ENet`), so adding that
+compile definition is part of implementing this decision, not a separate task.
+
+### When this gets implemented
+
+`plan.md` Phase 6, alongside "Implement `Open(..., DPOPEN_CREATE)` end-to-end on top of the
+configured transport" and "Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when
+using `EnetDirectPlayTransport`" — this decision is the missing piece those two tasks need before
+either can be written correctly.
+
+### Open idea — not decided, not scheduled
+
+A run-time backend choice (e.g. an environment variable read once at process start) would let a
+single build exercise both backends without reconfiguring CMake, which could simplify future
+integration testing (`plan.md` Phase 15). This was considered and explicitly rejected for now in
+favor of the simpler build-time mechanism, per the user's direct choice — revisit only if Phase 15
+finds the build-time mechanism genuinely blocks a specific testing need, not preemptively.

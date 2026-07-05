@@ -485,20 +485,31 @@ behavior; this has not been attempted.
 wire header, is explicitly deferred to Phase 16 by its own annotation). Phase 6 ("Session hosting")
 is next.
 
-**Open design question to resolve with the user before real Phase 6 code, not just picked
-unilaterally**: `Open(..., DPOPEN_CREATE)` currently always assigns `LoopbackDirectPlayTransport`
-unconditionally (`DirectPlay.cpp`). Phase 6 wants `Open()` to "start the ENet host listener... when
-using `EnetDirectPlayTransport`" - but nothing in `plan.md`/`CLAUDE.md` yet says *how* a caller or
-session picks ENet vs. loopback (a new `Open`/`DirectPlayCreate` parameter? A build-time-only
-choice, e.g. only ever loopback unless `FREE_DIRECT_ENABLE_ENET`? An environment variable?
-Something else?). `free-eggbert`'s own `IDirectPlay2A::Open` call site has no such parameter in
-real DirectPlay's API, so this can't be answered by "what does the game already call" alone - it
-needs a FreeDirect-specific design decision. Resolve this (documented as a new Decision in
-`docs/directplay-design.md`) before implementing backend selection in `Open()`.
+**Backend-selection design question is now resolved**: `docs/directplay-design.md` Decision 4 -
+`Open()` will select `EnetDirectPlayTransport` vs. `LoopbackDirectPlayTransport` at **build time**,
+driven by `FREE_DIRECT_ENABLE_ENET` (confirmed directly with the user), no new API surface. **Not
+yet implemented**: `Open()` still unconditionally constructs `LoopbackDirectPlayTransport`, and
+`CMakeLists.txt` does not yet define a compile-time macro `DirectPlay.cpp` could `#ifdef` on (it
+only gates `target_sources()`/`target_link_libraries()` today) - both are needed together.
 
-Smaller, non-blocked Phase 6 tasks that can proceed regardless of that decision:
+1. **Implement build-time backend selection in `Open()`**, per Decision 4.
+   - Files: `CMakeLists.txt` (add `target_compile_definitions(free-direct PRIVATE
+     FREE_DIRECT_ENABLE_ENET=1)` inside the existing `if(FREE_DIRECT_ENABLE_ENET)` block);
+     `src/directplay/DirectPlay.cpp` (`#ifdef FREE_DIRECT_ENABLE_ENET` around the
+     `EnetDirectPlayTransport` include/construction, falling back to
+     `LoopbackDirectPlayTransport` when undefined). Starting the ENet host listener itself (i.e.
+     actually calling `Listen()` with a real port) is a related but separable next step - decide
+     whether this task should also pick and pass a real port, or just wire up *which class* gets
+     constructed first and leave `Listen()` un-called until session-descriptor/port plumbing
+     exists (check `DPSESSIONDESC2` for anything port-like before assuming one needs inventing).
+   - Verify: `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
+     cmake --build cmake-build-debug -j4` succeeds and produces a binary that actually constructs
+     `EnetDirectPlayTransport` on `Open(..., DPOPEN_CREATE)` (a debug print or test-only accessor
+     may be needed to observe this, since `IDirectPlayTransport` doesn't expose which concrete
+     type backs it); re-run the default (`ENET=OFF`) build and the 12/12 `tests/
+     directplay_tests.cpp` suite to confirm loopback behavior is completely unchanged.
 
-1. **Create a session instance GUID (`guidInstance`) when hosting**, if the caller did not already
+2. **Create a session instance GUID (`guidInstance`) when hosting**, if the caller did not already
    supply one.
    - Files: `src/directplay/DirectPlay.cpp` (`DirectPlay2AImpl::Open`), possibly
      `src/directplay/DirectPlaySession.hpp` if session-descriptor storage needs a field for it.
@@ -509,7 +520,7 @@ Smaller, non-blocked Phase 6 tasks that can proceed regardless of that decision:
      mechanism - written back into the caller's struct, or just stored internally - needs
      checking against what `free-eggbert` actually reads back, if anything).
 
-2. **Store the session descriptor supplied to `Open`** on `DirectPlaySession`, if Phase 2 didn't
+3. **Store the session descriptor supplied to `Open`** on `DirectPlaySession`, if Phase 2 didn't
    already cover every field `Open`/`EnumSessions`/hosting will need.
    - Files: `src/directplay/DirectPlaySession.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`.
    - Verify: re-read `DirectPlaySession.hpp`'s existing session-descriptor fields first - this task
@@ -527,11 +538,10 @@ Smaller, non-blocked Phase 6 tasks that can proceed regardless of that decision:
   yet (still a stub).
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15) — deliberately
   deferred until more of Phases 5-11 exist to test.
-- Do not silently pick a backend-selection strategy for `Open()` (loopback vs. ENet) - it needs its
-  own documented decision (see Section 8's "Open design question") before implementation, the same
-  way the DPID and channel-layout decisions were written down before their consuming code landed.
-- Do not implement `Open()` actually starting a real ENet host/selecting `EnetDirectPlayTransport`
-  before that backend-selection decision is made and written down.
+- Do not add a run-time backend-selection mechanism (env var, new API parameter, etc.) for
+  `Open()`'s loopback-vs-ENet choice - `docs/directplay-design.md` Decision 4 explicitly chose
+  build-time-only (`FREE_DIRECT_ENABLE_ENET`), and the "run-time instead" idea was deliberately
+  rejected for now, not left open.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
 - Do not add DirectX API surface, flags, or behavior beyond what `../free-eggbert`/
   `../planetblupi` call sites actually require (`CLAUDE.md` scope policy) — ask before expanding.
@@ -541,13 +551,13 @@ Smaller, non-blocked Phase 6 tasks that can proceed regardless of that decision:
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is next. Before writing
-any Open()-backend-selection code, resolve and document the open design question in Section 8
-("how does a caller/session pick ENet vs. loopback") with the user - do not pick it unilaterally.
-Once that's resolved (or if working on one of the smaller, non-blocked Phase 6 tasks in Section 8
-instead), inspect only the files needed for that one task. Do not refactor unrelated code, do not
-touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
-verified improvement - implement just that one task. Run the relevant build/test command from
-"Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
+Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is next. The
+backend-selection design question is resolved (docs/directplay-design.md Decision 4: build-time,
+via FREE_DIRECT_ENABLE_ENET) - inspect only the files needed for the first task in "Next smallest
+tasks" (currently: implementing that build-time selection in Open()). Do not refactor unrelated
+code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi.
+Make one small, verified improvement - implement just that one task. Run the relevant build/test
+command from "Useful commands" (or the task's own "Verify" step) and confirm it actually passes
+before
 considering the task done. Then update NEXT.md to reflect the new state.
 ```

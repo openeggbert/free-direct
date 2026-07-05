@@ -1039,7 +1039,11 @@ whichever transport is configured.
       supply one.
 - [ ] Store the session descriptor supplied to `Open` on `DirectPlaySession` (per Phase 2).
 - [ ] Start the ENet host listener as part of `Open(..., DPOPEN_CREATE)` when using
-      `EnetDirectPlayTransport`.
+      `EnetDirectPlayTransport`. **Written decision now exists** for the prerequisite "how does
+      `Open()` know to use `EnetDirectPlayTransport`" question: `docs/directplay-design.md`
+      Decision 4 - build-time selection via `FREE_DIRECT_ENABLE_ENET` (confirmed with the user
+      directly), no new API surface. The actual `#ifdef`-gated selection code in `Open()`, plus the
+      CMake compile definition Decision 4 notes is still missing, are still this task's job.
 - [ ] Assign the host player-ID namespace: decide and document the starting DPID value and
       increment rule for host-allocated players, consistent with Phase 0's finding about
       `free-eggbert`'s index-based DPID comparison. **Written decision now exists** (done ahead of
