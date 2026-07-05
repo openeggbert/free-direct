@@ -113,10 +113,8 @@ namespace {
                 // LoopbackDirectPlayTransport's own Send()/Receive() are genuinely exercised
                 // (matching the eventual shape of a real backend), even though for loopback the
                 // round-trip is synchronous and same-process.
-                // Always reliable for now: dwFlags (DPSEND_GUARANTEED) isn't examined
-                // yet - mapping it to the transport's reliable/unreliable choice is a
-                // separate, still-open plan.md Phase 5 task.
-                if (!session_.transport->Send(lpData, dwDataSize, /*reliable=*/true)) {
+                const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
+                if (!session_.transport->Send(lpData, dwDataSize, reliable)) {
                     return DPERR_GENERIC;
                 }
 

@@ -167,6 +167,37 @@ void Test_LoopbackSendToSelf_ReturnsOk() {
     dp->Release();
 }
 
+// plan.md Phase 5: "Map DPSEND_GUARANTEED to ENET_PACKET_FLAG_RELIABLE in the transport
+// layer." DirectPlay2AImpl::Send() now computes reliable = (dwFlags & DPSEND_GUARANTEED)
+// != 0 and passes it to the transport instead of hardcoding true - this exercises that
+// real code path with dwFlags = 0 (the "not guaranteed" case). LoopbackDirectPlayTransport
+// itself ignores the reliable parameter (no packet-loss model), so this cannot observe a
+// different *outcome* the way the EnetDirectPlayTransport smoke tests did - it pins down
+// that the new flag-derived call path still succeeds end-to-end without regressing.
+void Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "not-guaranteed";
+    const DWORD msgLen = sizeof(msg);
+    CHECK(dp2->Send(player, player, 0, (LPVOID)msg, msgLen) == DP_OK);
+
+    char buf[32] = {};
+    DPID from = 0, to = 0;
+    DWORD size = sizeof(buf);
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(size == msgLen);
+    CHECK(from == player && to == player);
+    CHECK(std::memcmp(buf, msg, msgLen) == 0);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // plan.md Phase 4: "Add a unit test for Receive after a loopback self-send, asserting the
 // received payload matches the sent payload byte-for-byte."
 void Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload() {
@@ -306,6 +337,7 @@ int main() {
     Test_ReceiveSuccessfulCopy_MatchesQueuedPacket();
     Test_LoopbackCreatePlayer_ReturnsUniqueNonZeroDpids();
     Test_LoopbackSendToSelf_ReturnsOk();
+    Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();
     Test_LoopbackClose_SendAndReceiveReportNoConnection();
     Test_WireHeaderRoundTrip_PreservesAllFields();

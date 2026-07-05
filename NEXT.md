@@ -53,10 +53,11 @@ now builds successfully, against a real vendored ENet copy, and now also compile
 
 **Test status**: `tests/directplay_tests.cpp` is a standalone, dependency-light file with its own
 `main()` — **not yet wired into CMake/CTest** (that is `plan.md` Phase 15, not started). Last
-confirmed run (manual, per the file's own documented build command): **11/11 tests passing**
-(added this session: a wire-header serialize/deserialize round-trip test, plus three tests for the
-validating `TryDeserializeDirectPlayWireHeader` - truncated buffer, mismatched payload length,
-and the accept case). No other automated tests exist in the repository.
+confirmed run (manual, per the file's own documented build command): **12/12 tests passing**
+(added this session: a wire-header serialize/deserialize round-trip test, three tests for
+validating `TryDeserializeDirectPlayWireHeader`, and a test exercising `Send()` with `dwFlags = 0`
+through the new `DPSEND_GUARANTEED`-to-`reliable` mapping). No other automated tests exist in the
+repository.
 
 **CLI/tools/apps/libraries currently available**:
 - `libfree-direct.a` (static library) — the compatibility layer itself.
@@ -85,7 +86,8 @@ site needing it) - verified end-to-end: a `Listen()`-created server and a `Conne
 client complete a genuine handshake, the server observes a real `ENET_EVENT_TYPE_DISCONNECT` when
 the client's `Shutdown()` runs, and payloads sent via `Send()` arrive byte-for-byte with the
 correct ENet packet flags (`ENET_PACKET_FLAG_RELIABLE` vs `ENET_PACKET_FLAG_UNSEQUENCED`,
-inspected on the receiving end) depending on the `reliable` argument.
+inspected on the receiving end) depending on the `reliable` argument; `DirectPlay2AImpl::Send()`
+now maps the real `DPSEND_GUARANTEED` flag to that `reliable` argument instead of hardcoding it.
 
 **What does not work yet / is not implemented**:
 - `EnetDirectPlayTransport` — real lifecycle, `Listen()`, `Connect()`, `Shutdown()`, and
@@ -93,11 +95,10 @@ inspected on the receiving end) depending on the `reliable` argument.
   `Receive()` still returns `false` unconditionally (no `plan.md` Phase 5 task covers it - that's
   implied by later phases), and nothing services a host's events outside of the
   connection/disconnect/send paths themselves (no general "pump" method exists).
-  `DirectPlay2AImpl::Open()` still unconditionally uses `LoopbackDirectPlayTransport` and its one
-  `Send()` call site always passes `reliable=true` (mapping the real `DPSEND_GUARANTEED` flag is
-  the next task, still open); nothing constructs an `EnetDirectPlayTransport` anywhere outside its
-  own smoke tests. There is currently no networked (cross-process) DirectPlay of any kind — only
-  same-object loopback self-send works.
+  `DirectPlay2AImpl::Open()` still unconditionally uses `LoopbackDirectPlayTransport` (which
+  itself ignores the `reliable` parameter entirely - it has no packet-loss model); nothing
+  constructs an `EnetDirectPlayTransport` anywhere outside its own smoke tests. There is currently
+  no networked (cross-process) DirectPlay of any kind — only same-object loopback self-send works.
 - The wire packet header (`DirectPlayWirePacketHeader`) exists, round-trips correctly, and
   validates buffer size/payload-length consistency on receive, but nothing constructs one from a
   real `DPSESSIONDESC2`/session yet, and `magic`/`version` mismatches are not rejected yet either
@@ -258,6 +259,19 @@ inspected on the receiving end) depending on the `reliable` argument.
   they differ exactly as expected - not just a local bookkeeping value. Also re-verified both CMake
   build configurations end-to-end, the 11/11 test suite, and `include/dplay.h`'s zero ENet/SDL
   identifiers.
+- **Mapped `DPSEND_GUARANTEED` to the transport's `reliable` parameter.**
+  `DirectPlay2AImpl::Send()` (`DirectPlay.cpp`) now computes `const bool reliable = (dwFlags &
+  DPSEND_GUARANTEED) != 0;` and passes it to `session_.transport->Send(...)`, replacing the
+  previous hardcoded `/*reliable=*/true`. Since every observed real `free-eggbert` call site sets
+  `DPSEND_GUARANTEED`, this changes nothing for the one real call pattern - it only stops ignoring
+  what the caller actually asked for. **Verified for real**: re-ran the (now 12, one new) tests in
+  `tests/directplay_tests.cpp` - added `Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds`,
+  which calls `Send()` with `dwFlags = 0` through the real end-to-end
+  `IDirectPlay2A::Send()`/`Receive()` path and asserts `DP_OK` with the payload intact
+  (`LoopbackDirectPlayTransport` ignores `reliable` entirely, so this cannot observe a behavioral
+  *difference* the way the ENet smoke tests did - it pins down that the new flag-derived path
+  works and gives a regression anchor for Phase 6). Also re-verified both CMake build
+  configurations end-to-end and `include/dplay.h`'s zero ENet/SDL identifiers.
 
 ## 4. Current blocker / main problem
 
@@ -310,10 +324,6 @@ currently blocking anything, since the vendored path is the proven, working defa
   reliable/unreliable `Send()`, but `Receive()` still unconditionally returns `false`, nothing
   services a host's events outside of the connection/disconnect/send paths themselves, and it is
   not selected by `Open()` — no networked DirectPlay of any kind yet.
-- **Incomplete**: `DirectPlay.cpp`'s one `Send()` call site always passes `reliable=true` to the
-  transport - `dwFlags`/`DPSEND_GUARANTEED` is not examined at all yet ("Map `DPSEND_GUARANTEED`
-  to `ENET_PACKET_FLAG_RELIABLE` in the transport layer" is `plan.md`'s next, still-unchecked
-  Phase 5 task).
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -440,21 +450,10 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-1. **Map `DPSEND_GUARANTEED` to the transport's `reliable` parameter** in
-   `DirectPlay2AImpl::Send()` (`DirectPlay.cpp`).
-   - Files: `src/directplay/DirectPlay.cpp`. Change the hardcoded
-     `session_.transport->Send(lpData, dwDataSize, /*reliable=*/true)` to compute
-     `const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;` and pass that instead. Since
-     every observed real `free-eggbert` call site sets `DPSEND_GUARANTEED`, this should not
-     change observable behavior for the one real call pattern - it only stops hardcoding `true`
-     regardless of what the caller actually asked for.
-   - Verify: `g++` standalone build of `tests/directplay_tests.cpp` (Section 7's command) still
-     passes 11/11 (existing loopback tests pass `DPSEND_GUARANTEED` or `0` and expect specific
-     results - confirm those still hold with the real flag now examined instead of ignored). Add
-     a new loopback test if the existing ones don't already cover a `Send()` call with
-     `dwFlags = 0` reaching the transport layer with `reliable=false`.
+With the `DPSEND_GUARANTEED` mapping done, `plan.md` Phase 5's remaining unchecked items are both
+documentation/decision tasks, not code:
 
-2. **Decide the default ENet channel layout and document it** (`plan.md`: "a single channel is
+1. **Decide the default ENet channel layout and document it** (`plan.md`: "a single channel is
    likely sufficient given both target games' simple message patterns"). This is arguably already
    decided in practice - `Listen()`/`Connect()`/`Send()` all already use `kChannelLimit = 1`/channel
    `0` - but the decision has never been written down with rationale, which `plan.md` explicitly
@@ -463,10 +462,17 @@ behavior; this has not been attempted.
      format).
    - Verify: none — documentation task, not code.
 
-3. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
+2. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
    - Files: `docs/directplay-design.md` (add a new decision entry, matching the existing
      "Decision 1" format already in that file).
    - Verify: none — this is a documentation/decision task, not code.
+
+After both, Phase 5's only remaining unchecked item is "Add protocol documentation for the header
+layout... to `docs/directplay-protocol.md`", which is itself explicitly deferred to Phase 16 by
+its own `plan.md` annotation - so it does not block moving on. Phase 6 ("Session hosting") is the
+next phase after that - that is where `Open()` first gets logic to actually select
+`EnetDirectPlayTransport` over `LoopbackDirectPlayTransport`, which is a bigger design decision
+than anything in this list and should be scoped out as its own task before writing code.
 
 ## 9. Do not do yet
 
@@ -492,11 +498,10 @@ behavior; this has not been attempted.
 
 ```
 Read NEXT.md first. Inspect only the files needed for the first task in "Next smallest tasks"
-(currently: mapping DPSEND_GUARANTEED to the transport's reliable parameter in
-DirectPlay2AImpl::Send()). Do not refactor unrelated code, do not touch DirectDraw/DirectSound,
-and do not modify ../free-eggbert or ../planetblupi. Make one small, verified improvement -
-implement just that one task. Run the relevant build/test command from "Useful commands" (or the
-task's own "Verify" step) and confirm it actually passes before considering the task done. Then
-update NEXT.md to reflect
-the new state.
+(currently: documenting the default ENet channel layout decision in docs/directplay-design.md - a
+documentation task, not code). Do not refactor unrelated code, do not touch
+DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
+verified improvement - implement just that one task. Run the relevant build/test command from
+"Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
+considering the task done. Then update NEXT.md to reflect the new state.
 ```

@@ -933,7 +933,26 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds end-to-end, the 11/11
       `tests/directplay_tests.cpp` suite (unaffected), and that `include/dplay.h` has zero
       ENet/SDL identifiers.
-- [ ] Map `DPSEND_GUARANTEED` to `ENET_PACKET_FLAG_RELIABLE` in the transport layer.
+- [x] Map `DPSEND_GUARANTEED` to `ENET_PACKET_FLAG_RELIABLE` in the transport layer. **Done:**
+      `DirectPlay2AImpl::Send()` (`DirectPlay.cpp`) now computes `const bool reliable = (dwFlags &
+      DPSEND_GUARANTEED) != 0;` and passes it to `session_.transport->Send(lpData, dwDataSize,
+      reliable)`, replacing the previous hardcoded `/*reliable=*/true`. The actual
+      `ENET_PACKET_FLAG_RELIABLE`/`ENET_PACKET_FLAG_UNSEQUENCED` choice already lives in
+      `EnetDirectPlayTransport::Send()` (previous task) - this task is the missing link that
+      feeds a real `dwFlags` bit into that choice instead of ignoring it. Since every observed
+      real `free-eggbert` call site sets `DPSEND_GUARANTEED`, this does not change observable
+      behavior for the one real call pattern; it only stops hardcoding `true` regardless of what
+      the caller actually asked for. **Verified for real**: re-ran the 11 existing
+      `tests/directplay_tests.cpp` tests (no regression - `LoopbackDirectPlayTransport` ignores
+      the `reliable` parameter entirely, so passing the computed value instead of a hardcoded
+      `true` cannot change any loopback-observable outcome); added a 12th test,
+      `Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds`, which calls `Send()` with `dwFlags =
+      0` (the "not guaranteed" case) through the real `IDirectPlay2A::Send()`/`Receive()` path end
+      to end and asserts `DP_OK` with the payload surviving byte-for-byte - pinning down that the
+      new flag-derived code path works today and giving a regression anchor for Phase 6, once a
+      real backend is wired in where reliable vs. unreliable delivery could actually differ
+      observably. Also re-verified both `FREE_DIRECT_ENABLE_ENET=ON`/`OFF` CMake builds
+      end-to-end and that `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Decide the default ENet channel layout (a single channel is likely sufficient given both
       target games' simple message patterns) and document the decision with rationale.
 - [x] Add a packet type enum (e.g. `Join`, `JoinAccept`, `JoinReject`, `Data`, `Discovery`,
