@@ -23,8 +23,9 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
     be able to host/join/exchange messages with each other.
   - Transport is abstracted behind `IDirectPlayTransport` (`src/directplay/DirectPlayTransport.hpp`),
     with `LoopbackDirectPlayTransport` (implemented, in-process, no sockets) and
-    `EnetDirectPlayTransport` (class skeleton only - every method an honest `false`/no-op stub, not
-    yet selected by `Open()`) as concrete backends.
+    `EnetDirectPlayTransport` (real `enet_initialize`/`enet_deinitialize` process-wide lifecycle;
+    every other method still an honest `false`/no-op stub; not yet selected by `Open()`) as
+    concrete backends.
   - `plan.md` is the authoritative English task list (every task atomic, one thing each);
     `CLAUDE.md` is the standing project charter/policy; this file (`NEXT.md`) is the living status
     snapshot.
@@ -70,14 +71,16 @@ Phase 5's CMake option/detection infrastructure for ENet, plus a real ENet copy 
 verified to build and function correctly; the internal DirectPlay wire packet header
 (`DirectPlayWireProtocol.hpp`) added as a pure data structure with a passing round-trip test, plus
 defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHeader`); the
-`EnetDirectPlayTransport` class skeleton (stub methods only, not yet selected by `Open()`).
+`EnetDirectPlayTransport` class skeleton, now with a real process-wide
+`enet_initialize`/`enet_deinitialize` reference count in its constructor/destructor.
 
 **What does not work yet / is not implemented**:
-- `EnetDirectPlayTransport` — **class skeleton only**: `Listen`/`Connect`/`Send`/`Receive` all
-  return `false`, `Shutdown` no-ops, and no ENet host/peer is ever created (`enet_initialize` is
-  not even called yet - that's the next task). `DirectPlay2AImpl::Open()` still unconditionally
-  uses `LoopbackDirectPlayTransport`; nothing constructs an `EnetDirectPlayTransport` anywhere.
-  There is currently no networked (cross-process) DirectPlay of any kind — only same-object
+- `EnetDirectPlayTransport` — real lifecycle (`enet_initialize`/`enet_deinitialize`, process-wide
+  refcounted) exists and is verified, but `Listen`/`Connect`/`Send`/`Receive` still all return
+  `false` and `Shutdown` still no-ops - no ENet host/peer is ever created yet. `DirectPlay2AImpl::
+  Open()` still unconditionally uses `LoopbackDirectPlayTransport`; nothing constructs an
+  `EnetDirectPlayTransport` anywhere outside its own smoke test. There is currently no networked
+  (cross-process) DirectPlay of any kind — only same-object
   loopback self-send works.
 - The wire packet header (`DirectPlayWirePacketHeader`) exists, round-trips correctly, and
   validates buffer size/payload-length consistency on receive, but nothing constructs one from a
@@ -153,6 +156,19 @@ defensive receive-side size/length validation (`TryDeserializeDirectPlayWireHead
   and `-DFREE_DIRECT_ENABLE_ENET=ON`, both succeeding end-to-end; also re-ran the standalone
   DirectPlay test suite (11/11, unaffected) and re-confirmed `include/dplay.h` has zero ENet/SDL
   identifiers.
+- **Added real ENet lifecycle** to `EnetDirectPlayTransport`'s constructor/destructor: a
+  process-wide `enet_initialize()`/`enet_deinitialize()` reference count
+  (`g_enetLiveInstances`/`g_enetInitialized`, guarded by `g_enetLifecycleMutex` - an anonymous
+  namespace in `EnetDirectPlayTransport.cpp`, mirroring the mutex-guarded-state pattern already
+  used in `src/directsound/DirectSound.cpp`), plus a new `IsEnetReady()` accessor so this can be
+  tested without needing `Listen()`/`Connect()` (still stubs) to exist first. `Listen`/`Connect`/
+  `Send`/`Receive`/`Shutdown` are unchanged stubs - this task was scoped to lifecycle only.
+  Verified for real (not just "didn't crash") with a standalone smoke test compiled outside the
+  repo (not committed): a single instance initializes successfully; three concurrent instances
+  share one init, and destroying the middle one first doesn't break the other two's readiness
+  (proves shared refcounting, not per-instance init/deinit); a fresh instance after a full
+  teardown to zero re-initializes successfully (proves it isn't a one-shot state). Also re-ran the
+  full `FREE_DIRECT_ENABLE_ENET=ON` and default `OFF` CMake builds and the 11/11 test suite.
 
 ## 4. Current blocker / main problem
 
@@ -201,8 +217,8 @@ currently blocking anything, since the vendored path is the proven, working defa
   `NetStartPlay` all have zero callers anywhere in that game's current source. Only gameplay-time
   `Send`/`Receive` are reachable. This is a `free-eggbert` source-completeness gap, out of
   `free-direct`'s scope to fix (game source must not be modified).
-- **Incomplete**: `EnetDirectPlayTransport` is a stub-only skeleton (no ENet host/peer ever
-  created, not selected by `Open()`) — no networked DirectPlay yet.
+- **Incomplete**: `EnetDirectPlayTransport` has real init/shutdown lifecycle but no ENet host/peer
+  is ever created yet, and it is not selected by `Open()` — no networked DirectPlay yet.
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -256,10 +272,11 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     `TryDeserializeDirectPlayWireHeader` for untrusted receive buffers (size/length checks only,
     not magic/version). Pure data structure, zero ENet dependency, not yet used by any transport
     (`EnetDirectPlayTransport` is what will construct/consume these once it exists).
-  - `EnetDirectPlayTransport.hpp`/`.cpp` — **class skeleton only**. Holds an `ENetHost*`/`ENetPeer*`
-    pair (both null); `Listen`/`Connect`/`Send`/`Receive` all return `false`, `Shutdown` no-ops, no
-    `enet_initialize`/host/peer call exists yet. Compiled only under
-    `-DFREE_DIRECT_ENABLE_ENET=ON`; not selected by `Open()` (Phase 6, not started).
+  - `EnetDirectPlayTransport.hpp`/`.cpp` — real `enet_initialize`/`enet_deinitialize`
+    process-wide-refcounted lifecycle (constructor/destructor + `IsEnetReady()`), everything else
+    still a stub: holds an `ENetHost*`/`ENetPeer*` pair (both null); `Listen`/`Connect`/`Send`/
+    `Receive` all return `false`, `Shutdown` no-ops, no host/peer is ever created yet. Compiled
+    only under `-DFREE_DIRECT_ENABLE_ENET=ON`; not selected by `Open()` (Phase 6, not started).
 
 **Data flow for the one working networked-ish path (self-send)**: `Open(DPOPEN_CREATE)` →
 `session_.transport = make_unique<LoopbackDirectPlayTransport>()` → `CreatePlayer` allocates a
@@ -319,16 +336,18 @@ behavior; this has not been attempted.
 
 ## 8. Next smallest tasks
 
-1. **Add ENet init/shutdown lifecycle** (`enet_initialize`/`enet_deinitialize`, once per process
-   regardless of instance count) to `EnetDirectPlayTransport`'s constructor/destructor, as its
-   first real (non-stub) behavior.
-   - Files: `src/directplay/EnetDirectPlayTransport.cpp`.
+1. **Add ENet host creation** (`enet_host_create` in listen mode) for the hosting role, as
+   `Listen()`'s first real (non-stub) behavior.
+   - Files: `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, possibly
+     `src/directplay/DirectPlayTransport.hpp` too - `IDirectPlayTransport::Listen()` currently
+     takes no parameters, but `enet_host_create` needs a port/address to bind to. Decide (and note
+     in a comment) whether that's a new `Listen(...)` parameter on the shared interface, or
+     something the constructor takes instead - check what `LoopbackDirectPlayTransport::Listen()`
+     would need to stay a no-op-compatible override either way.
    - Verify: `cmake -B cmake-build-debug -DFREE_USE_SYSTEM_SDL=ON -DFREE_DIRECT_ENABLE_ENET=ON &&
-     cmake --build cmake-build-debug -j4` succeeds, plus a small standalone smoke test
-     constructing and destroying one or more `EnetDirectPlayTransport` instances without crashing
-     (watch for the known ENet gotcha: `enet_initialize`/`enet_deinitialize` must be called once
-     per **process**, not once per instance — get the reference counting right if more than one
-     instance can exist concurrently).
+     cmake --build cmake-build-debug -j4` succeeds, plus a standalone smoke test that calls
+     `Listen()` and confirms a real `ENetHost` was actually created (not just that the call
+     returned `true`).
 
 2. **Resolve the DPID-size decision** (Section 4) in writing before Phase 9 needs it.
    - Files: `docs/directplay-design.md` (add a new decision entry, matching the existing
@@ -359,10 +378,9 @@ behavior; this has not been attempted.
 
 ```
 Read NEXT.md first. Inspect only the files needed for the first task in "Next smallest tasks"
-(currently: ENet init/shutdown lifecycle in EnetDirectPlayTransport's constructor/destructor). Do
-not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify
-../free-eggbert or ../planetblupi. Make one small,
-verified improvement - implement just that one task. Run the relevant build/test command from
-"Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
+(currently: ENet host creation via enet_host_create for Listen()). Do not refactor unrelated code,
+do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one
+small, verified improvement - implement just that one task. Run the relevant build/test command
+from "Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
 considering the task done. Then update NEXT.md to reflect the new state.
 ```

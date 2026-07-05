@@ -14,11 +14,17 @@
  * ever included by `.cpp` files (as this one is, today) is allowed to name ENet types
  * directly - the policy bans ENet from reaching `include/`, not from internal headers.
  *
- * Every method below is an honest stub for this task: all backend-selecting/routing
- * behavior (Open()) still uses `LoopbackDirectPlayTransport` exclusively, so returning
- * `false` here (rather than a fake success) does not regress any currently-reachable
- * code path. Real ENet host/peer lifecycle, connect, send, receive, and disconnect
- * handling are separate, later tasks in this same `plan.md` Phase 5.
+ * The constructor/destructor now do real work: they join/leave a process-wide
+ * `enet_initialize()`/`enet_deinitialize()` reference count (see the `.cpp` file),
+ * since ENet requires that pair to be called exactly once per process, not once per
+ * instance - multiple `EnetDirectPlayTransport` instances (e.g. a host and a client
+ * transport in the same process) must share one real init/deinit pair. Every other
+ * method is still an honest stub for this task: all backend-selecting/routing
+ * behavior (Open()) still uses `LoopbackDirectPlayTransport` exclusively, so
+ * returning `false` here (rather than a fake success) does not regress any
+ * currently-reachable code path. Real ENet host/peer creation, connect, send,
+ * receive, and disconnect handling are separate, later tasks in this same `plan.md`
+ * Phase 5.
  * @note Status: STUB
  */
 #pragma once
@@ -44,7 +50,14 @@ public:
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Shutdown() override;
 
+    /// True once this instance's constructor successfully joined the process-wide
+    /// enet_initialize() reference count; false if enet_initialize() itself failed.
+    /// Exists so tests can observe real init behavior without needing a way to drive
+    /// Listen()/Connect() yet (both are still stubs - see the class comment above).
+    bool IsEnetReady() const { return enetReady_; }
+
 private:
+    bool enetReady_ = false;
     ENetHost* host_ = nullptr;
     ENetPeer* peer_ = nullptr;
 };

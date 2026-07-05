@@ -793,8 +793,28 @@ entirely gated behind a CMake option so the default build has no ENet dependency
       `EnetDirectPlayTransport.cpp` against the vendored ENet copy. Also re-ran the standalone
       DirectPlay test suite (unaffected by this task, still 11/11 passing) and re-confirmed
       `grep -rliE "enet|SDL_|SdlNet" include/dplay.h` is clean.
-- [ ] Add ENet initialization (`enet_initialize`) and shutdown (`enet_deinitialize`) handling,
+- [x] Add ENet initialization (`enet_initialize`) and shutdown (`enet_deinitialize`) handling,
       performed once per process regardless of how many `EnetDirectPlayTransport` instances exist.
+      **Done:** a process-wide reference count (`g_enetLiveInstances`, `g_enetInitialized`, guarded
+      by a `std::mutex g_enetLifecycleMutex` - matching the existing mutex-guarded-state pattern
+      already used in `src/directsound/DirectSound.cpp`) in an anonymous namespace in
+      `EnetDirectPlayTransport.cpp`. The constructor calls `enet_initialize()` only when the count
+      is `0`, then increments and sets the new `IsEnetReady()` accessor's backing field
+      (`enetReady_`) only if that call (or an earlier live instance's call) actually succeeded; the
+      destructor decrements and calls `enet_deinitialize()` only when the count reaches `0` again,
+      and only if this instance itself successfully joined the count (so a failed-`enet_initialize`
+      instance's destructor is a no-op, never double-`enet_deinitialize`s). `Listen`/`Connect`/
+      `Send`/`Receive`/`Shutdown` remain the honest stubs from the previous task - this task is
+      scoped to lifecycle only. **Verified for real** (not just "didn't crash") with a standalone
+      smoke test compiled outside the repo (not committed, matching the precedent set by the
+      earlier real-ENet-functionality check in this same phase): one instance's `IsEnetReady()` is
+      true; three concurrent instances are all ready, and destroying the middle one first does not
+      break the other two's readiness (proves the shared reference count, not per-instance
+      init/deinit); after a full teardown to zero live instances, constructing a fresh instance
+      re-initializes successfully (proves it isn't a one-shot "already shut down" state). Also
+      re-verified both the `FREE_DIRECT_ENABLE_ENET=ON` CMake build (fresh configure+build) and the
+      default `OFF` build, re-ran the 11/11 `tests/directplay_tests.cpp` suite (unaffected), and
+      re-confirmed `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Add ENet host creation (`enet_host_create` in listen mode) for the hosting role.
 - [ ] Add ENet client creation (`enet_host_create` with no listen address) for the joining role.
 - [ ] Add ENet peer connection (`enet_host_connect`) for the joining role.

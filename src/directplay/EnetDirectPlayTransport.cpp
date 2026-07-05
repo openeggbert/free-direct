@@ -5,14 +5,42 @@
  */
 #include "EnetDirectPlayTransport.hpp"
 
+#include <mutex>
+
 namespace free_direct_directplay {
 
-// ENet init/shutdown lifecycle (enet_initialize/enet_deinitialize, once per process)
-// is the next plan.md Phase 5 task, not this one - the constructor/destructor stay
-// trivial until then.
-EnetDirectPlayTransport::EnetDirectPlayTransport() = default;
+namespace {
+// enet_initialize()/enet_deinitialize() must be called exactly once per process, not
+// once per EnetDirectPlayTransport instance - this reference count is shared by every
+// live instance so the pair still happens exactly once even if several instances
+// exist at once (e.g. a host and a client transport in the same process).
+std::mutex g_enetLifecycleMutex;
+int g_enetLiveInstances = 0;
+bool g_enetInitialized = false;
+} // namespace
 
-EnetDirectPlayTransport::~EnetDirectPlayTransport() = default;
+EnetDirectPlayTransport::EnetDirectPlayTransport() {
+    std::lock_guard<std::mutex> lock(g_enetLifecycleMutex);
+    if (g_enetLiveInstances == 0) {
+        g_enetInitialized = (enet_initialize() == 0);
+    }
+    if (g_enetInitialized) {
+        ++g_enetLiveInstances;
+        enetReady_ = true;
+    }
+    // If enet_initialize() failed, g_enetLiveInstances stays 0 and enetReady_ stays
+    // false for this instance - the next constructed instance retries enet_initialize()
+    // itself, since nothing else owns a successful init to fall back on.
+}
+
+EnetDirectPlayTransport::~EnetDirectPlayTransport() {
+    if (!enetReady_) return;
+    std::lock_guard<std::mutex> lock(g_enetLifecycleMutex);
+    if (--g_enetLiveInstances == 0) {
+        enet_deinitialize();
+        g_enetInitialized = false;
+    }
+}
 
 bool EnetDirectPlayTransport::Listen() { return false; }
 
