@@ -18,10 +18,11 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
   calling the public `IDirectPlay2A::Receive()` (matching `free-eggbert`'s own polling pattern),
   verified with a real external (non-FreeDirect) ENet client. The previous session's blocker (ENet
   needs something to call `enet_host_service()`; nothing did) is resolved. `Open()` now also
-  generates a real, unique `guidInstance` when hosting with an all-zero one, and (as of this
-  session) genuinely accepts **multiple simultaneous** real ENet client connections, each
-  assigned a real DPID up to `dwMaxPlayers` - verified with two independent real ENet clients
-  both completing a connection to the same hosted session at once.
+  generates a real, unique `guidInstance` when hosting with an all-zero one, genuinely accepts
+  **multiple simultaneous** real ENet client connections, each assigned a real DPID up to
+  `dwMaxPlayers`, and (as of this session) correctly updates `dwCurrentPlayers`/`remotePlayerIds`
+  when an assigned peer disconnects, via a new `TakeDisconnectedPeer()` transport method that
+  mirrors the pending-connection design without ever exposing `ENetPeer*`.
 - **Important architectural decisions**:
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net type or symbol may ever appear in them.
@@ -41,9 +42,10 @@ original DirectX SDK or Windows. It is not an attempt at full DirectX compatibil
     (Decision 4), calls `Listen()` when hosting (Decision 5), and `DirectPlay2AImpl::Receive()`
     now assigns real DPIDs to incoming connections up to `dwMaxPlayers` (Decision 7) after calling
     `Service()` (Decision 6). `IDirectPlayTransport` gained `Listen`/`Connect`/`Send` parameters,
-    `Service()`, and `HasPendingConnection()`/`AssignPendingConnection(DPID)` this phase - it now
-    knows `DPID` as an opaque map key (a deliberate, documented narrowing of "the transport knows
-    nothing about DPID", not a full reversal - it still never allocates or validates one).
+    `Service()`, `HasPendingConnection()`/`AssignPendingConnection(DPID)` (Decision 7), and
+    `HasDisconnectedPeer()`/`TakeDisconnectedPeer(DPID*)` (Decision 8) this phase - it now knows
+    `DPID` as an opaque map key/output value (a deliberate, documented narrowing of "the transport
+    knows nothing about DPID", not a full reversal - it still never allocates or validates one).
   - `plan.md` is the authoritative English task list (every task atomic, one thing each);
     `CLAUDE.md` is the standing project charter/policy; this file (`NEXT.md`) is the living status
     snapshot.
@@ -85,14 +87,15 @@ per-task notes and Section 3 below; this list is intentionally a summary, not a 
 `plan.md` Phases 0-5 complete (call-site audit, COM correctness fixes, `DirectPlaySession` state
 model, `DirectPlayMessageQueue`, `LoopbackDirectPlayTransport`, and a fully-real
 `EnetDirectPlayTransport` - lifecycle/`Listen`/`Connect`/`Shutdown`/reliable+unreliable `Send`);
-the SDL3 build blocker fixed. Seven decisions recorded in `docs/directplay-design.md` (single ENet
+the SDL3 build blocker fixed. Eight decisions recorded in `docs/directplay-design.md` (single ENet
 channel; `DPID` must become a `DWORD` with the host's first player at `DPID` `0`; build-time
 backend selection; a fixed default ENet port; event servicing via `Service()`; multi-peer hosting
-via a `DPID → ENetPeer*` map). Phase 6 in progress, and now substantially complete: `Open()`
-build-time-selects its backend, genuinely starts the ENet listener (real OS-level `bind()`),
-generates a real `guidInstance` when hosting, and - verified with real external ENet clients
-driven purely through the public `IDirectPlay2A::Receive()` - **accepts multiple simultaneous
-real connections, each assigned a real DPID up to `dwMaxPlayers`**.
+via a `DPID → ENetPeer*` map; disconnect notification via a mirrored `DPID` queue). Phase 6 well
+underway: `Open()` build-time-selects its backend, genuinely starts the ENet listener (real
+OS-level `bind()`), generates a real `guidInstance` when hosting, and - verified with real
+external ENet clients driven purely through the public `IDirectPlay2A::Receive()` - **accepts
+multiple simultaneous real connections, each assigned a real DPID up to `dwMaxPlayers`, and
+correctly updates `dwCurrentPlayers`/`remotePlayerIds` when an assigned peer disconnects**.
 
 **What does not work yet / is not implemented**:
 - Transport-level `Receive()` (`EnetDirectPlayTransport::Receive()`, distinct from
@@ -104,8 +107,7 @@ real connections, each assigned a real DPID up to `dwMaxPlayers`**.
   behavior, not a bug). A *joining*-role instance's `Send()` still works as before.
 - A pending connection beyond `dwMaxPlayers` is left connected-but-unassigned, not explicitly
   rejected/disconnected - `plan.md`'s separate "enforce `dwMaxPlayers` by rejecting new joins"
-  task. `currentPlayers`/`remotePlayerIds` are updated on join but not yet on disconnect -
-  `plan.md`'s separate "update `dwCurrentPlayers` as players join and leave" task.
+  task.
 - There is still no *DirectPlay-message-level* networked communication of any kind - `Send()`
   routing to anyone other than the sender is a no-op (Phase 10), and `EnumSessions`/`Connect()` at
   the `IDirectPlay2A` level don't exist yet (Phases 7/8), so nothing in `DirectPlay.cpp` itself
@@ -426,6 +428,26 @@ real connections, each assigned a real DPID up to `dwMaxPlayers`**.
   level - `IDirectPlay2A` has no player-count-observing method in this narrow subset.) Also
   re-verified both CMake build configurations end-to-end and the 14/14 test suite (unaffected - no
   committed test touches multi-peer hosting).
+- **Implemented disconnect notification** (Decision 8, asked the user, mirrored Decision 7's
+  pending-connection shape exactly rather than inventing a new pattern). New
+  `std::deque<DPID> disconnectedPeerIds_` in `EnetDirectPlayTransport` (hosting role only),
+  populated by `Service()`'s `ENET_EVENT_TYPE_DISCONNECT` handling only when the disconnecting
+  peer was already in `connectedPeers_` (i.e. previously assigned a DPID) - a peer that
+  disconnects while still only in `pendingPeers_` is not reported. New
+  `HasDisconnectedPeer()`/`TakeDisconnectedPeer(DPID* outId)` on `IDirectPlayTransport`
+  (output-parameter style, not a `DPID` return with `0` meaning "none" - `0` is now a valid real
+  player ID per Decision 3). `LoopbackDirectPlayTransport` implements both trivially (`false`).
+  `DirectPlay2AImpl::Receive()` gained a companion loop *before* the pending-connection-assignment
+  loop (process departures before admitting arrivals): removes the disconnected DPID from
+  `remotePlayerIds`, decrements `currentPlayers` (underflow-guarded). **Verified for real** with
+  two standalone smoke tests (not committed): (1) directly against `EnetDirectPlayTransport` - a
+  real client connects, is assigned a DPID, disconnects, and is reported exactly once via
+  `TakeDisconnectedPeer()`; a second client disconnecting *before* assignment is confirmed **not**
+  reported. (2) End-to-end through `Open()`/`CreatePlayer()`/`Receive()`: a real client connects
+  then disconnects, `Receive()` runs repeatedly with no crash/hang, and the session stays healthy
+  (a second local `CreatePlayer()` still succeeds afterward). `remotePlayerIds`/`currentPlayers`
+  correctness itself could only be verified at the transport level. Both CMake build
+  configurations and the 14/14 test suite (unaffected) re-verified.
 
 ## 4. Current blocker / main problem
 
@@ -503,6 +525,10 @@ currently blocking anything, since the vendored path is the proven, working defa
   currently no *FreeDirect-driven* way to reach that listener though (no `EnumSessions`/`Connect()`
   at the `IDirectPlay2A` level yet - Phases 7/8), so today's verification used a raw external ENet
   client, not a second FreeDirect instance joining.
+- **Resolved this session** (previously listed here as a confirmed gap): `dwCurrentPlayers`/
+  `remotePlayerIds` now correctly update when an assigned peer disconnects, via
+  `TakeDisconnectedPeer()` - see `docs/directplay-design.md` Decision 8. Still incomplete: no
+  join-accepted/join-rejected wire packets are ever sent (`plan.md`'s separate, still-open tasks).
 - **Incomplete**: `Send()` only handles the exact self-send case (`idTo == idFrom`); any other
   recipient is a silent no-op pending Phase 10.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (correct today, since nothing
@@ -576,16 +602,19 @@ interfaces only. **Hard rule**: no SDL3, SDL3_net, or ENet type/symbol may ever 
     `Send(data, size, reliable)` (joining role only - always `false` for a hosting-role instance,
     since there is no single implicit recipient once there can be many `connectedPeers_`), and
     real event servicing in `Service()` (Decision 6: non-blocking `enet_host_service` drain loop).
-    **Multi-peer hosting** (Decision 7, this session): `hostPeer_` (joining role, one `ENetPeer*`)
-    is now separate from `connectedPeers_` (`std::unordered_map<DPID, ENetPeer*>`, hosting role,
-    populated only via the new `AssignPendingConnection(DPID)`) and `pendingPeers_`
-    (`std::deque<ENetPeer*>`, hosting role, populated by `Service()`'s `ENET_EVENT_TYPE_CONNECT`
-    handling); `HasPendingConnection()`/`ConnectedPeerCount()` are the new test/caller-facing
-    accessors. Transport-level `Receive()` still returns `false` - `Service()` never delivers
-    received packets anywhere. Also exposes `kDefaultDirectPlayEnetPort = 51321` (Decision 5).
-    Compiled only under `-DFREE_DIRECT_ENABLE_ENET=ON`; selected by `Open()` for construction
-    (Decision 4), `Listen()` when hosting (Decision 5), `Service()` (Decision 6), and DPID
-    assignment to pending connections up to `dwMaxPlayers` (Decision 7) from
+    **Multi-peer hosting** (Decision 7): `hostPeer_` (joining role, one `ENetPeer*`) is separate
+    from `connectedPeers_` (`std::unordered_map<DPID, ENetPeer*>`, hosting role, populated only
+    via `AssignPendingConnection(DPID)`) and `pendingPeers_` (`std::deque<ENetPeer*>`, hosting
+    role, populated by `Service()`'s `ENET_EVENT_TYPE_CONNECT` handling);
+    `HasPendingConnection()`/`ConnectedPeerCount()` are the test/caller-facing accessors.
+    **Disconnect notification** (Decision 8): `disconnectedPeerIds_` (`std::deque<DPID>`, hosting
+    role), populated by `Service()`'s `ENET_EVENT_TYPE_DISCONNECT` handling only for
+    already-assigned peers; `HasDisconnectedPeer()`/`TakeDisconnectedPeer(DPID*)` retrieve them.
+    Transport-level `Receive()` still returns `false` - `Service()` never delivers received
+    packets anywhere. Also exposes `kDefaultDirectPlayEnetPort = 51321` (Decision 5). Compiled
+    only under `-DFREE_DIRECT_ENABLE_ENET=ON`; selected by `Open()` for construction (Decision 4),
+    `Listen()` when hosting (Decision 5), `Service()` (Decision 6), DPID assignment up to
+    `dwMaxPlayers` (Decision 7), and disconnect processing (Decision 8) - all from
     `IDirectPlay2A::Receive()`.
 
 **Data flow for the one working networked-ish path (self-send)**: `Open(DPOPEN_CREATE)` →
@@ -657,27 +686,31 @@ servicing (Decision 6), session-instance-GUID generation, and multi-peer hosting
 assignment up to `dwMaxPlayers` (Decision 7) are all implemented and verified. "Store the session
 descriptor" needed no new code (confirmed already satisfied).
 
-**Next task has its own small design question, same pattern as before** - `EnetDirectPlayTransport`
-currently has no way to tell a caller *which* DPID disconnected, only that *something* did
-(`Service()` removes it from `connectedPeers_` internally, but nothing surfaces this outward).
+Disconnect notification (Decision 8) is now also implemented and verified -
+`dwCurrentPlayers`/`remotePlayerIds` correctly update on both join and leave.
 
-1. **Update `dwCurrentPlayers` as players join and leave** (the next unchecked `plan.md` Phase 6
-   task) - the "join" half is already done (this session's work increments `currentPlayers` and
-   appends to `remotePlayerIds` on `AssignPendingConnection`); the "leave" half needs a way for
-   `DirectPlay2AImpl::Receive()` to learn which DPID disconnected, so it can decrement
-   `currentPlayers` and remove that DPID from `remotePlayerIds`.
-   - Open question to resolve first (as a new Decision in `docs/directplay-design.md`): how does
-     the transport surface "this DPID just disconnected" without exposing `ENetPeer*`? A queue
-     mirroring `pendingPeers_`'s shape (e.g. `HasDisconnectedPeer()`/`TakeDisconnectedPeer()`
-     returning the `DPID` that was removed from `connectedPeers_`, populated by `Service()`'s
-     `ENET_EVENT_TYPE_DISCONNECT` handling instead of just erasing silently)? Something else?
-   - Files: `src/directplay/DirectPlayTransport.hpp` (new interface method(s)),
-     `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp`, `src/directplay/DirectPlay.cpp`,
-     `docs/directplay-design.md`.
-   - Verify: a smoke test where an assigned peer disconnects, confirming
-     `DirectPlaySession::currentPlayers`/`remotePlayerIds` update correctly (likely needs a
-     test-only accessor on `DirectPlaySession`, or driving it through the public interface if a
-     suitable observable side effect exists - check before assuming a new accessor is needed).
+**Next task touches a *public* header (`include/dplay.h`) - flag before doing, even though the
+decision itself is already made** (Decision 3, from an earlier batch):
+
+1. **Assign the host player-ID namespace** (the next unchecked `plan.md` Phase 6 task, overlapping
+   with Phase 9's identical requirement) - implement what Decision 3 already decided but never
+   coded: change `include/dplay.h`'s `DPID` typedef from `DWORD_PTR` to `DWORD` (4 bytes, matching
+   real DirectPlay and `free-eggbert`'s hardcoded-32-byte-stride `NetPlayer` layout assumption),
+   and change `DirectPlaySession::nextPlayerId`'s initial value from `1` to `0` (the host's first
+   local player gets DPID `0`, matching `free-eggbert`'s own comparison pattern - see Decision 3's
+   full citation trail). Both should land together - a `DPID` `0` on an unchanged 8-byte `DPID`
+   carries no benefit.
+   - This is a real, consequential change to a public header's type - confirm with the user before
+     touching `include/dplay.h`, the same way every other Decision-driven change in this phase was
+     confirmed first, even though the decision itself already exists.
+   - Files: `include/dplay.h`, `src/directplay/DirectPlaySession.hpp`.
+   - Verify: full rebuild of both CMake configurations (a `DPID` width change could ripple through
+     `DirectPlayWireProtocol.hpp`'s `sizeof(DPID)`-based serialization - re-check
+     `kDirectPlayWireHeaderSize` still computes correctly and the wire-header round-trip test still
+     passes); re-run the 14/14 `tests/directplay_tests.cpp` suite, paying attention to whether any
+     existing test's hardcoded DPID expectations (e.g. "first `CreatePlayer()` returns a non-zero
+     DPID") need updating now that `0` is a valid, expected first value instead of an error
+     sentinel.
 
 ## 9. Do not do yet
 
@@ -696,9 +729,9 @@ currently has no way to tell a caller *which* DPID disconnected, only that *some
   build-time-only (`FREE_DIRECT_ENABLE_ENET`), and the "run-time instead" idea was deliberately
   rejected for now, not left open.
 - Do not add an SDL3_net backend (`plan.md` Phase 12 explicitly defers this until ENet is stable).
-- Do not implement disconnect-DPID surfacing (Section 8's task) by exposing `ENetPeer*` outside
-  `EnetDirectPlayTransport` - same "no ENet type crosses the abstraction boundary" rule Decision 7
-  already established for pending connections; write the mechanism down as a Decision first.
+- Do not change `include/dplay.h`'s `DPID` typedef or `DirectPlaySession::nextPlayerId`'s starting
+  value (Section 8's task) without first confirming with the user - it is a real, consequential
+  change to a *public* header, even though the decision itself (Decision 3) already exists.
 - Do not implement `Send()`/`Receive()` addressing a *specific* connected peer, or explicit
   rejection of an over-the-cap pending connection - both are separate, still-open `plan.md` Phase
   6/10 tasks, not implied by the multi-peer tracking that now exists.
@@ -712,14 +745,16 @@ currently has no way to tell a caller *which* DPID disconnected, only that *some
 ```
 Read NEXT.md first. plan.md Phase 5 is done; Phase 6 ("Session hosting") is well underway -
 build-time backend selection (Decision 4), starting the ENet listener (Decision 5), event
-servicing (Decision 6), session-instance-GUID generation, and multi-peer hosting with real DPID
-assignment (Decision 7) are all implemented and verified. The next task (Section 8: updating
-dwCurrentPlayers/remotePlayerIds on disconnect) needs a small design decision first - how does the
-transport surface "this DPID disconnected" without exposing ENetPeer* outside it (same rule
-Decision 7 established). Resolve and document it (e.g. as a new Decision) with the user first, do
-not pick the mechanism unilaterally. Do not refactor unrelated code, do not touch
-DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one small,
-verified improvement - implement just that one task. Run the relevant build/test command from
-"Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
+servicing (Decision 6), session-instance-GUID generation, multi-peer hosting with real DPID
+assignment (Decision 7), and disconnect notification (Decision 8) are all implemented and
+verified. The next task (Section 8: implementing Decision 3's already-made DPID width/starting-
+value decision - changing include/dplay.h's DPID typedef to DWORD and DirectPlaySession::
+nextPlayerId's start to 0) touches a *public* header - confirm with the user before making the
+change, even though the decision itself already exists; do not just proceed because it was
+"already decided." Note: this will require updating the existing loopback DPID tests, since 0
+becomes a valid first DPID instead of an implicit error sentinel. Do not refactor unrelated code,
+do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Make one
+small, verified improvement - implement just that one task. Run the relevant build/test command
+from "Useful commands" (or the task's own "Verify" step) and confirm it actually passes before
 considering the task done. Then update NEXT.md to reflect the new state.
 ```

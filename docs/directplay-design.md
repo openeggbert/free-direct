@@ -619,3 +619,70 @@ single-`peer_` model. `dwMaxPlayers` enforcement itself is verified at the trans
 since `IDirectPlay2A` has no player-count-observing method to check it through end-to-end. Both
 CMake build configurations and the 14/14 `tests/directplay_tests.cpp` suite (unaffected)
 re-verified throughout.
+
+---
+
+## Decision 8: disconnect notification via a `DPID` queue, mirroring the pending-connection design
+
+**Status:** Decided and implemented. Resolves the gap Decision 7 left open: `Service()`
+already removes a disconnected peer from `connectedPeers_`, but nothing tells the caller *which*
+`DPID` that was, so `plan.md`'s "update `dwCurrentPlayers` as players join and leave" task cannot
+decrement `currentPlayers`/remove from `remotePlayerIds` on the "leave" side.
+
+### The question
+
+How does `EnetDirectPlayTransport` tell `DirectPlay2AImpl::Receive()` "the peer assigned DPID `X`
+just disconnected", without exposing an `ENetPeer*` outside the transport (the same rule Decision
+7 established for pending connections)?
+
+### Decision
+
+Mirror Decision 7's pending-connection shape exactly, rather than inventing a new pattern: a new
+`std::deque<DPID> disconnectedPeerIds_` (hosting role only), populated by `Service()`'s
+`ENET_EVENT_TYPE_DISCONNECT` handling - when the disconnecting peer is found in `connectedPeers_`
+(i.e. it had already been assigned a DPID via `AssignPendingConnection`), that `DPID` is pushed
+onto `disconnectedPeerIds_` before the map entry is erased. A peer that disconnects while still
+only in `pendingPeers_` (never assigned) is *not* reported - nothing in `DirectPlaySession` knows
+about it yet, so there is nothing to reconcile.
+
+Two new `IDirectPlayTransport` methods:
+
+- `virtual bool HasDisconnectedPeer() const = 0;` - true if at least one disconnect is queued.
+- `virtual bool TakeDisconnectedPeer(DPID* outId) = 0;` - pops the oldest queued disconnect into
+  `*outId` (if non-null) and returns `true`; returns `false` (no-op) if the queue was empty.
+
+`TakeDisconnectedPeer` uses an output parameter and a `bool` return, **not** a `DPID` return value
+with `0` meaning "none" - unlike before Decision 3, `DPID` `0` is now a valid, real player ID (the
+host's own local player), so it can never double as an "empty" sentinel. This matches the existing
+style used elsewhere in this codebase for "optional value via output pointer" (e.g. `CreatePlayer`'s
+`lpidPlayer`, `Receive`'s `lpidFrom`/`lpidTo`).
+
+`DirectPlay2AImpl::Receive()` (`DirectPlay.cpp`) is extended, in the same `session_.isHost` block
+as Decision 7's assignment loop, with a companion loop *before* it (process departures before
+admitting new arrivals in the same `Receive()` call): while hosting and
+`HasDisconnectedPeer()`, take the next disconnected `DPID`, remove it from
+`session_.remotePlayerIds`, and decrement `session_.currentPlayers` (guarded against underflow,
+though it should never actually happen given the invariant that every `remotePlayerIds` entry
+came from a prior successful `AssignPendingConnection`/`currentPlayers++` pair).
+
+`LoopbackDirectPlayTransport` implements both new methods trivially: `HasDisconnectedPeer()`
+always `false`, `TakeDisconnectedPeer()` always `false` - loopback has no incoming-connection
+concept, so it has no disconnect-of-an-incoming-connection concept either.
+
+### Implemented
+
+`src/directplay/DirectPlayTransport.hpp` (`HasDisconnectedPeer()`/`TakeDisconnectedPeer(DPID*)`
+added to `IDirectPlayTransport`; `LoopbackDirectPlayTransport` implements both trivially, always
+`false`), `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp` (`disconnectedPeerIds_` queue,
+populated by `Service()`'s `ENET_EVENT_TYPE_DISCONNECT` handling only for already-assigned peers),
+and `src/directplay/DirectPlay.cpp` (`DirectPlay2AImpl::Receive()`'s new departures-before-arrivals
+loop). **Verified for real** with two standalone smoke tests (not committed): (1) directly against
+`EnetDirectPlayTransport` - a real ENet client connects, is assigned a DPID, disconnects, and
+`TakeDisconnectedPeer()` reports exactly that DPID exactly once; a second client that disconnects
+*before* being assigned is confirmed not reported at all. (2) End-to-end through the real
+`Open()`/`CreatePlayer()`/`Receive()` path: a real ENet client connects then disconnects,
+`Receive()` runs repeatedly throughout with no crash/hang, and the session stays healthy afterward
+(a second local `CreatePlayer()` still succeeds). `remotePlayerIds`/`currentPlayers` correctness
+itself could only be verified at the transport level, since `IDirectPlay2A` has no
+player-count-observing method. Both CMake build configurations and the 14/14
+`tests/directplay_tests.cpp` suite (unaffected) re-verified.

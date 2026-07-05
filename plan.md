@@ -1184,7 +1184,36 @@ whichever transport is configured.
       application GUID does not match.
 - [ ] Enforce `dwMaxPlayers` by rejecting new joins once `dwCurrentPlayers` reaches the configured
       maximum.
-- [ ] Update `dwCurrentPlayers` as players join and leave.
+- [x] Update `dwCurrentPlayers` as players join and leave. **Done, after asking the user** how
+      the transport should surface "this DPID disconnected" without exposing `ENetPeer*` -
+      `docs/directplay-design.md` Decision 8 mirrors Decision 7's pending-connection shape exactly:
+      a new `std::deque<DPID> disconnectedPeerIds_` (hosting role only) in
+      `EnetDirectPlayTransport`, populated by `Service()`'s `ENET_EVENT_TYPE_DISCONNECT` handling
+      only when the disconnecting peer was already in `connectedPeers_` (i.e. previously assigned
+      a DPID via `AssignPendingConnection`) - a peer that disconnects while still only in
+      `pendingPeers_` is not reported, since nothing outside the transport knows about it yet. Two
+      new `IDirectPlayTransport` methods: `HasPendingConnection()`-style
+      `HasDisconnectedPeer() const` and `TakeDisconnectedPeer(DPID* outId)` (an output parameter,
+      not a `DPID` return value with `0` meaning "none", since DPID `0` is now a valid real player
+      ID per Decision 3 and can never double as an empty sentinel). `LoopbackDirectPlayTransport`
+      implements both trivially (always `false` - no incoming-connection concept, so no
+      disconnect-of-one concept either). `DirectPlay2AImpl::Receive()` (`DirectPlay.cpp`) gained a
+      companion loop *before* the existing pending-connection-assignment loop (process departures
+      before admitting arrivals in the same call): while hosting and a disconnect is queued, take
+      the DPID, remove it from `session_.remotePlayerIds`, decrement `session_.currentPlayers`
+      (underflow-guarded, though it should never actually trigger given the join/leave invariant).
+      **Verified for real** with two standalone smoke tests (not committed): (1) directly against
+      `EnetDirectPlayTransport` - a real ENet client connects, is assigned a DPID, disconnects, and
+      `TakeDisconnectedPeer()` reports exactly that DPID exactly once; separately, a *second* client
+      that disconnects *before* ever being assigned is confirmed **not** reported at all. (2)
+      End-to-end through the real `Open()`/`CreatePlayer()`/`Receive()` path: a real ENet client
+      connects then disconnects, `Receive()` is called repeatedly throughout (including well after
+      the disconnect) with no crash and no hang, and the session remains healthy afterward (a
+      second local `CreatePlayer()` call still succeeds with a distinct DPID). `remotePlayerIds`/
+      `currentPlayers` correctness itself could only be verified at the transport level - `IDirectPlay2A`
+      has no player-count-observing method in this narrow subset. Also re-verified both CMake build
+      configurations (`ENET=OFF`/`ON`) end-to-end, the 14/14 `tests/directplay_tests.cpp` suite
+      (unaffected), and that `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Add a test for host session creation over loopback, asserting `Open(..., DPOPEN_CREATE)`
       returns `DP_OK` and the session reports itself as host.
 - [ ] Add a test for invalid host parameters (e.g. `dwMaxPlayers == 0`, malformed

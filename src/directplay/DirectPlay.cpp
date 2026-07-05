@@ -9,6 +9,7 @@
 #ifdef FREE_DIRECT_ENABLE_ENET
 #include "EnetDirectPlayTransport.hpp"
 #endif
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -194,6 +195,24 @@ namespace {
             // Service() is a no-op; EnetDirectPlayTransport's drains pending ENet events
             // (peer connect/disconnect bookkeeping) non-blockingly.
             if (session_.transport) session_.transport->Service();
+            // Process departures before admitting new arrivals (docs/directplay-design.md
+            // Decision 8): remove each disconnected peer's DPID from remotePlayerIds and
+            // decrement currentPlayers. Only an already-assigned peer's disconnect is ever
+            // reported here - one that disconnects before being assigned was never added
+            // to remotePlayerIds/currentPlayers in the first place, so there is nothing to
+            // reconcile for it.
+            if (session_.transport && session_.isHost) {
+                DPID disconnectedId = 0;
+                while (session_.transport->HasDisconnectedPeer() &&
+                       session_.transport->TakeDisconnectedPeer(&disconnectedId)) {
+                    auto it = std::find(session_.remotePlayerIds.begin(),
+                                        session_.remotePlayerIds.end(), disconnectedId);
+                    if (it != session_.remotePlayerIds.end()) {
+                        session_.remotePlayerIds.erase(it);
+                        if (session_.currentPlayers > 0) session_.currentPlayers--;
+                    }
+                }
+            }
             // Assign a real DPID to each pending incoming connection, up to dwMaxPlayers
             // (docs/directplay-design.md Decision 7) - the transport only reports "a peer
             // connected but has no DPID yet"; allocation policy (which counter, the cap,

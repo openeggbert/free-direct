@@ -164,6 +164,11 @@ void EnetDirectPlayTransport::Service() {
                 if (listening_) {
                     for (auto it = connectedPeers_.begin(); it != connectedPeers_.end(); ++it) {
                         if (it->second == event.peer) {
+                            // Only an already-assigned peer's DPID is reported
+                            // (docs/directplay-design.md Decision 8) - a peer still
+                            // only in pendingPeers_ (below) has no DPID for
+                            // DirectPlaySession to reconcile against.
+                            disconnectedPeerIds_.push_back(it->first);
                             connectedPeers_.erase(it);
                             break;
                         }
@@ -197,6 +202,15 @@ bool EnetDirectPlayTransport::AssignPendingConnection(DPID id) {
     if (pendingPeers_.empty()) return false;
     connectedPeers_[id] = pendingPeers_.front();
     pendingPeers_.pop_front();
+    return true;
+}
+
+bool EnetDirectPlayTransport::HasDisconnectedPeer() const { return !disconnectedPeerIds_.empty(); }
+
+bool EnetDirectPlayTransport::TakeDisconnectedPeer(DPID* outId) {
+    if (disconnectedPeerIds_.empty()) return false;
+    if (outId) *outId = disconnectedPeerIds_.front();
+    disconnectedPeerIds_.pop_front();
     return true;
 }
 
@@ -239,6 +253,7 @@ void EnetDirectPlayTransport::Shutdown() {
     hostPeer_ = nullptr;
     connectedPeers_.clear();
     pendingPeers_.clear();
+    disconnectedPeerIds_.clear();
 }
 
 } // namespace free_direct_directplay

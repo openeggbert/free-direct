@@ -44,6 +44,15 @@ bool LoopbackDirectPlayTransport::AssignPendingConnection(DPID /*id*/) {
     return false;
 }
 
+bool LoopbackDirectPlayTransport::HasDisconnectedPeer() const {
+    // No incoming-connection concept, so no disconnect-of-one concept either.
+    return false;
+}
+
+bool LoopbackDirectPlayTransport::TakeDisconnectedPeer(DPID* /*outId*/) {
+    return false;
+}
+
 void LoopbackDirectPlayTransport::Shutdown() { buffered_.clear(); }
 
 } // namespace free_direct_directplay

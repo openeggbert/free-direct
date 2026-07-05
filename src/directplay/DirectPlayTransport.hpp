@@ -88,6 +88,24 @@ public:
      */
     virtual bool AssignPendingConnection(DPID id) = 0;
 
+    /**
+     * @brief True if a previously-assigned peer (via AssignPendingConnection()) has
+     * since disconnected and not yet been reported via TakeDisconnectedPeer()
+     * (`docs/directplay-design.md` Decision 8). A peer that disconnects before ever
+     * being assigned a DPID is not reported - nothing outside the transport knows
+     * about it yet.
+     */
+    virtual bool HasDisconnectedPeer() const = 0;
+
+    /**
+     * @brief Pops the oldest queued disconnect into `*outId` (if non-null) and returns
+     * `true`; returns `false` (no-op, `*outId` untouched) if none was queued. Uses an
+     * output parameter rather than returning the DPID directly with `0` meaning "none",
+     * since DPID `0` is a valid real player ID (`docs/directplay-design.md` Decision 3)
+     * and can never double as an empty sentinel.
+     */
+    virtual bool TakeDisconnectedPeer(DPID* outId) = 0;
+
     /** @brief Tears down all connections and releases backend resources. */
     virtual void Shutdown() = 0;
 };

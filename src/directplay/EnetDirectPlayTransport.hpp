@@ -39,7 +39,12 @@
  *   null forever, so `Send()`/`Receive()` always return `false` for it today - real
  *   per-DPID-addressed send/receive to a specific connected peer is `plan.md` Phase
  *   10's job, not this one's (this is an intentional, documented limitation, not a
- *   silent regression - see Decision 7's sub-question 3).
+ *   silent regression - see Decision 7's sub-question 3). When an *already-assigned*
+ *   peer disconnects, its `DPID` is queued in `disconnectedPeerIds_`
+ *   (`docs/directplay-design.md` Decision 8), retrievable via
+ *   `HasDisconnectedPeer()`/`TakeDisconnectedPeer()` - a peer that disconnects while
+ *   still only in `pendingPeers_` (never assigned) is not reported, since nothing
+ *   outside the transport knows about it yet.
  * `Open(..., DPOPEN_CREATE)` constructs this class under `FREE_DIRECT_ENABLE_ENET`, calls
  * `Listen(kDefaultDirectPlayEnetPort)` when hosting, and calls `Service()` once per
  * `IDirectPlay2A::Receive()` call - see `kDefaultDirectPlayEnetPort` below.
@@ -79,6 +84,8 @@ public:
     void Service() override;
     bool HasPendingConnection() const override;
     bool AssignPendingConnection(DPID id) override;
+    bool HasDisconnectedPeer() const override;
+    bool TakeDisconnectedPeer(DPID* outId) override;
     void Shutdown() override;
 
     /// True once this instance's constructor successfully joined the process-wide
@@ -119,6 +126,9 @@ private:
     std::unordered_map<DPID, ENetPeer*> connectedPeers_;
     /// Hosting-role only (Listen()) - connected peers not yet assigned a DPID.
     std::deque<ENetPeer*> pendingPeers_;
+    /// Hosting-role only (Listen()) - DPIDs of assigned peers that have since
+    /// disconnected, queued for TakeDisconnectedPeer() (Decision 8).
+    std::deque<DPID> disconnectedPeerIds_;
 };
 
 } // namespace free_direct_directplay
