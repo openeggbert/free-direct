@@ -5,6 +5,7 @@
  */
 #include "EnetDirectPlayTransport.hpp"
 
+#include <cstring>
 #include <mutex>
 #include <vector>
 
@@ -141,9 +142,17 @@ bool EnetDirectPlayTransport::Send(DPID targetId, const void* data, std::size_t 
     return true;
 }
 
-bool EnetDirectPlayTransport::Receive(void* /*buffer*/, std::size_t /*bufferSize*/,
-                                       std::size_t* /*outSize*/) {
-    return false;
+bool EnetDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) {
+    // Real receive-side delivery (docs/directplay-design.md Decision 19) - pops this
+    // instance's own inbox, populated by Service()'s ENET_EVENT_TYPE_RECEIVE handling below.
+    // Mirrors LoopbackDirectPlayTransport::Receive() exactly.
+    if (buffered_.empty()) return false;
+    const auto& front = buffered_.front();
+    if (front.size() > bufferSize) return false;
+    if (!front.empty()) std::memcpy(buffer, front.data(), front.size());
+    if (outSize) *outSize = front.size();
+    buffered_.pop_front();
+    return true;
 }
 
 void EnetDirectPlayTransport::Service() {
@@ -190,10 +199,12 @@ void EnetDirectPlayTransport::Service() {
                 }
                 break;
             case ENET_EVENT_TYPE_RECEIVE:
-                // Dropped, not delivered: transport-level Receive() is still an honest
-                // false stub - no plan.md task covers it yet. Buffering this packet for
-                // a Receive() that can't return it would be speculative, half-finished
-                // code, not a real capability.
+                // Real delivery (docs/directplay-design.md Decision 19): copied into this
+                // instance's own inbox regardless of which peer sent it - Receive() pops it
+                // later. enet_packet_destroy() is still required even after copying the
+                // bytes out - ENet, not this class, owns the ENetPacket's memory.
+                buffered_.emplace_back(event.packet->data,
+                                        event.packet->data + event.packet->dataLength);
                 enet_packet_destroy(event.packet);
                 break;
             default:
@@ -277,6 +288,7 @@ void EnetDirectPlayTransport::Shutdown() {
     connectedPeers_.clear();
     pendingPeers_.clear();
     disconnectedPeerIds_.clear();
+    buffered_.clear();
 }
 
 } // namespace free_direct_directplay

@@ -1583,3 +1583,63 @@ is no way to create a real two-simultaneous-sessions scenario to exercise this a
 `break` on a `FALSE` return is implemented and will behave correctly whenever more than one
 session is ever discoverable at once (e.g. once the ENet backend's discovery exists), but nothing
 today can prove it via a real multi-session test.
+
+---
+
+## Decision 19: real ENet receive-side buffering (`EnetDirectPlayTransport::Receive()`)
+
+**Status:** Decided and implemented. The user chose "ENet catch-up" as this session's next
+direction (over broadcast, DirectSound/DirectDraw hardening, or Phase 15 test/CI wiring); this is
+the single most foundational gap in that catch-up - every higher-level ENet capability (join
+handshake, unicast `Send`/`Receive`, discovery) has been blocked on it since Decision 6's Caveat
+first identified the problem.
+
+### The gap
+
+`EnetDirectPlayTransport::Receive()` had unconditionally returned `false` since Phase 5;
+`Service()`'s `ENET_EVENT_TYPE_RECEIVE` handling destroyed every incoming packet without
+delivering it anywhere. This was an honest, correctly-labeled stub at the time (Decision 6:
+"buffering this packet for a `Receive()` that can't return it would be speculative, half-finished
+code"), but it meant the loopback backend's Decisions 14-18 (addressed `Send()`, unicast delivery,
+the join handshake, `EnumSessions()`) had no ENet equivalent at all - real network play could
+never actually receive anything, regardless of what higher layers did.
+
+### Decision
+
+Give `EnetDirectPlayTransport` its own inbox - `std::deque<std::vector<std::uint8_t>> buffered_` -
+mirroring `LoopbackDirectPlayTransport`'s exact shape (Decision 14). `Service()`'s
+`ENET_EVENT_TYPE_RECEIVE` case now copies the packet's bytes into `buffered_` (then still calls
+`enet_packet_destroy()` - ENet, not this class, owns the `ENetPacket`'s memory) instead of
+discarding them. `Receive()` pops from `buffered_` exactly like `LoopbackDirectPlayTransport::
+Receive()` does. One shared inbox regardless of role or how many `connectedPeers_` a hosting
+instance has - correct, not a simplification: a hosting instance has exactly one `Receive()`
+caller (itself), so every inbound packet, from any peer, funnels into the same place, exactly
+mirroring how `LoopbackDirectPlayTransport`'s host-role `buffered_` already works.
+
+`Shutdown()` clears `buffered_` too, alongside the other per-connection state it already resets.
+
+### Implemented
+
+`src/directplay/EnetDirectPlayTransport.hpp` (`buffered_` member), `.cpp` (`Service()`'s
+`ENET_EVENT_TYPE_RECEIVE` case, real `Receive()`, `Shutdown()`'s clear). **Verified for real**,
+not just "compiles": a standalone smoke test (not committed, mirroring every prior ENet
+verification in this document) drove two real `EnetDirectPlayTransport` instances over real
+`127.0.0.1` UDP sockets - `Listen()`/`Connect()`, servicing both sides until the connection
+completed, `AssignPendingConnection(7)`, then **both directions**: the client's `Send()` to the
+host, and the host's `Send(7, ...)` addressed back to that specific assigned client (Decision 14) -
+each received the exact bytes sent, via the real public `Receive()` API, no whitebox access
+needed. (First attempt at this smoke test only serviced the host while waiting for the pending
+connection to appear, and failed - a real finding, not a flaw in the implementation: ENet's
+handshake requires the *client* side to service its own host too, since `Connect()` only queues
+the attempt and nothing transmits until something calls `enet_host_service()` on that side. Fixed
+by servicing both ends while waiting.) Also re-verified both CMake build configurations
+(`ENET=OFF`/`ON`) end-to-end, that all 46 committed `tests/directplay_tests.cpp` tests still pass
+unaffected (they build without `FREE_DIRECT_ENABLE_ENET`, untouched by this change), and that
+`include/dplay.h` has zero ENet/SDL identifiers.
+
+**Explicitly out of scope, left for later ENet catch-up work:** wiring `DirectPlay2AImpl::Open()`'s
+ENet branch to actually call `Connect()` for the joining role (still completely unwired - `Open()`
+only calls `Listen()` for the hosting role over ENet); the join-request/accepted handshake over
+ENet (Decision 16 is loopback-only); `EnumSessions()` discovering an ENet-hosted session (Decision
+18 is loopback-only); how a joining ENet call resolves a host address (flagged as a separate,
+still-open question since Decision 5).

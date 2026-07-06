@@ -1040,8 +1040,9 @@ whichever transport is configured.
       via `EnumSessions()` (Decision 18), accepts and assigns real joining clients up to
       `dwMaxPlayers` with a real join-accepted handshake (Decisions 7-9, 16), and can send/receive
       real messages to/from them (Decisions 14-15). ENet's hosting side works through `Listen()`
-      but is not discoverable (Phase 8 is loopback-only, Decision 18) and its receive-side
-      delivery is unimplemented (Decision 14).
+      and can now genuinely receive at the transport level too (Decision 19), but is not
+      discoverable (Phase 8 is loopback-only, Decision 18) and `DirectPlay.cpp` doesn't wire any
+      of Decisions 15/16 to the ENet branch yet.
 - [x] Create a session instance GUID (`guidInstance`) when hosting, if the caller did not already
       supply one. **Done:** added `GenerateSessionInstanceGuid()` (anonymous namespace,
       `DirectPlay.cpp`) - fills `Data1`/`Data2`/`Data3`/`Data4` individually from
@@ -1624,7 +1625,13 @@ routing, broadcast, and validation.
       `Send(m_dpid, 0, ...)`, a broadcast); a joining role has no way to learn any remote DPID yet
       (blocked on the still-unimplemented join-accepted handshake), so it gets `DPERR_INVALIDPLAYER`
       for any non-self `Send()`. **Verified** with the exact task below's own test plus four
-      validation tests - see that task and Decision 15 for full detail.
+      validation tests - see that task and Decision 15 for full detail. **Update:**
+      `docs/directplay-design.md` Decision 19 - `EnetDirectPlayTransport::Receive()`/`Service()`
+      now really buffer and deliver received packets too (previously an honest `false` stub since
+      Phase 5), verified with a real two-instance ENet smoke test over `127.0.0.1` (not committed).
+      `DirectPlay.cpp`'s ENet branch of `Open()`/`Send()`/`Receive()` is still not wired to any of
+      this - the ENet backend can now genuinely deliver bytes at the transport level, but nothing
+      above that layer uses it for a non-self send yet.
 - [ ] Implement host-side routing: the host forwards a `Send` addressed to a non-host recipient to
       that recipient's connection (star topology, matching ENet's client/server model). Not
       started - today only "host directly addresses one of its own `remotePlayerIds`" works; a

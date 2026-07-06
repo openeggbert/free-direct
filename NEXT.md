@@ -23,14 +23,18 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   untouched (would need a real wire exchange, a separate later task). Phase 10 ("Send/Receive
   networking") has real, end-to-end unicast delivery over loopback, host role only (Decisions
   14-15) — host-side routing/forwarding and broadcast (`idTo == 0`, with its own unresolved DPID-0
-  ambiguity) remain unimplemented. The ENet backend's receive-side buffering also remains
-  unimplemented. **Phase 9 ("Player management") has no more reachable tasks**: every remaining
-  checkbox needs an observability question resolved first (player names, a player-lost state) or
-  a concrete "what does duplicate even mean here" answer (duplicate-player validation), or is
-  already correctly conditional on a call site Phase 0 found doesn't exist. Phase 11 onward (error
-  semantics, hardening, CI, docs) has not started.
+  ambiguity) remain unimplemented. **Phase 9 ("Player management") has no more reachable tasks**:
+  every remaining checkbox needs an observability question resolved first (player names, a
+  player-lost state) or a concrete "what does duplicate even mean here" answer (duplicate-player
+  validation), or is already correctly conditional on a call site Phase 0 found doesn't exist.
+  **ENet catch-up has started** (the user's chosen direction after loopback ran out of unblocked
+  work): `EnetDirectPlayTransport` now really buffers and delivers received packets (Decision 19),
+  closing the single biggest gap blocking any ENet-backed capability - but `DirectPlay.cpp`'s ENet
+  branch still doesn't call `Connect()` for the joining role, doesn't run the join handshake, and
+  isn't discoverable via `EnumSessions()` - none of Decisions 15/16/18 are wired to it yet. Phase
+  11 onward (error semantics, hardening, CI, docs) has not started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
-  1-18):
+  1-19):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -95,7 +99,25 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — `plan.md` Phase 8: real `EnumSessions()` over loopback
+- (uncommitted, this session) — ENet catch-up (the user's chosen next direction): real
+  receive-side buffering for `EnetDirectPlayTransport` (`docs/directplay-design.md` Decision 19).
+  `Service()`'s `ENET_EVENT_TYPE_RECEIVE` handling now copies packet bytes into a new `buffered_`
+  inbox (mirroring `LoopbackDirectPlayTransport`'s exact shape, Decision 14) instead of discarding
+  them; `Receive()` pops from it for real instead of unconditionally returning `false` (an honest
+  stub since Phase 5). One shared inbox per instance regardless of role, matching how a hosting
+  instance has exactly one `Receive()` caller (itself) even with many `connectedPeers_`. **Verified
+  for real** with a standalone two-instance ENet smoke test (not committed) over real `127.0.0.1`
+  sockets: client→host delivery and host→client delivery (addressed to a specific assigned DPID,
+  Decision 14) both work through the real public `Receive()` API. First attempt at this smoke test
+  failed for a real reason, not a bug: it only serviced the host while waiting for the pending
+  connection, but ENet's handshake needs the *client* to service its own host too, since
+  `Connect()` only queues the attempt. No committed tests changed (this only affects the
+  `FREE_DIRECT_ENABLE_ENET=ON` build, which the 46 committed tests don't compile under). Also
+  re-verified both CMake configs end-to-end and that `include/dplay.h` has zero ENet/SDL
+  identifiers. **Not done**: `DirectPlay.cpp`'s ENet branch still doesn't call `Connect()` for the
+  joining role, doesn't run the join handshake, and isn't discoverable via `EnumSessions()` - the
+  transport can now genuinely deliver bytes, but nothing above it uses that for ENet yet.
+- `d28494f` — `plan.md` Phase 8: real `EnumSessions()` over loopback
   (`docs/directplay-design.md` Decision 18). Asked the user first whether to implement `plan.md`'s
   literally-worded Discovery/DiscoveryResponse wire exchange, or a simpler synchronous
   DirectPlay-level registry - confirmed the registry, since a wire round-trip hits the same
@@ -330,11 +352,14 @@ Full narrative detail and rationale for each decision lives in `docs/directplay-
 ## 4. Current blocker / main problem
 
 **No build- or test-breaking blocker exists right now** — everything builds and 46/46 tests pass.
-`plan.md` Phases 6, 8, and 9 have no more reachable loopback tasks. What remains is scope, not a
-blocker: host-side routing/forwarding, broadcast (`idTo == 0`, with its own unresolved DPID-0
-ambiguity), player-name storage, a distinct player-lost state, duplicate-player validation, LAN
-broadcast discovery, and all the ENet-side catch-up work are open questions/directions needing the
-user's input before any code lands (Section 5/8).
+`EnetDirectPlayTransport` now really delivers received packets (Decision 19) - the transport layer
+no longer blocks ENet catch-up. What's next within that direction is a real choice: wire
+`DirectPlay.cpp`'s ENet branch to call `Connect()` for the joining role, run the join handshake, or
+make it discoverable - each mirrors loopback work already done (Decisions 11/12, 16, 18) but needs
+its own ENet-specific design pass (e.g. how a joining call resolves a host address, still an
+open question since Decision 5). Other directions remain open too: host-side routing/forwarding,
+broadcast (`idTo == 0`, with its own unresolved DPID-0 ambiguity), player-name storage, a distinct
+player-lost state, duplicate-player validation, and LAN broadcast discovery (Section 5/8).
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -351,9 +376,11 @@ here) — only the vendored-submodule ENet path is proven. Not currently blockin
   `JoinSession`/`CreateSession`/`NetStartPlay` have zero callers anywhere in that game's current
   source. Only gameplay-time `Send`/`Receive` are reachable. Out of `free-direct`'s scope to fix
   (game source must not be modified).
-- **Incomplete**: transport-level `Receive()` (ENet backend only - loopback is real now, Decision
-  14) unconditionally returns `false`; received packets are destroyed by `Service()`, not delivered
-  anywhere (Phase 10).
+- **Incomplete**: `DirectPlay.cpp`'s ENet branch of `Open()` doesn't call `Connect()` for the
+  joining role at all (only `Listen()` for hosting) - transport-level receive now genuinely works
+  (Decision 19), but nothing above it uses ENet for joining, the join handshake, unicast
+  `Send()`/`Receive()`, or `EnumSessions()` yet. All of that is loopback-only today (Decisions
+  11/12, 15, 16, 18).
 - **Incomplete**: a joining-role session still cannot address any specific remote player in
   `Send()` at all (always `DPERR_INVALIDPLAYER`, Decision 15) - even after adopting its own
   host-assigned DPID (Decision 16), it has no way to learn any *other* peer's DPID (e.g. the
@@ -495,24 +522,28 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-`plan.md` Phases 6, 8, and 9 have no more reachable, unblocked, loopback-only tasks left (Decisions
-17/18's amendments). Every remaining direction now needs the user's explicit input before any code
-lands - there is no more "obviously next" atomic task to pick autonomously:
+The user chose "ENet catch-up" as this session's direction after loopback ran out of unblocked
+work. The single biggest transport-layer gap is closed (Decision 19: real receive-side buffering).
+The next ENet catch-up task is a real choice among several, each mirroring loopback work already
+done - ask the user which to pursue rather than picking unilaterally:
 
-1. **Host-side routing/forwarding** (Phase 10) - a joining peer's `Send()` addressed to another
-   non-host peer gets relayed. Still blocked on a joining peer having no way to learn any other
-   peer's DPID (Phase 9's player-list-sync gap).
-2. **Broadcast** (`idTo == 0`, Phase 10) - matches `free-eggbert`'s actual real call pattern, but
-   needs the DPID-0-vs-`DPID_ALLPLAYERS` ambiguity resolved first (Section 5).
-3. **LAN broadcast discovery** (Phase 8) - `plan.md` explicitly says ask before starting this;
-   not clearly needed (`free-eggbert`'s own `EnumSessions()` call is UI-unreachable anyway).
-4. **Phase 9's three open questions** (Section 5): player-name/player-lost-state observability,
-   and what "duplicate player" means.
-5. **ENet catch-up** on any of Decisions 10-18 - the loopback backend has pulled significantly
-   ahead of ENet across hosting, joining, Send/Receive, and enumeration.
-6. **Phase 11 onward** (error semantics, hardening, CI, docs) - not yet started at all.
+1. **Wire `Open()`'s ENet branch to call `Connect()` for the joining role** - today only `Listen()`
+   (hosting) is wired; a joining call over ENet does nothing at all. Mirrors Decision 11, but needs
+   its own answer to "how does a joining call resolve a host address" (still open since Decision 5
+   - `DPSESSIONDESC2` has no address field, same problem the port had for `Listen()`).
+2. **Run the join-request/accepted handshake over ENet** (mirrors Decision 16) - depends on task 1
+   above being wired first.
+3. **Make an ENet-hosted session discoverable via `EnumSessions()`** (mirrors Decision 18) - would
+   need a real Discovery/DiscoveryResponse wire exchange this time (unlike loopback's synchronous
+   registry shortcut, decided in Decision 18 specifically because loopback could take that
+   shortcut and a real network can't).
+4. **A real reliable-delivery smoke test gated behind `FREE_DIRECT_ENABLE_ENET`** (`plan.md` Phase
+   10's own explicit test task) - would commit something like this session's uncommitted smoke
+   test for Decision 19, formalizing it.
 
-Ask the user which to pursue - do not decide unilaterally.
+Other directions from before remain open too (Section 5): host-side routing/forwarding, broadcast
+(needs the DPID-0 ambiguity resolved first), LAN broadcast discovery, and Phase 9's three
+observability/scope questions.
 
 ## 9. Do not do yet
 
@@ -554,14 +585,20 @@ Ask the user which to pursue - do not decide unilaterally.
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 8. plan.md Phases 6, 8, and 9 have no more reachable,
-unblocked, loopback-only tasks - every remaining direction (host-side routing/forwarding,
-broadcast, LAN discovery, Phase 9's observability questions, ENet catch-up, Phase 11 onward) needs
-the user's explicit input before any code lands. Ask the user (AskUserQuestion) which to pursue -
-do not decide unilaterally, there is no more "obviously next" atomic task to pick autonomously. Do
-not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert
-or ../planetblupi. Once a direction is chosen, implement one small atomic slice and run the
-relevant build/test command from Section 7, confirming it actually passes before considering the
-task done. Then update NEXT.md to reflect the new state (Sections 2, 3, 8, and 4/5 if anything
-changed there).
+Read NEXT.md first, especially Section 8 and docs/directplay-design.md Decision 19.
+EnetDirectPlayTransport now really buffers/delivers received packets (verified with an
+uncommitted two-instance smoke test over real 127.0.0.1 sockets) - the biggest ENet catch-up gap
+is closed. DirectPlay.cpp's ENet branch still doesn't call Connect() for the joining role, doesn't
+run the join handshake, and isn't discoverable via EnumSessions(). Section 8 lists four concrete
+next ENet catch-up tasks (wire Connect() for joining, run the join handshake, make it
+discoverable, or commit a real reliable-delivery smoke test) plus other open directions from
+before (host-side routing, broadcast - needs the DPID-0 ambiguity resolved first, Phase 9's
+observability questions). Ask the user (AskUserQuestion) which to pursue - do not decide
+unilaterally. Do not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not
+modify ../free-eggbert or ../planetblupi. Once a direction is chosen, implement one small atomic
+slice; if it touches the ENet backend, verify with a real (uncommitted) smoke test over real
+sockets, not just a compile check - matching this session's own finding that "compiles" is not
+"works" for ENet code. Run the relevant build/test command from Section 7 too, confirming it
+actually passes before considering the task done. Then update NEXT.md to reflect the new state
+(Sections 2, 3, 8, and 4/5 if anything changed there).
 ```

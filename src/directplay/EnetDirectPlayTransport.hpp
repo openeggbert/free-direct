@@ -61,6 +61,7 @@
 #include <deque>
 #include <enet/enet.h>
 #include <unordered_map>
+#include <vector>
 
 namespace free_direct_directplay {
 
@@ -129,6 +130,13 @@ private:
     /// Hosting-role only (Listen()) - DPIDs of assigned peers that have since
     /// disconnected, queued for TakeDisconnectedPeer() (Decision 8).
     std::deque<DPID> disconnectedPeerIds_;
+    /// This instance's own inbox (docs/directplay-design.md Decision 19) - every
+    /// ENET_EVENT_TYPE_RECEIVE packet Service() drains is copied in here regardless of
+    /// which peer sent it (mirroring LoopbackDirectPlayTransport's single shared
+    /// buffered_, Decision 14): a hosting instance has exactly one Receive() caller
+    /// (itself) even with many connectedPeers_, so one inbox is correct, not a
+    /// simplification.
+    std::deque<std::vector<std::uint8_t>> buffered_;
 };
 
 } // namespace free_direct_directplay
