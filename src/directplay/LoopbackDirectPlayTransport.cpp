@@ -9,19 +9,65 @@
 
 namespace free_direct_directplay {
 
-bool LoopbackDirectPlayTransport::Listen(std::uint16_t /*port*/) { return true; }
+namespace {
+// Process-wide static registry (docs/directplay-design.md Decision 10), keyed by the `port`
+// argument Listen()/Connect() are called with - lets a separate "client" instance find and
+// connect to a separate "host" instance in the same process. Function-local static avoids
+// static-init-order issues.
+std::unordered_map<std::uint16_t, LoopbackDirectPlayTransport*>& LoopbackRegistry() {
+    static std::unordered_map<std::uint16_t, LoopbackDirectPlayTransport*> registry;
+    return registry;
+}
+} // namespace
 
-bool LoopbackDirectPlayTransport::Connect(const char* /*address*/, std::uint16_t /*port*/) {
+LoopbackDirectPlayTransport::~LoopbackDirectPlayTransport() { Shutdown(); }
+
+bool LoopbackDirectPlayTransport::Listen(std::uint16_t port) {
+    if (listening_ || hostPeer_) return false;
+
+    auto& registry = LoopbackRegistry();
+    // Mirrors EnetDirectPlayTransport::Listen()'s real bind()-conflict behavior: a port already
+    // in use fails rather than "coexisting", so Connect() always resolves a port to exactly one
+    // host deterministically (docs/directplay-design.md Decision 10).
+    if (registry.find(port) != registry.end()) return false;
+
+    registry[port] = this;
+    listenPort_ = port;
+    listening_ = true;
+    return true;
+}
+
+bool LoopbackDirectPlayTransport::Connect(const char* /*address*/, std::uint16_t port) {
+    if (listening_ || hostPeer_) return false;
+
+    auto& registry = LoopbackRegistry();
+    auto it = registry.find(port);
+    // Deliberate deviation from EnetDirectPlayTransport::Connect(), which succeeds even with
+    // nobody listening yet (discovered later via a Service() timeout): loopback has synchronous,
+    // perfect knowledge of whether a host is registered, so Connect() fails immediately here
+    // instead of queuing a doomed attempt (docs/directplay-design.md Decision 10).
+    if (it == registry.end()) return false;
+
+    hostPeer_ = it->second;
+    hostPeer_->pendingPeers_.push_back(this);
     return true;
 }
 
 bool LoopbackDirectPlayTransport::Send(const void* data, std::size_t size, bool /*reliable*/) {
+    // Once connected (either role), there is no single unambiguous recipient - real per-DPID
+    // addressed delivery is a separate, later design decision, not an incidental side effect of
+    // connection-lifecycle work (docs/directplay-design.md Decision 10). Only the self-send path
+    // (never Listen()/Connect()ed) uses the plain FIFO below.
+    if (listening_ || hostPeer_) return false;
+
     const auto* bytes = static_cast<const std::uint8_t*>(data);
     buffered_.emplace_back(bytes, bytes + size);
     return true;
 }
 
 bool LoopbackDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) {
+    if (listening_ || hostPeer_) return false;
+
     if (buffered_.empty()) return false;
     const auto& front = buffered_.front();
     if (front.size() > bufferSize) return false;
@@ -32,32 +78,85 @@ bool LoopbackDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, 
 }
 
 void LoopbackDirectPlayTransport::Service() {
-    // No-op: loopback has no real network events - Send() already delivers synchronously.
+    // No-op: loopback has no real network events - Connect()/AssignPendingConnection() etc.
+    // already update connection state synchronously.
 }
 
-bool LoopbackDirectPlayTransport::HasPendingConnection() const {
-    // Loopback has no incoming-connection concept at all - it only ever talks to itself.
-    return false;
-}
+bool LoopbackDirectPlayTransport::HasPendingConnection() const { return !pendingPeers_.empty(); }
 
-bool LoopbackDirectPlayTransport::AssignPendingConnection(DPID /*id*/) {
-    return false;
+bool LoopbackDirectPlayTransport::AssignPendingConnection(DPID id) {
+    if (pendingPeers_.empty()) return false;
+    connectedPeers_[id] = pendingPeers_.front();
+    pendingPeers_.pop_front();
+    return true;
 }
 
 bool LoopbackDirectPlayTransport::RejectPendingConnection() {
-    // No incoming-connection concept, so nothing to reject either.
-    return false;
+    if (pendingPeers_.empty()) return false;
+
+    // "Graceful disconnect": loopback is synchronous and in-process, so there is no wait to
+    // perform - clearing the rejected peer's hostPeer_ immediately is the whole of it.
+    LoopbackDirectPlayTransport* peer = pendingPeers_.front();
+    pendingPeers_.pop_front();
+    peer->hostPeer_ = nullptr;
+    return true;
 }
 
-bool LoopbackDirectPlayTransport::HasDisconnectedPeer() const {
-    // No incoming-connection concept, so no disconnect-of-one concept either.
-    return false;
+bool LoopbackDirectPlayTransport::HasDisconnectedPeer() const { return !disconnectedPeerIds_.empty(); }
+
+bool LoopbackDirectPlayTransport::TakeDisconnectedPeer(DPID* outId) {
+    if (disconnectedPeerIds_.empty()) return false;
+    if (outId) *outId = disconnectedPeerIds_.front();
+    disconnectedPeerIds_.pop_front();
+    return true;
 }
 
-bool LoopbackDirectPlayTransport::TakeDisconnectedPeer(DPID* /*outId*/) {
-    return false;
-}
+void LoopbackDirectPlayTransport::Shutdown() {
+    if (listening_) {
+        // Scrub every known peer's hostPeer_ back to null - required for memory safety (a peer
+        // outliving this host must not hold a dangling pointer), not just ENet-parity ceremony.
+        for (auto& [id, peer] : connectedPeers_) peer->hostPeer_ = nullptr;
+        for (LoopbackDirectPlayTransport* peer : pendingPeers_) peer->hostPeer_ = nullptr;
+        connectedPeers_.clear();
+        pendingPeers_.clear();
+        disconnectedPeerIds_.clear();
 
-void LoopbackDirectPlayTransport::Shutdown() { buffered_.clear(); }
+        auto& registry = LoopbackRegistry();
+        auto it = registry.find(listenPort_);
+        // Defensive identity check: guards a double Shutdown() call, and correctness after a
+        // later instance has already reused this same port number.
+        if (it != registry.end() && it->second == this) registry.erase(it);
+        listening_ = false;
+    }
+
+    if (hostPeer_) {
+        bool wasAssigned = false;
+        DPID assignedId = 0;
+        for (auto it = hostPeer_->connectedPeers_.begin(); it != hostPeer_->connectedPeers_.end(); ++it) {
+            if (it->second == this) {
+                assignedId = it->first;
+                wasAssigned = true;
+                hostPeer_->connectedPeers_.erase(it);
+                break;
+            }
+        }
+        if (wasAssigned) {
+            // Only an already-assigned peer's DPID is reported (docs/directplay-design.md
+            // Decision 8's rule, mirrored here) - a peer still only pending has no DPID for
+            // anyone outside the transport to reconcile against.
+            hostPeer_->disconnectedPeerIds_.push_back(assignedId);
+        } else {
+            for (auto it = hostPeer_->pendingPeers_.begin(); it != hostPeer_->pendingPeers_.end(); ++it) {
+                if (*it == this) {
+                    hostPeer_->pendingPeers_.erase(it);
+                    break;
+                }
+            }
+        }
+        hostPeer_ = nullptr;
+    }
+
+    buffered_.clear();
+}
 
 } // namespace free_direct_directplay

@@ -11,10 +11,13 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   DirectPlay) and `../planetblupi` (*Planet Blupi* — DirectDraw + DirectSound only; confirmed zero
   DirectPlay usage).
 - **Current development phase**: `plan.md` Phases 0-5 complete. Phase 6 ("Session hosting") is
-  well underway — most sub-tasks done and verified (see Section 3); a few remain (Section 8).
-  Phases 7 onward (session joining, enumeration, player management, real Send/Receive routing,
-  error semantics, hardening, CI, docs) have not started.
-- **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions 1-9):
+  essentially done — its only remaining tasks are blocked on later phases (Section 8). Phase 7
+  ("Session joining") has started: `LoopbackDirectPlayTransport` now has a real multi-instance
+  connection lifecycle (Decision 10), but `DirectPlay.cpp`'s `Open()` doesn't call it yet, and the
+  ENet side of "resolve a host address" is undecided. Phases 8 onward (enumeration, player
+  management, real Send/Receive routing, error semantics, hardening, CI, docs) have not started.
+- **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
+  1-10):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -43,7 +46,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 16/16 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 27/27 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -79,7 +82,25 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — Added `Test_OpenWithMalformedDwSize_ReturnsInvalidParams`
+- (uncommitted, this session) — `plan.md` Phase 7 groundwork: gave `LoopbackDirectPlayTransport` a
+  real multi-instance connection lifecycle (`docs/directplay-design.md` Decision 10), so a separate
+  "client" instance can find and connect to a separate "host" instance in the same process — needed
+  because Phase 7's own acceptance criteria requires a deterministic loopback host+2-clients(+
+  rejected-3rd) test. Two design questions asked of and confirmed by the user before implementing:
+  (1) `Connect()` finds the host via a process-wide static registry keyed by the `port` argument
+  (over a session-GUID-keyed alternative); (2) `Send()`/`Receive()` return `false` for both the
+  hosting and joining roles once connected (diverging from `EnetDirectPlayTransport`'s asymmetry —
+  real payload delivery is a separate, later decision, not incidental to connection lifecycle).
+  Connection lifecycle otherwise mirrors `EnetDirectPlayTransport`'s pending/connected/disconnected
+  model exactly (Decisions 7-9), with `LoopbackDirectPlayTransport*` in place of `ENetPeer*`.
+  Deleted copy/move (these instances hold raw pointers to each other); `Shutdown()`/destructor
+  scrub every known peer's reference symmetrically, required for memory safety, not just parity.
+  **Does not** touch `DirectPlay.cpp`'s `Open()` (still doesn't call `Connect()` for `DPOPEN_JOIN`)
+  and does **not** implement the join-request/accepted wire handshake (blocked on per-DPID-addressed
+  `Send()`, Phase 10). Verified: 27/27 `tests/directplay_tests.cpp` suite passes (11 new whitebox
+  tests against `LoopbackDirectPlayTransport` directly); both CMake configs (`ENET=OFF`/`ON`) build
+  clean; `include/dplay.h` still has zero ENet/SDL identifiers.
+- `db85b59` — Added `Test_OpenWithMalformedDwSize_ReturnsInvalidParams`
   (`tests/directplay_tests.cpp`), closing `plan.md` Phase 6's "Add a test for invalid host
   parameters" task. Found and documented a scope correction while implementing: `dwMaxPlayers == 0`
   (mentioned in the task's own wording) is deliberately **not** an error case (Decision 9's
@@ -257,19 +278,34 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-Only one `plan.md` Phase 6 task remains, and it is currently blocked:
+The user chose to pursue `plan.md` Phase 7 (session joining) next. Groundwork is done (Section 3:
+`LoopbackDirectPlayTransport` now has a real multi-instance connection lifecycle, Decision 10), but
+`DirectPlay.cpp`'s `Open()` doesn't use it yet. The next smallest task:
 
-1. **Add a test for closing a host session**, asserting a subsequent `EnumSessions` from another
-   loopback peer no longer finds it.
-   - Blocked on real content: `EnumSessions()` doesn't track sessions yet (`plan.md` Phase 8, not
-     started). Doing this task now would only test "an empty list stays empty," which isn't
-     meaningful — leave it until Phase 8's basic discovery exists.
+1. **Wire `DirectPlay2AImpl::Open(..., DPOPEN_JOIN)`/`DPOPEN_OPENSESSION` to actually call
+   `transport->Connect()`** for the loopback backend (mirrors how Phase 6 wired `Open(...,
+   DPOPEN_CREATE)` to call `transport->Listen()`).
+   - Files: `src/directplay/DirectPlay.cpp` (`Open()`).
+   - Needs its own small design pass first: what port does a joining call use to reach the host,
+     given `DPSESSIONDESC2` has no address/port field (same problem Decision 5 solved for
+     `Listen()`'s port choice)? For loopback specifically this is simpler than the ENet side (no
+     real address needed), but still needs a concrete answer — likely a second fixed constant
+     mirroring `kDefaultDirectPlayEnetPort`, or reusing the same one. Ask the user before deciding
+     if it's not obvious once you're looking at the code.
+   - What should `Open()` return when `Connect()` fails (no host registered)? `docs/
+     directplay-design.md` Decision 10 already anticipated this maps cleanly to `DPERR_NOSESSIONS`
+     for loopback (no timeout needed, since `Connect()` fails synchronously) — confirm this is
+     still the right mapping when actually writing the code.
+   - Verify: extend `tests/directplay_tests.cpp` with an end-to-end test (via the public
+     `IDirectPlay2A::Open()`, not whitebox) that a `DPOPEN_JOIN` call with no host present returns
+     `DPERR_NOSESSIONS` — this is explicitly listed as one of Phase 7's own tasks ("Add a test for
+     a failed join (no host present)").
+   - Do not yet implement the join-request/join-accepted wire handshake itself (blocked on
+     per-DPID-addressed `Send()`, Phase 10 — see Section 9).
 
-With that, Phase 6 has no more unblocked tasks. The next unstarted phases are Phase 7 (session
-joining — `Open(..., DPOPEN_JOIN/DPOPEN_OPENSESSION)`, `Connect()`) and Phase 8 (session
-enumeration — real `EnumSessions()`, which would also unblock the Phase 6 task above). Picking
-between them (or another phase) is a real scope decision or new work; ask the user before
-starting either rather than assuming which one they want next.
+Only one `plan.md` Phase 6 task remains, and it is still blocked (unchanged from before): "Add a
+test for closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md`
+Phase 8, not started).
 
 ## 9. Do not do yet
 
@@ -282,6 +318,11 @@ starting either rather than assuming which one they want next.
   forwarding, or broadcast (`plan.md` Phase 10) until per-DPID addressing is designed.
 - Do not implement the join-accepted/join-rejected wire packet tasks before per-DPID-addressed
   `Send()` exists — they need it and will need their own design pass.
+- Do not make `LoopbackDirectPlayTransport::Send()`/`Receive()` return real data once connected —
+  Decision 10 already decided `false` for both roles; real payload delivery is a separate, later
+  design decision, not something to revisit incidentally while wiring `Open(DPOPEN_JOIN)`.
+- Do not decide the ENet backend's "how does a joining call resolve a host address" question
+  unilaterally — ask the user first, same as Decision 5 did for the hosting side's port choice.
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15, deliberately
   deferred until more of Phases 5-11 exist to test).
 - Do not add a run-time backend-selection mechanism for `Open()`'s loopback-vs-ENet choice —
@@ -297,10 +338,14 @@ starting either rather than assuming which one they want next.
 
 ```
 Read NEXT.md first. Inspect only the files needed for the first task in Section 8 (currently:
-adding a loopback host-session-creation test in tests/directplay_tests.cpp). Do not refactor
+wiring DirectPlay2AImpl::Open(..., DPOPEN_JOIN) to call transport->Connect() for the loopback
+backend, in src/directplay/DirectPlay.cpp). Resolve the small open design question there (what
+port a joining call uses, and confirm DPERR_NOSESSIONS is the right failure mapping) before
+writing code - ask the user if it isn't obvious once you're looking at the code. Do not refactor
 unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Make one small, verified improvement - implement just that one task. Run the
-relevant build/test command from Section 7 and confirm it actually passes before considering the
-task done. Then update NEXT.md to reflect the new state (Sections 2, 3, 8, and 4/5 if anything
-changed there).
+../planetblupi. Do not implement the join-request/join-accepted wire handshake yet (Section 9 -
+blocked on per-DPID-addressed Send(), Phase 10). Make one small, verified improvement - implement
+just that one task. Run the relevant build/test command from Section 7 and confirm it actually
+passes before considering the task done. Then update NEXT.md to reflect the new state (Sections 2,
+3, 8, and 4/5 if anything changed there).
 ```

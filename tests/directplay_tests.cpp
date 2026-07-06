@@ -20,6 +20,7 @@
 #include "dplay.h"
 #include "DirectPlayMessageQueue.hpp"
 #include "DirectPlayWireProtocol.hpp"
+#include "LoopbackDirectPlayTransport.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -358,6 +359,169 @@ void Test_LoopbackClose_SendAndReceiveReportNoConnection() {
     dp->Release();
 }
 
+// plan.md Phase 7 groundwork (docs/directplay-design.md Decision 10): whitebox tests against
+// free_direct_directplay::LoopbackDirectPlayTransport directly (same style as the
+// DirectPlayMessageQueue tests above), verifying the new multi-instance connection lifecycle
+// that DirectPlay2AImpl::Open()'s DPOPEN_JOIN wiring will build on top of later. Each test uses
+// a distinct literal port to avoid any inter-test ordering dependence on the shared registry.
+
+void Test_LoopbackConnect_FindsListeningHostAndQueuesPendingConnection() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20001));
+
+    LoopbackDirectPlayTransport client;
+    CHECK(client.Connect("ignored", 20001));
+    CHECK(host.HasPendingConnection());
+    CHECK(client.HasHostConnection());
+}
+
+void Test_LoopbackConnect_WithNoListeningHost_Fails() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport client;
+    CHECK(!client.Connect("ignored", 20002));
+    CHECK(!client.HasHostConnection());
+}
+
+void Test_LoopbackListen_OnAlreadyRegisteredPort_Fails() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport hostA;
+    CHECK(hostA.Listen(20003));
+
+    LoopbackDirectPlayTransport hostB;
+    CHECK(!hostB.Listen(20003));
+}
+
+void Test_LoopbackAssignPendingConnection_MovesFromPendingToConnected() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20004));
+    LoopbackDirectPlayTransport client;
+    CHECK(client.Connect("ignored", 20004));
+
+    CHECK(host.AssignPendingConnection(42));
+    CHECK(!host.HasPendingConnection());
+    CHECK(host.ConnectedPeerCount() == 1);
+}
+
+void Test_LoopbackRejectPendingConnection_PopsPendingAndFailsWhenEmpty() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20005));
+    LoopbackDirectPlayTransport client;
+    CHECK(client.Connect("ignored", 20005));
+
+    CHECK(host.RejectPendingConnection());
+    CHECK(!client.HasHostConnection());
+    CHECK(!host.RejectPendingConnection()); // nothing left pending
+}
+
+void Test_LoopbackAssignedPeerDisconnect_ReportsExactDpidOnce() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20006));
+    {
+        LoopbackDirectPlayTransport client;
+        CHECK(client.Connect("ignored", 20006));
+        CHECK(host.AssignPendingConnection(7));
+    } // client destroyed here - its destructor must notify the host
+
+    CHECK(host.HasDisconnectedPeer());
+    DPID disconnected = 0;
+    CHECK(host.TakeDisconnectedPeer(&disconnected));
+    CHECK(disconnected == 7);
+    CHECK(!host.HasDisconnectedPeer()); // reported exactly once
+}
+
+void Test_LoopbackPendingPeerDisconnect_NotReported() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20007));
+    {
+        LoopbackDirectPlayTransport client;
+        CHECK(client.Connect("ignored", 20007));
+        // Never assigned a DPID before going out of scope.
+    }
+
+    CHECK(!host.HasDisconnectedPeer());
+}
+
+void Test_LoopbackThirdClientOverTwoPlayerCap_IsRejected() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20008));
+
+    LoopbackDirectPlayTransport clientA;
+    LoopbackDirectPlayTransport clientB;
+    LoopbackDirectPlayTransport clientC;
+    CHECK(clientA.Connect("ignored", 20008));
+    CHECK(clientB.Connect("ignored", 20008));
+    CHECK(clientC.Connect("ignored", 20008));
+
+    CHECK(host.AssignPendingConnection(0));
+    CHECK(host.AssignPendingConnection(1));
+    CHECK(host.ConnectedPeerCount() == 2); // the two-player cap
+
+    CHECK(host.RejectPendingConnection()); // clientC, the third, is turned away
+    CHECK(!host.HasPendingConnection());
+    CHECK(!clientC.HasHostConnection());
+    CHECK(clientA.HasHostConnection());
+    CHECK(clientB.HasHostConnection());
+}
+
+void Test_LoopbackHostShutdown_ClearsPeersHostConnection() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20009));
+    LoopbackDirectPlayTransport connected;
+    LoopbackDirectPlayTransport pending;
+    CHECK(connected.Connect("ignored", 20009));
+    CHECK(host.AssignPendingConnection(0));
+    CHECK(pending.Connect("ignored", 20009));
+
+    host.Shutdown();
+
+    CHECK(!connected.HasHostConnection());
+    CHECK(!pending.HasHostConnection());
+}
+
+void Test_LoopbackShutdown_UnregistersPortForReuse() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport hostA;
+    CHECK(hostA.Listen(20010));
+    hostA.Shutdown();
+
+    LoopbackDirectPlayTransport hostB;
+    CHECK(hostB.Listen(20010));
+}
+
+void Test_LoopbackSend_ReturnsFalseForHostingAndJoiningRoles() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20011));
+    const char msg[] = "x";
+    CHECK(!host.Send(msg, sizeof(msg), true));
+    char buf[8];
+    std::size_t outSize = 0;
+    CHECK(!host.Receive(buf, sizeof(buf), &outSize));
+
+    LoopbackDirectPlayTransport client;
+    CHECK(client.Connect("ignored", 20011));
+    CHECK(!client.Send(msg, sizeof(msg), true));
+    CHECK(!client.Receive(buf, sizeof(buf), &outSize));
+}
+
 // plan.md Phase 5: "a unit test serializes and deserializes the internal packet header
 // and asserts round-trip equality."
 //
@@ -453,6 +617,17 @@ int main() {
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();
     Test_LoopbackClose_SendAndReceiveReportNoConnection();
+    Test_LoopbackConnect_FindsListeningHostAndQueuesPendingConnection();
+    Test_LoopbackConnect_WithNoListeningHost_Fails();
+    Test_LoopbackListen_OnAlreadyRegisteredPort_Fails();
+    Test_LoopbackAssignPendingConnection_MovesFromPendingToConnected();
+    Test_LoopbackRejectPendingConnection_PopsPendingAndFailsWhenEmpty();
+    Test_LoopbackAssignedPeerDisconnect_ReportsExactDpidOnce();
+    Test_LoopbackPendingPeerDisconnect_NotReported();
+    Test_LoopbackThirdClientOverTwoPlayerCap_IsRejected();
+    Test_LoopbackHostShutdown_ClearsPeersHostConnection();
+    Test_LoopbackShutdown_UnregistersPortForReuse();
+    Test_LoopbackSend_ReturnsFalseForHostingAndJoiningRoles();
     Test_WireHeaderRoundTrip_PreservesAllFields();
     Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer();
     Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength();

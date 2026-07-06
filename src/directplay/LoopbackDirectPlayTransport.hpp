@@ -20,22 +20,40 @@
 
 #include <cstdint>
 #include <deque>
+#include <unordered_map>
 #include <vector>
 
 namespace free_direct_directplay {
 
 /**
- * @brief `IDirectPlayTransport` implemented as a same-process byte-buffer queue.
+ * @brief `IDirectPlayTransport` implemented as a same-process byte-buffer queue,
+ * with real multi-instance connection lifecycle (`docs/directplay-design.md`
+ * Decision 10).
  *
- * `Send()` appends a byte-copy of its input to an internal FIFO; `Receive()`
- * pops the front entry into the caller's buffer. There is no concept of
- * "peers" here - a `LoopbackDirectPlayTransport` only ever talks to itself,
- * which is exactly what `DirectPlay2AImpl::Send()`'s self-send path
- * (`idTo == idFrom`) uses it for.
+ * Two distinct usage modes:
+ * - **Self-send** (no `Listen()`/`Connect()` ever called): `Send()` appends to
+ *   this instance's own FIFO, `Receive()` pops from the same FIFO. This is the
+ *   only mode the default (non-ENet) build uses today, via
+ *   `DirectPlay2AImpl::Send()`'s self-send path (`idTo == idFrom`).
+ * - **Connected** (`Listen()` or `Connect()` succeeded): a process-wide static
+ *   registry (keyed by the `port` passed to `Listen()`/`Connect()`) lets a
+ *   separate "client" instance find and connect to a separate "host" instance
+ *   in the same process, mirroring `EnetDirectPlayTransport`'s
+ *   pending/connected/disconnected-peer model. `Send()`/`Receive()`
+ *   deliberately return `false` for both roles once connected - real payload
+ *   delivery is a separate, later design decision (Decision 10).
  * @note Status: PARTIAL
  */
 class LoopbackDirectPlayTransport final : public IDirectPlayTransport {
 public:
+    LoopbackDirectPlayTransport() = default;
+    ~LoopbackDirectPlayTransport() override;
+
+    LoopbackDirectPlayTransport(const LoopbackDirectPlayTransport&) = delete;
+    LoopbackDirectPlayTransport& operator=(const LoopbackDirectPlayTransport&) = delete;
+    LoopbackDirectPlayTransport(LoopbackDirectPlayTransport&&) = delete;
+    LoopbackDirectPlayTransport& operator=(LoopbackDirectPlayTransport&&) = delete;
+
     bool Listen(std::uint16_t port) override;
     bool Connect(const char* address, std::uint16_t port) override;
     bool Send(const void* data, std::size_t size, bool reliable) override;
@@ -48,8 +66,24 @@ public:
     bool TakeDisconnectedPeer(DPID* outId) override;
     void Shutdown() override;
 
+    /** @brief Test-only accessor: true if this joining-role instance is connected to a host. */
+    bool HasHostConnection() const { return hostPeer_ != nullptr; }
+    /** @brief Test-only accessor: number of assigned (DPID-mapped) peers this hosting-role instance tracks. */
+    std::size_t ConnectedPeerCount() const { return connectedPeers_.size(); }
+    /** @brief Test-only accessor: number of not-yet-assigned pending connections this hosting-role instance tracks. */
+    std::size_t PendingConnectionCount() const { return pendingPeers_.size(); }
+
 private:
     std::deque<std::vector<std::uint8_t>> buffered_;
+
+    bool listening_ = false;
+    std::uint16_t listenPort_ = 0;
+
+    LoopbackDirectPlayTransport* hostPeer_ = nullptr;
+
+    std::deque<LoopbackDirectPlayTransport*> pendingPeers_;
+    std::unordered_map<DPID, LoopbackDirectPlayTransport*> connectedPeers_;
+    std::deque<DPID> disconnectedPeerIds_;
 };
 
 } // namespace free_direct_directplay

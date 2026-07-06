@@ -1281,10 +1281,36 @@ Goal: make `Open(..., DPOPEN_JOIN)`/`Open(..., DPOPEN_OPENSESSION)` actually con
 session and receive an assigned player ID.
 
 - [ ] Implement `Open(..., DPOPEN_JOIN)` (and the `DPOPEN_OPENSESSION` path used by
-      `free-eggbert`) end-to-end on top of the configured transport.
+      `free-eggbert`) end-to-end on top of the configured transport. **Not started** -
+      `DirectPlay.cpp`'s `Open()` still does not call `transport->Connect()` for either flag; the
+      two tasks below only give the *transport layer* the capability this task will build on.
 - [ ] Resolve an explicit host address if the caller/transport configuration provides one
-      (loopback: direct in-process reference; ENet: host/port).
+      (loopback: direct in-process reference; ENet: host/port). **Partially done, loopback side
+      only:** `docs/directplay-design.md` Decision 10 - `LoopbackDirectPlayTransport::Connect()`
+      now resolves a host via a process-wide static registry keyed by the `port` argument, asked
+      of and confirmed by the user before implementing (over a session-GUID-keyed alternative).
+      The ENet side of this task (how a joining `Open()` call learns what host/port to dial, given
+      `DPSESSIONDESC2` has no address-like field - see Decision 5's analogous port problem) is
+      **not** resolved and needs its own design pass. Left unchecked since only half the task is
+      done.
 - [ ] Connect to the host transport (`enet_host_connect` for ENet; direct handoff for loopback).
+      **Partially done, loopback side only:** `LoopbackDirectPlayTransport::Connect()`/`Listen()`
+      now really link a client instance to a host instance in the same process (Decision 10),
+      including a real `pendingPeers_`/`connectedPeers_`/`disconnectedPeerIds_` lifecycle mirroring
+      `EnetDirectPlayTransport`'s (Decisions 7-9). **Verified** with eleven new committed whitebox
+      tests in `tests/directplay_tests.cpp` (27/27 total): connection found via registry, connect
+      with no host fails, listen on a taken port fails, assign moves pending→connected, reject
+      pops-then-fails-when-empty, an assigned peer's disconnect is reported exactly once, a
+      never-assigned peer's disconnect is not reported, a third client over a two-player cap is
+      rejected (the transport-level analog of this phase's own "max-players rejection" acceptance
+      criterion below), host `Shutdown()` clears every peer's connection state (no dangling
+      pointer), `Shutdown()` unregisters its port for reuse, and `Send()`/`Receive()` return
+      `false` for both roles once connected (a deliberate choice, asked of and confirmed by the
+      user: real payload delivery is left for a later, separate design decision - see Decision 10).
+      Also re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end and that
+      `include/dplay.h` has zero ENet/SDL identifiers. `DirectPlay.cpp`'s `Open()` does not call
+      any of this yet (that's the task above), and the ENet side of "connect to the host
+      transport" is untouched - left unchecked since only the loopback backend is done.
 - [ ] Send a join-request packet to the host once connected.
 - [ ] Receive a join-accepted packet from the host and transition local state to "joined."
 - [ ] Receive the host-assigned player ID from the join-accepted packet and store it as this

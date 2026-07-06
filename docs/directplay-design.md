@@ -751,3 +751,106 @@ genuinely observes a real `ENET_EVENT_TYPE_DISCONNECT` (not a timeout, not silen
 rejection is a real ENet-protocol-level disconnect, not just an internal bookkeeping no-op. Both
 CMake build configurations and the 14/14 `tests/directplay_tests.cpp` suite (unaffected)
 re-verified.
+
+**Amendment (Decision 10):** `LoopbackDirectPlayTransport::RejectPendingConnection()` (and
+`HasPendingConnection()`/`AssignPendingConnection()`/`HasDisconnectedPeer()`/
+`TakeDisconnectedPeer()`) are no longer trivially `false` - Decision 10, below, gives
+`LoopbackDirectPlayTransport` a real multi-instance connection lifecycle, so these now behave the
+same way `EnetDirectPlayTransport`'s do. This paragraph is left as-written above (rather than
+edited) since it was an accurate description of the code at the time Decision 9 was implemented.
+
+---
+
+## Decision 10: `LoopbackDirectPlayTransport` multi-instance connections via a port-keyed static registry
+
+**Status:** Decided and implemented. Two sub-questions asked of, and confirmed by, the user
+directly; a `Plan` subagent then validated the concrete mechanics against
+`EnetDirectPlayTransport`'s existing shape.
+
+### The question
+
+`plan.md` Phase 7 ("Session joining") needs a deterministic loopback test where a host and two
+clients (a `dwMaxPlayers`-capped session) all connect in the same test process, and a third client
+is rejected - mirroring Phase 6/Decisions 7-9's ENet-level coverage, but committed and CI-friendly
+(this project's Testing Policy already prefers `LoopbackDirectPlayTransport` for determinism over
+uncommitted ENet smoke tests). But `LoopbackDirectPlayTransport` only ever talked to itself:
+`Listen()`/`Connect()` were both trivial `return true;` no-ops, and `Send()`/`Receive()` operated
+on a single instance's own FIFO. There was no way for a separate "client" instance to find and
+reach a separate "host" instance in the same process at all.
+
+### Decision
+
+**Sub-question 1: how does `Connect()` find the host?** A process-wide static registry
+(function-local static `std::unordered_map<std::uint16_t, LoopbackDirectPlayTransport*>`, keyed by
+the `port` argument `Listen()`/`Connect()` are called with), over a session-GUID-keyed alternative
+(rejected: it would require plumbing DPID/GUID knowledge down into the transport layer, a bigger
+interface change with no other motivating need yet). `Listen(port)` on an already-registered port
+fails, mirroring `EnetDirectPlayTransport::Listen()`'s real `bind()`-conflict behavior - a "coexist"
+alternative was rejected because it would make which host a `Connect()` reaches
+order-dependent/nondeterministic.
+
+`Connect()` deliberately **deviates from ENet**: real ENet's `Connect()` succeeds even with nobody
+listening yet, discovered later via a `Service()` timeout. Loopback has synchronous, perfect
+knowledge of the registry's contents, so `Connect()` fails immediately when no host is registered -
+this gives the future `Open(..., DPOPEN_JOIN)` wiring task a clean synchronous signal to map
+straight to `DPERR_NOSESSIONS` for the loopback backend, with no timeout machinery needed there.
+
+Connection lifecycle otherwise mirrors `EnetDirectPlayTransport`'s pending/connected/disconnected
+model exactly (Decisions 7/8/9), with `LoopbackDirectPlayTransport*` in place of `ENetPeer*`: a
+hosting instance tracks `pendingPeers_`/`connectedPeers_`/`disconnectedPeerIds_`; a joining instance
+tracks a single `hostPeer_`. Because these are direct C++ object pointers (not opaque handles),
+methods on one instance freely reach into another connected instance's private state (e.g.
+`RejectPendingConnection()` clears the rejected peer's own `hostPeer_` directly) - legal C++, since
+access control is per-class, not per-instance, and simpler than adding friend declarations or new
+public API.
+
+**Sub-question 2: what do `Send()`/`Receive()` do once really connected?** `false` for **both**
+roles (hosting and joining), diverging from `EnetDirectPlayTransport`'s asymmetry (whose joining
+role has a real, working `Send()`, since its single `hostPeer_` is unambiguous). Real per-recipient
+payload delivery - needed for the actual join-request/join-accepted wire handshake - is left as a
+separate, later design decision (tracked as still-blocked in `NEXT.md`, pending per-DPID-addressed
+`Send()`, `plan.md` Phase 10), not decided as an incidental side effect of connection-lifecycle
+work. The pre-existing self-send path (`Send()`/`Receive()` operating on `buffered_` when neither
+`Listen()` nor `Connect()` was ever called) is completely unaffected - the default, non-ENet build's
+`Open()` never calls either method on its `LoopbackDirectPlayTransport`, so no currently-passing
+test ever puts an instance into the connected state.
+
+**Memory safety:** `Shutdown()`/the destructor scrub every known peer's reference back to null
+symmetrically (a hosting instance nulls every `connectedPeers_`/`pendingPeers_` entry's `hostPeer_`;
+a joining instance removes itself from its `hostPeer_`'s maps/queues and, if it had been assigned a
+DPID, queues a disconnect notification exactly as Decision 8 specifies) - required so that either
+destruction order (host-first or client-first) never leaves a dangling pointer, not merely to mirror
+ENet's own graceful-teardown ceremony. Copy and move construction/assignment are deleted: unlike
+`ENetPeer*`/`ENetHost*`, these instances hold raw pointers *to each other*, so a moved/copied
+instance would leave stale pointers in whatever peer still references it.
+
+No mutex guards the registry - unlike ENet's lifecycle-counter mutex (which guards a genuine
+process-global side effect, `enet_initialize`/`enet_deinitialize`), the loopback registry is pure
+in-test bookkeeping; every current DirectPlay call site and every existing test is single-threaded,
+and this backend's whole purpose is deterministic testing, not modeling concurrency.
+
+Three test-only public accessors (`HasHostConnection()`, `ConnectedPeerCount()`,
+`PendingConnectionCount()`) were added, mirroring `EnetDirectPlayTransport`'s own test-only
+accessors - not part of `IDirectPlayTransport`.
+
+**Explicitly out of scope for this decision:** wiring `DirectPlay2AImpl::Open(...,
+DPOPEN_JOIN/DPOPEN_OPENSESSION)` to actually call `transport->Connect()` (a separate follow-up task,
+which also needs its own answer for how the ENet backend resolves a host address, since
+`DPSESSIONDESC2` has no address-like field any more than it had a port-like one - see Decision 5);
+and the join-request/join-accepted wire-protocol handshake itself (blocked on per-DPID-addressed
+`Send()`, `plan.md` Phase 10, as noted above).
+
+### Implemented
+
+`src/directplay/LoopbackDirectPlayTransport.hpp`/`.cpp` - the static registry, real
+`Listen()`/`Connect()`, real `HasPendingConnection()`/`AssignPendingConnection()`/
+`RejectPendingConnection()`/`HasDisconnectedPeer()`/`TakeDisconnectedPeer()`, `Send()`/`Receive()`
+returning `false` once connected, a memory-safe `Shutdown()`/destructor, deleted copy/move, and the
+three test-only accessors above. **Verified** with eleven new committed whitebox tests in
+`tests/directplay_tests.cpp` (27/27 total passing): connect-finds-host, connect-with-no-host-fails,
+listen-on-taken-port-fails, assign-moves-pending-to-connected, reject-pops-and-then-fails-when-empty,
+assigned-peer-disconnect-reported-exactly-once, pending-peer-disconnect-not-reported, a
+third-client-over-a-two-player-cap-is-rejected test (the transport-level analog of Phase 7's own
+acceptance criterion), host-shutdown-clears-peers'-connections, shutdown-unregisters-port-for-reuse,
+and send/receive-false-for-both-roles. Also re-verified both CMake build configurations
+(`ENET=OFF`/`ON`) end-to-end and that `include/dplay.h` has zero ENet/SDL identifiers.
