@@ -130,19 +130,20 @@ namespace {
             }
 #else
             session_.transport = std::make_unique<free_direct_directplay::LoopbackDirectPlayTransport>();
-            // Only the joining role calls Connect() here (docs/directplay-design.md Decision
-            // 10/11) - deliberately NOT wiring the hosting role to call Listen() in this same
-            // task. Doing so would put every hosted session's transport into the "connected"
-            // state, where Send()/Receive() always return false (Decision 10) - silently
-            // breaking the already-working self-send path every existing Phase 4 test and the
-            // real free-eggbert self-send call pattern depend on. Reconciling "hosting" with
-            // "still able to self-send" is a separate design question for whenever the
-            // host-discoverable-for-real-joins task is tackled, not decided here.
-            if (!session_.isHost) {
+            // Fixed default port (docs/directplay-design.md Decisions 11/12) - DPSESSIONDESC2
+            // has no port-like field to derive one from. Self-send no longer routes through
+            // the transport (Decision 12), so it is now safe for the hosting role to call
+            // Listen() here without breaking it, unlike when this was first attempted (see
+            // Decision 11's regression note).
+            if (session_.isHost) {
+                if (!session_.transport->Listen(free_direct_directplay::kDefaultDirectPlayLoopbackPort)) {
+                    session_.transport.reset();
+                    return DPERR_CANTCREATESESSION;
+                }
+            } else {
                 // DPOPEN_JOIN/DPOPEN_OPENSESSION: Connect() resolves the host synchronously via
                 // the fixed port's registry entry and fails immediately - no timeout needed -
-                // when nothing is listening there (nothing does yet, since hosting doesn't call
-                // Listen() - see above), which maps directly to DPERR_NOSESSIONS.
+                // when nothing is listening there, which maps directly to DPERR_NOSESSIONS.
                 if (!session_.transport->Connect(nullptr, free_direct_directplay::kDefaultDirectPlayLoopbackPort)) {
                     session_.transport.reset();
                     return DPERR_NOSESSIONS;
@@ -177,29 +178,23 @@ namespace {
             // player ID validation, payload validation, host routing, and broadcast all land in
             // Phase 10; a non-self idTo is currently a silent no-op, matching the pre-Phase-4
             // stub behavior for anything this phase doesn't cover.
-            if (idTo == idFrom && session_.transport) {
-                // Round-trip through the transport rather than enqueuing directly, so
-                // LoopbackDirectPlayTransport's own Send()/Receive() are genuinely exercised
-                // (matching the eventual shape of a real backend), even though for loopback the
-                // round-trip is synchronous and same-process.
-                const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
-                if (!session_.transport->Send(lpData, dwDataSize, reliable)) {
-                    return DPERR_GENERIC;
-                }
-
-                std::vector<std::uint8_t> received(dwDataSize);
-                std::size_t receivedSize = 0;
-                if (!session_.transport->Receive(received.empty() ? nullptr : received.data(),
-                                                  received.size(), &receivedSize)) {
-                    return DPERR_GENERIC;
-                }
-                received.resize(receivedSize);
-
+            if (idTo == idFrom) {
+                // Enqueued directly into session_.messageQueue rather than round-tripping
+                // through session_.transport (Phase 4's original approach, changed here per
+                // docs/directplay-design.md Decision 12): sending a message to yourself is
+                // always a purely local operation, regardless of whether this session's
+                // transport is idle, hosting (Listen()ing), or joined - it must not depend on,
+                // or be affected by, the transport's connection state. This also sidesteps
+                // Decision 10's deliberate `false` return from a connected transport's
+                // Send()/Receive() (there is no ambiguity to avoid here: idFrom/idTo are known
+                // at this layer, never passed down to the transport, which is exactly why the
+                // transport itself could never distinguish "self-send" from any other traffic).
+                const auto* bytes = static_cast<const std::uint8_t*>(lpData);
                 free_direct_directplay::DirectPlayMessagePacket packet;
                 packet.idFrom = idFrom;
                 packet.idTo = idTo;
                 packet.flags = dwFlags;
-                packet.payload = std::move(received);
+                packet.payload.assign(bytes, bytes + dwDataSize);
                 if (!session_.messageQueue.Enqueue(std::move(packet))) return DPERR_SENDTOOBIG;
             }
             return DP_OK;

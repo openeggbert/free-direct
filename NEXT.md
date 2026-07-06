@@ -12,15 +12,16 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   DirectPlay usage).
 - **Current development phase**: `plan.md` Phases 0-5 complete. Phase 6 ("Session hosting") is
   essentially done — its only remaining tasks are blocked on later phases (Section 8). Phase 7
-  ("Session joining") has started: `LoopbackDirectPlayTransport` has a real multi-instance
-  connection lifecycle (Decision 10), and `Open(..., DPOPEN_JOIN)` now calls `Connect()` over
-  loopback (Decision 11) — but only the *failure* path works today (`DPERR_NOSESSIONS` when no
-  host is listening, which is always, since nothing wires the hosting role to call `Listen()` yet —
-  see Section 4). The ENet side of "resolve a host address" is also still undecided. Phases 8
-  onward (enumeration, player management, real Send/Receive routing, error semantics, hardening,
-  CI, docs) have not started.
+  ("Session joining") is underway: a real loopback host + client can now connect end-to-end
+  (`Open(..., DPOPEN_CREATE)` calls `Listen()`, `Open(..., DPOPEN_JOIN)` calls `Connect()`,
+  Decisions 10-12) — but this is connection-establishment only, not a completed DirectPlay join:
+  no DPID is assigned to the joining side and no session descriptor is exchanged, since the
+  join-request/accepted wire handshake is blocked on per-DPID-addressed `Send()` (Phase 10). The
+  ENet side of "resolve a host address" for joining is also still undecided. Phases 8 onward
+  (enumeration, player management, real Send/Receive routing, error semantics, hardening, CI,
+  docs) have not started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
-  1-11):
+  1-12):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -49,7 +50,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 28/28 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 29/29 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -85,7 +86,27 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — Wired `DirectPlay2AImpl::Open(..., DPOPEN_JOIN/DPOPEN_OPENSESSION)`
+- (uncommitted, this session) — Resolved the self-send-vs-hosting conflict (Decision 12), asked of
+  and confirmed by the user: `DirectPlay2AImpl::Send()`'s self-send branch (`idFrom == idTo`) no
+  longer routes through `session_.transport->Send()`/`Receive()` at all - it enqueues a
+  `DirectPlayMessagePacket` directly into `session_.messageQueue` instead. Reasoning: sending a
+  message to yourself is always a purely local operation and was never conceptually a network
+  concern; also, `IDirectPlayTransport::Send()` has no recipient parameter, so the transport layer
+  structurally cannot distinguish self-send from any other traffic, ruling out a
+  transport-level fix. With that fixed, `Open(..., DPOPEN_CREATE)` now safely calls
+  `transport->Listen(kDefaultDirectPlayLoopbackPort)` over loopback too (mirroring the ENet
+  branch's existing shape) - completing Decision 11's deferred half. A real loopback host +
+  client can now connect end-to-end: `Test_OpenAsJoinWithHostPresent_Succeeds` (new) opens a real
+  host then a real joining client, asserting `Open(..., DPOPEN_JOIN)` returns `DP_OK`. This is
+  connection-establishment only, not a completed join (no DPID/session-descriptor exchange yet -
+  still blocked on Phase 10's per-DPID `Send()`). One pre-existing test needed adjusting as a
+  direct consequence of the single fixed port now being genuinely enforced:
+  `Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid` used to hold two loopback hosts open
+  simultaneously; changed to open/capture/close the first before opening the second (doesn't
+  weaken what it actually verifies - GUID uniqueness across generations). Verified: 29/29
+  `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
+  `include/dplay.h` still has zero ENet/SDL identifiers.
+- `fb63887` — Wired `DirectPlay2AImpl::Open(..., DPOPEN_JOIN/DPOPEN_OPENSESSION)`
   to call `transport->Connect()` over loopback (`docs/directplay-design.md` Decision 11), returning
   `DPERR_NOSESSIONS` when it fails. Added `kDefaultDirectPlayLoopbackPort = 51322`
   (`LoopbackDirectPlayTransport.hpp`), mirroring Decision 5's ENet port, asked of and confirmed by
@@ -170,16 +191,12 @@ Full narrative detail and rationale for each decision lives in `docs/directplay-
 
 ## 4. Current blocker / main problem
 
-**No build- or test-breaking blocker exists right now** — everything builds and 28/28 tests pass.
-There is, however, a real **open design question** blocking Phase 7's "successful join" test:
-a hosted loopback session's transport cannot both (a) call `Listen()` so a joining `Connect()` can
-find it, and (b) keep self-sending working, since Decision 10 made `Send()`/`Receive()` return
-`false` unconditionally once a transport is "connected" (listening or joined) — see Decision 11's
-regression note. This needs its own design pass (does self-send move off the transport entirely and
-talk to `session_.messageQueue` directly? Does "listening" need a sub-state that still permits the
-old self-send path? Something else?) before a host+client loopback join can be tested end-to-end.
-Flag this to the user before picking an approach — it's the kind of judgment call this project
-asks about rather than deciding solo.
+**No build- or test-breaking blocker exists right now** — everything builds and 29/29 tests pass.
+The self-send-vs-hosting conflict flagged in the previous session is resolved (Decision 12): a real
+loopback host + client can connect end-to-end. What remains is not a blocker but a known scope gap:
+the join is connection-only, with no DPID assignment or session-descriptor exchange, since that
+needs the join-request/accepted wire handshake, which is blocked on per-DPID-addressed `Send()`
+(`plan.md` Phase 10, not started).
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -304,29 +321,30 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-`Open(..., DPOPEN_JOIN)` now calls `Connect()` over loopback (Decision 11), but only the failure
-path is real — a successful join is blocked on a genuine open design question (Section 4). The
-next smallest task is to resolve that, since nothing else in Phase 7 can proceed without it:
+A real loopback host + client can now connect end-to-end (Section 3/4). `plan.md` Phase 7's
+remaining tasks are the join-request/accepted wire handshake itself, which stays blocked on
+per-DPID-addressed `Send()` (Phase 10, not started) - see Section 9. One task, however, looks
+newly reachable and is worth investigating first:
 
-1. **Design (ask the user first) how a hosted loopback session's transport can be both
-   `Listen()`ing (discoverable by a joining `Connect()`) and still able to self-send.**
-   - Files to understand first: `src/directplay/DirectPlay.cpp` (`Send()`'s self-send path,
-     `idTo == idFrom`), `src/directplay/LoopbackDirectPlayTransport.cpp` (`Send()`/`Receive()`'s
-     `if (listening_ || hostPeer_) return false;` guard, Decision 10).
-   - Candidate directions to present, not decide solo: (a) self-send stops going through
-     `transport->Send()`/`Receive()` entirely once real connections exist, and talks to
-     `session_.messageQueue` directly instead (transport only used for real inter-process-style
-     traffic); (b) `Send()`/`Receive()` gain a narrower guard that still permits the exact
-     `idFrom == idTo` self-send shape even while `listening_`; (c) something else. Each has
-     different consequences for later Phase 10 addressed-send work — flag that tradeoff too.
-   - Only after that's decided: wire `Open(..., DPOPEN_CREATE)` to call
-     `transport->Listen(kDefaultDirectPlayLoopbackPort)` for loopback (symmetric to the joining
-     wiring already done), then attempt Phase 7's "Add a test for a successful join using a local
-     host/client pair over loopback" task.
-   - Do not implement the join-request/join-accepted wire handshake itself yet (blocked on
-     per-DPID-addressed `Send()`, Phase 10 — see Section 9) — a successful "join" for now would only
-     mean the client's `Connect()` succeeds and the host sees it as a pending connection, not a
-     full DPID-assignment handshake.
+1. **Investigate: is "Add a test for max-players rejection" actually reachable now, or does it hit
+   a new gap?** `DirectPlay2AImpl::Receive()`'s DPID-assignment/rejection loop
+   (`src/directplay/DirectPlay.cpp` lines ~232-260) is backend-agnostic - it already calls
+   `session_.transport->HasPendingConnection()`/`AssignPendingConnection()`/
+   `RejectPendingConnection()` through the `IDirectPlayTransport` interface, not gated by
+   `FREE_DIRECT_ENABLE_ENET` - and `LoopbackDirectPlayTransport` now implements all three for real
+   (Decision 10). So a host with `dwMaxPlayers = 2` and three loopback clients connected should
+   already have its own `Receive()` call assign DPIDs to the first two and reject the third.
+   **But**: nothing on the *client* side ever calls `HasDisconnectedPeer()`-equivalent bookkeeping
+   for a joining-role transport - `Receive()`'s disconnect/assignment logic is gated on
+   `session_.isHost` only. A rejected client's own `Open(..., DPOPEN_JOIN)` call already returned
+   `DP_OK` (the connection was merely pending, not yet rejected, at `Open()` time - rejection only
+   happens later, when the *host* calls `Receive()`), and there is no public API today for a
+   joining session to observe "you were rejected" at all. This may mean the literal acceptance
+   criterion ("a third loopback client... receives a rejected outcome, a `DPERR_*` code, not
+   `DP_OK`") isn't satisfiable yet without adding that observability - which would be new scope,
+   not just a test. Confirm this finding (don't assume it without checking the code again fresh),
+   then ask the user how to proceed: add client-side rejection observability now (new design
+   question), or leave this task blocked alongside the wire-handshake ones until Phase 9/10.
 
 Only one `plan.md` Phase 6 task remains, and it is still blocked (unchanged from before): "Add a
 test for closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md`
@@ -348,9 +366,9 @@ Phase 8, not started).
   design decision, not something to revisit incidentally while wiring `Open(DPOPEN_JOIN)`.
 - Do not decide the ENet backend's "how does a joining call resolve a host address" question
   unilaterally — ask the user first, same as Decision 5 did for the hosting side's port choice.
-- Do not wire `Open(..., DPOPEN_CREATE)` to call `transport->Listen()` over loopback without first
-  resolving Section 4's open design question (self-send vs. "listening" conflict) — it was tried
-  and reverted once already (Decision 11) because it silently broke every self-send test.
+- Do not add client-side rejection observability (a joining session learning it was turned away
+  over `dwMaxPlayers`) without asking the user first — see Section 8's open investigation; it is
+  new scope, not something to add as a quiet side effect of another task.
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15, deliberately
   deferred until more of Phases 5-11 exist to test).
 - Do not add a run-time backend-selection mechanism for `Open()`'s loopback-vs-ENet choice —
@@ -365,16 +383,18 @@ Phase 8, not started).
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 4 (the current blocker) and Section 8 (the next task).
-Open(..., DPOPEN_JOIN) already calls transport->Connect() over loopback and correctly returns
-DPERR_NOSESSIONS when nothing is listening - but nothing wires the hosting role to call Listen()
-yet, because doing so naively breaks the self-send feature every Phase 4 test depends on
-(LoopbackDirectPlayTransport::Send()/Receive() return false once "listening", per Decision 10).
-Before writing any code, design (with the user - use AskUserQuestion, present at least two
-candidate directions) how a hosted loopback session can be both discoverable via Listen() and
-still able to self-send. Only after that's decided, wire Open(..., DPOPEN_CREATE) to call
-Listen() over loopback and add Phase 7's "successful join" test. Do not refactor unrelated code,
-do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Do not
+Read NEXT.md first, especially Section 8 (the next task). A real loopback host + client can now
+connect end-to-end (Open(DPOPEN_CREATE) calls Listen(), Open(DPOPEN_JOIN) calls Connect(),
+Decisions 10-12) - this is connection-establishment only, not a completed DirectPlay join (no
+DPID/session-descriptor exchange, blocked on Phase 10). Investigate Section 8's open question
+first: DirectPlay2AImpl::Receive()'s DPID-assignment/rejection loop is backend-agnostic and
+already works against LoopbackDirectPlayTransport, so a max-players-rejection test might mostly
+work today - EXCEPT nothing lets a joining session observe that it was rejected (Receive()'s
+disconnect bookkeeping is gated on session_.isHost only). Confirm this by re-reading the current
+code (don't trust this summary blindly - re-verify), then ask the user (AskUserQuestion) whether
+to add client-side rejection observability now or leave the "max-players rejection" test blocked
+until later. Do not decide this unilaterally - it's new scope. Do not refactor unrelated code, do
+not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Do not
 implement the join-request/join-accepted wire handshake yet (Section 9 - blocked on per-DPID-
 addressed Send(), Phase 10). Make one small, verified improvement - implement just that one task.
 Run the relevant build/test command from Section 7 and confirm it actually passes before

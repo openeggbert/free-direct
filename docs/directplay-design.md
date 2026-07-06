@@ -922,3 +922,82 @@ ReturnsNoSessions`, going through the real public `IDirectPlay2A::Open()` (not w
 `Open(&desc, DPOPEN_JOIN)` with no host ever started returns `DPERR_NOSESSIONS`. Also re-verified
 both CMake build configurations (`ENET=OFF`/`ON`) end-to-end, that every pre-existing hosting/
 self-send test still passes unaffected, and that `include/dplay.h` has zero ENet/SDL identifiers.
+
+---
+
+## Decision 12: self-send bypasses the transport entirely, resolving Decision 11's open question
+
+**Status:** Decided and implemented. Asked of, and confirmed by, the user directly - two
+candidate directions were identified (self-send moves off the transport onto
+`session_.messageQueue` directly; or the transport gains a narrower carve-out permitting
+self-send even while "listening"), and the user confirmed the first.
+
+### The question
+
+Decision 11 left open: how can a hosted loopback session's transport be both `Listen()`ing (so a
+joining `Connect()` can find it) and still support the self-send path (`DirectPlay2AImpl::Send()`
+with `idFrom == idTo`), given Decision 10 made `LoopbackDirectPlayTransport::Send()`/`Receive()`
+return `false` unconditionally once "connected" (`listening_ || hostPeer_`)?
+
+### The finding that resolves it
+
+`IDirectPlayTransport::Send(const void* data, std::size_t size, bool reliable)` has **no**
+recipient parameter at all - the transport is never told whether a given call is a self-send or
+traffic meant for some other peer. That distinction exists only one layer up, in
+`DirectPlay2AImpl::Send()`'s own `idTo == idFrom` check. This makes the "narrower transport-level
+carve-out" direction structurally unworkable without adding a special-purpose method or a mode
+flag to `IDirectPlayTransport` (new API surface with no other motivating need) - the fix belongs in
+`DirectPlay2AImpl::Send()`, not in the transport.
+
+### Decision
+
+`DirectPlay2AImpl::Send()`'s self-send branch (`src/directplay/DirectPlay.cpp`) no longer calls
+`session_.transport->Send()`/`Receive()` at all. It constructs a `DirectPlayMessagePacket` directly
+from the caller's `lpData`/`dwDataSize` and enqueues it straight into `session_.messageQueue` -
+the same queue `Receive()` already drains via `TryReceive()`. This is not merely a workaround: a
+message sent to yourself is conceptually always a local operation, independent of whatever
+network role (idle, hosting, joined) this session's transport is playing, so it should never have
+depended on transport connection state in the first place. `DPSEND_GUARANTEED`/`dwFlags`'s
+reliability distinction is dropped for this path (there is nothing to be reliable/unreliable *about*
+for a same-process, in-memory queue write) - it is still stored on the packet
+(`packet.flags = dwFlags`) unchanged from before.
+
+This supersedes Phase 4's original rationale for routing self-send through the transport ("so
+`LoopbackDirectPlayTransport`'s own `Send()`/`Receive()` are genuinely exercised, matching the
+eventual shape of a real backend") - that rationale predates Decision 10's real connection
+lifecycle work, and continuing to route self-send through the transport after Decision 10 would be
+a correctness bug (self-send breaking the moment hosting is wired), not just a stylistic
+mismatch.
+
+### Consequence
+
+It is now safe for `Open(..., DPOPEN_CREATE)` to call `transport->Listen(kDefaultDirectPlayLoopbackPort)`
+over loopback (this was the whole point): hosting no longer puts the *self-send* path at risk,
+since self-send no longer touches the transport. Wired as part of this same task (see Implemented,
+below) - completing Decision 11's deferred half.
+
+One test needed adjusting as a direct consequence of the fixed single port
+(`kDefaultDirectPlayLoopbackPort`) now genuinely being enforced by a real `Listen()`:
+`Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid` previously held two loopback-hosted
+sessions open simultaneously to compare their generated `guidInstance` values - now only one
+loopback-hosted session can exist per process at a time (the same constraint Decision 5 already
+accepted for the real ENet port), so the test was changed to open/capture/close the first session
+before opening the second. This doesn't weaken what the test actually verifies (GUID uniqueness
+across generations), since the two sessions were never required to coexist for that assertion.
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`: `Send()`'s self-send branch now enqueues directly into
+`session_.messageQueue`; `Open()`'s hosting branch (the `#else`/non-ENet path) now calls
+`transport->Listen(kDefaultDirectPlayLoopbackPort)`, resetting the transport and returning
+`DPERR_CANTCREATESESSION` on failure - mirroring the ENet branch's existing shape exactly.
+`tests/directplay_tests.cpp`: adjusted `Test_OpenAsHostWithZeroGuidInstance_
+GeneratesNonZeroGuid` as described above; added `Test_OpenAsJoinWithHostPresent_Succeeds`, a new
+end-to-end test opening a real host session then a real joining session over loopback, asserting
+`Open(..., DPOPEN_JOIN)` returns `DP_OK` once a host is genuinely listening - this covers Phase 7's
+"successful join" task's connection-establishment half only; the full acceptance criterion ("both
+peers agree on the assigned DPIDs and session descriptor") still needs the join-request/accepted
+wire handshake, which remains blocked on per-DPID-addressed `Send()` (`plan.md` Phase 10). **Verified**:
+29/29 `tests/directplay_tests.cpp` suite passes (every pre-existing hosting/self-send test
+unaffected); both CMake build configurations (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has
+zero ENet/SDL identifiers.

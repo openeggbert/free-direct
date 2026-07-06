@@ -25,13 +25,14 @@
 
 namespace free_direct_directplay {
 
-/// Default loopback registry port `Open()` uses when calling `Connect()` for the joining
-/// role (`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`) (`docs/directplay-design.md` Decision 11) -
-/// mirrors `EnetDirectPlayTransport`'s `kDefaultDirectPlayEnetPort` (Decision 5):
-/// `DPSESSIONDESC2` has no port-like field a real value could be derived from, so a
-/// single fixed, FreeDirect-internal constant is used instead. `Open()`'s hosting role
-/// does **not** yet call `Listen(kDefaultDirectPlayLoopbackPort)` - see Decision 11's
-/// note on why that is deliberately deferred, not an oversight.
+/// Default loopback registry port `Open()` uses for both `Listen()` (hosting,
+/// `DPOPEN_CREATE`) and `Connect()` (joining, `DPOPEN_JOIN`/`DPOPEN_OPENSESSION`)
+/// (`docs/directplay-design.md` Decisions 11/12) - mirrors `EnetDirectPlayTransport`'s
+/// `kDefaultDirectPlayEnetPort` (Decision 5): `DPSESSIONDESC2` has no port-like field a
+/// real value could be derived from, so a single fixed, FreeDirect-internal constant is
+/// used instead. Consequence: only one loopback-hosted session can exist per process at
+/// a time - the same "one session per machine" simplification Decision 5 already made
+/// for the real ENet port.
 inline constexpr std::uint16_t kDefaultDirectPlayLoopbackPort = 51322;
 
 /**

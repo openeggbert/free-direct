@@ -138,6 +138,13 @@ void OpenLoopbackSession(LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2) {
 // did not already supply one." Asserts an all-zero caller-supplied guidInstance is replaced
 // with a real, non-zero, written-back value, and that two separate hosted sessions get
 // different generated GUIDs (not some fixed/degenerate placeholder).
+//
+// The two hosted sessions are opened and closed sequentially, not held open
+// simultaneously: docs/directplay-design.md Decisions 11/12 wired Open(DPOPEN_CREATE) to
+// call Listen() on a single fixed loopback port, so only one loopback-hosted session can
+// exist per process at a time (mirroring the same constraint Decision 5 already accepted
+// for the real ENet port) - this doesn't weaken what the test actually verifies (GUID
+// uniqueness across generations, not simultaneous liveness).
 void Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid() {
     GUID zero{};
 
@@ -150,6 +157,9 @@ void Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid() {
     descA.dwSize = sizeof(DPSESSIONDESC2);
     CHECK(dp2A->Open(&descA, DPOPEN_CREATE) == DP_OK);
     CHECK(std::memcmp(&descA.guidInstance, &zero, sizeof(GUID)) != 0);
+    const GUID guidA = descA.guidInstance;
+    dp2A->Release();
+    dpA->Release();
 
     LPDIRECTPLAY dpB = nullptr;
     CHECK(DirectPlayCreate(nullptr, &dpB, nullptr) == DP_OK);
@@ -161,10 +171,8 @@ void Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid() {
     CHECK(dp2B->Open(&descB, DPOPEN_CREATE) == DP_OK);
     CHECK(std::memcmp(&descB.guidInstance, &zero, sizeof(GUID)) != 0);
 
-    CHECK(std::memcmp(&descA.guidInstance, &descB.guidInstance, sizeof(GUID)) != 0);
+    CHECK(std::memcmp(&guidA, &descB.guidInstance, sizeof(GUID)) != 0);
 
-    dp2A->Release();
-    dpA->Release();
     dp2B->Release();
     dpB->Release();
 }
@@ -218,10 +226,9 @@ void Test_OpenAsHostOverLoopback_ReturnsOk() {
 // plan.md Phase 7: "Add a test for a failed join (no host present), asserting
 // DPERR_NOSESSIONS."
 //
-// No loopback host is ever started in this test (docs/directplay-design.md Decision 11:
-// Open()'s hosting role deliberately doesn't call Listen() yet), so Connect() over the
-// well-known loopback port fails immediately and deterministically - no real network, no
-// timeout needed for this backend.
+// No loopback host is ever started in this test, so Connect() over the well-known
+// loopback port fails immediately and deterministically - no real network, no timeout
+// needed for this backend (docs/directplay-design.md Decision 11).
 void Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions() {
     LPDIRECTPLAY dp = nullptr;
     CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
@@ -235,6 +242,39 @@ void Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions() {
 
     dp2->Release();
     dp->Release();
+}
+
+// plan.md Phase 7: "Add a test for a successful join using a local host/client pair over
+// loopback..." - partially covered here, honestly: docs/directplay-design.md Decision 12
+// made it safe for Open(DPOPEN_CREATE) to call Listen() (self-send no longer routes
+// through the transport), so a joining Open(DPOPEN_JOIN) can now genuinely find and
+// connect to a real hosted loopback session, asserted here via DP_OK. This does **not**
+// yet cover the full Phase 7 acceptance criterion ("both peers agree on the assigned
+// DPIDs and session descriptor") - that needs the join-request/join-accepted wire
+// handshake, still blocked on per-DPID-addressed Send() (Phase 10, see NEXT.md).
+void Test_OpenAsJoinWithHostPresent_Succeeds() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
 }
 
 // plan.md Phase 6: "Add a test for invalid host parameters (e.g. dwMaxPlayers == 0, malformed
@@ -634,6 +674,7 @@ int main() {
     Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue();
     Test_OpenAsHostOverLoopback_ReturnsOk();
     Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions();
+    Test_OpenAsJoinWithHostPresent_Succeeds();
     Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();
