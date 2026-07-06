@@ -229,6 +229,8 @@ bool EnetDirectPlayTransport::TakeDisconnectedPeer(DPID* outId) {
     return true;
 }
 
+bool EnetDirectPlayTransport::IsConnectedToHost() const { return hostPeer_ != nullptr; }
+
 void EnetDirectPlayTransport::Shutdown() {
     if (host_) {
         // Gracefully disconnect every peer this instance still knows about - the

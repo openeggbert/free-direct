@@ -262,7 +262,18 @@ namespace {
             // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
             // be exercised directly by tests/directplay_tests.cpp without needing a way to
             // inject a message into a live IDirectPlay2A object.
-            return session_.messageQueue.TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize);
+            const HRESULT hr = session_.messageQueue.TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize);
+            // Client-side rejection/disconnection observability (docs/directplay-design.md
+            // Decision 13): a joining session whose host connection is gone (rejected over
+            // dwMaxPlayers, or the host shut down) reports DPERR_NOCONNECTION - but only once
+            // there is truly nothing left to deliver. A locally-queued message (e.g. an earlier
+            // self-send, Decision 12) is still handed back first: losing the host connection
+            // must not erase messages that never depended on it.
+            if (session_.transport && !session_.isHost && hr == DPERR_NOMESSAGES &&
+                !session_.transport->IsConnectedToHost()) {
+                return DPERR_NOCONNECTION;
+            }
+            return hr;
         }
 
         HRESULT WINAPI Close() override {

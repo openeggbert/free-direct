@@ -74,10 +74,9 @@ public:
     bool RejectPendingConnection() override;
     bool HasDisconnectedPeer() const override;
     bool TakeDisconnectedPeer(DPID* outId) override;
+    bool IsConnectedToHost() const override;
     void Shutdown() override;
 
-    /** @brief Test-only accessor: true if this joining-role instance is connected to a host. */
-    bool HasHostConnection() const { return hostPeer_ != nullptr; }
     /** @brief Test-only accessor: number of assigned (DPID-mapped) peers this hosting-role instance tracks. */
     std::size_t ConnectedPeerCount() const { return connectedPeers_.size(); }
     /** @brief Test-only accessor: number of not-yet-assigned pending connections this hosting-role instance tracks. */

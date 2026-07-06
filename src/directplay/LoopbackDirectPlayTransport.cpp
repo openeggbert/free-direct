@@ -111,6 +111,8 @@ bool LoopbackDirectPlayTransport::TakeDisconnectedPeer(DPID* outId) {
     return true;
 }
 
+bool LoopbackDirectPlayTransport::IsConnectedToHost() const { return hostPeer_ != nullptr; }
+
 void LoopbackDirectPlayTransport::Shutdown() {
     if (listening_) {
         // Scrub every known peer's hostPeer_ back to null - required for memory safety (a peer

@@ -1001,3 +1001,78 @@ wire handshake, which remains blocked on per-DPID-addressed `Send()` (`plan.md` 
 29/29 `tests/directplay_tests.cpp` suite passes (every pre-existing hosting/self-send test
 unaffected); both CMake build configurations (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has
 zero ENet/SDL identifiers.
+
+---
+
+## Decision 13: client-side rejection/disconnection observability via `IsConnectedToHost()`
+
+**Status:** Decided and implemented. Asked of, and confirmed by, the user directly: add this
+capability now, rather than leaving it blocked alongside the join-request/accepted wire-handshake
+work.
+
+### The question
+
+Investigating `plan.md` Phase 7's "Add a test for max-players rejection" task found a real gap:
+`DirectPlay2AImpl::Receive()`'s DPID-assignment/rejection loop (Decisions 7/9) is backend-agnostic
+and already worked against `LoopbackDirectPlayTransport` once Decision 10 gave it a real
+`HasPendingConnection()`/`AssignPendingConnection()`/`RejectPendingConnection()` implementation -
+but nothing let the *rejected client itself* observe that it had been turned away.
+`IDirectPlayTransport::HasDisconnectedPeer()`/`TakeDisconnectedPeer()` (Decision 8) are purely a
+hosting-role concept (they report the host's own peers disconnecting); there was no equivalent for
+a joining-role instance to ask "am I still connected to the host I `Connect()`ed to?" - even though
+both backends already tracked exactly that internally (`LoopbackDirectPlayTransport`'s
+`hostPeer_`, `EnetDirectPlayTransport`'s `hostPeer_`, both already exposed only as test-only
+accessors, `HasHostConnection()`/`HasPeer()`).
+
+### Decision
+
+Promoted the existing test-only accessors into a real `IDirectPlayTransport` method:
+`virtual bool IsConnectedToHost() const = 0;`. `LoopbackDirectPlayTransport::IsConnectedToHost()`
+and `EnetDirectPlayTransport::IsConnectedToHost()` both simply return `hostPeer_ != nullptr` -
+exactly what their now-removed `HasHostConnection()`/`HasPeer()` test-only accessors already did;
+this is a rename/promotion, not new logic. A hosting-role instance's `hostPeer_` stays null
+forever (Decision 7), so `IsConnectedToHost()` correctly always returns `false` for it - "am I
+connected to a host" doesn't apply to a hosting instance itself.
+
+`DirectPlay2AImpl::Receive()` (`DirectPlay.cpp`) now checks this for the joining role
+(`!session_.isHost`), but **only after** `TryReceive()` on the local message queue has already
+been attempted, and **only** if that attempt came back `DPERR_NOMESSAGES`:
+
+```cpp
+const HRESULT hr = session_.messageQueue.TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize);
+if (session_.transport && !session_.isHost && hr == DPERR_NOMESSAGES &&
+    !session_.transport->IsConnectedToHost()) {
+    return DPERR_NOCONNECTION;
+}
+return hr;
+```
+
+This ordering is deliberate and was not part of the literal question as first asked - it is a
+direct consequence of Decision 12: self-send now enqueues straight into `session_.messageQueue`,
+completely independent of transport connection state, so a joining session's own earlier self-sent
+message must still be deliverable via `Receive()` even after its host connection is gone. Checking
+`IsConnectedToHost()` unconditionally (before consulting the queue) would have silently broken
+that guarantee - exactly the kind of self-send-vs-connection-state coupling Decision 12 was
+written to eliminate. Only once the local queue is genuinely empty does the lost host connection
+become observable, mapped to `DPERR_NOCONNECTION` (the same code `Close()` already uses for "no
+connection" - no new error code was needed; there is still no join-rejected explanation packet, so
+FreeDirect cannot distinguish "rejected for being over `dwMaxPlayers`" from "the host disconnected
+for some other reason" - both look identical to the client today, matching Decision 9's existing
+caveat).
+
+### Implemented
+
+`src/directplay/DirectPlayTransport.hpp` (`IsConnectedToHost()` added to `IDirectPlayTransport`),
+`src/directplay/LoopbackDirectPlayTransport.hpp`/`.cpp` and
+`src/directplay/EnetDirectPlayTransport.hpp`/`.cpp` (both implement it, replacing their old
+test-only `HasHostConnection()`/`HasPeer()` accessors - all call sites in
+`tests/directplay_tests.cpp` renamed accordingly), and `src/directplay/DirectPlay.cpp`'s
+`Receive()` as shown above. **Verified** with a new committed end-to-end test in
+`tests/directplay_tests.cpp` (30/30 total passing),
+`Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection`: a real host (`dwMaxPlayers = 2`)
+and three real joining clients connect over loopback; the host's own `Receive()` call (which is
+what actually runs the assignment/rejection loop, per Decision 6's polling model) admits the first
+two and rejects the third; the third client's own subsequent `Receive()` call returns
+`DPERR_NOCONNECTION` - this finally closes Phase 7's "max-players rejection" task. Also
+re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end and that `include/dplay.h`
+has zero ENet/SDL identifiers.

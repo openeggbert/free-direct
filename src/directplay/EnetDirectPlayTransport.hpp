@@ -31,7 +31,7 @@
  * Hosting (`Listen()`) and joining (`Connect()`) are not symmetric
  * (`docs/directplay-design.md` Decision 7), and are tracked separately:
  * - **Joining role**: `hostPeer_`, a single `ENetPeer*` - the one host this instance
- *   connected to. `Send()`/`Shutdown()`/`HasPeer()` all operate on this field only.
+ *   connected to. `Send()`/`Shutdown()`/`IsConnectedToHost()` all operate on this field only.
  * - **Hosting role**: `connectedPeers_` (a `DPID → ENetPeer*` map, populated only via
  *   `AssignPendingConnection()` - the transport never allocates a DPID itself) and
  *   `pendingPeers_` (a queue of connected-but-unidentified peers, populated by
@@ -87,6 +87,10 @@ public:
     bool RejectPendingConnection() override;
     bool HasDisconnectedPeer() const override;
     bool TakeDisconnectedPeer(DPID* outId) override;
+    // Client-role (Connect()) only - a hosting instance's hostPeer_ stays null forever, so
+    // this always returns false for it; use HasPendingConnection()/ConnectedPeerCount() for
+    // the hosting role instead (docs/directplay-design.md Decisions 7/13).
+    bool IsConnectedToHost() const override;
     void Shutdown() override;
 
     /// True once this instance's constructor successfully joined the process-wide
@@ -102,16 +106,8 @@ public:
     /// true.
     bool HasHost() const { return host_ != nullptr; }
 
-    /// True once Connect() has queued a connection attempt (does *not* by itself mean
-    /// that attempt completed - checking ENetPeer::state directly is out of scope) or
-    /// Service() adopted the resulting connection (this *does* mean it completed).
-    /// Client-role (Connect()) only - a hosting instance's hostPeer_ stays null
-    /// forever; use HasPendingConnection()/ConnectedPeerCount() for the hosting role
-    /// (docs/directplay-design.md Decision 7).
-    bool HasPeer() const { return hostPeer_ != nullptr; }
-
     /// Number of peers this instance has assigned a DPID to via AssignPendingConnection()
-    /// (hosting role only). Test-only purpose, mirroring HasHost()/HasPeer().
+    /// (hosting role only). Test-only purpose, mirroring HasHost()/IsConnectedToHost().
     std::size_t ConnectedPeerCount() const { return connectedPeers_.size(); }
 
 private:

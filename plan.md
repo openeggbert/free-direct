@@ -1353,8 +1353,22 @@ session and receive an assigned player ID.
       DPOPEN_JOIN)` returning `DP_OK` - but does not yet assert DPID/session-descriptor agreement,
       since no join-request/accepted handshake exists yet (blocked on per-DPID-addressed `Send()`,
       Phase 10). Left unchecked - the full acceptance criterion isn't met.
-- [ ] Add a test for max-players rejection: a third loopback client joining a two-player-max
-      session receives a rejected outcome (a `DPERR_*` code, not `DP_OK`).
+- [x] Add a test for max-players rejection: a third loopback client joining a two-player-max
+      session receives a rejected outcome (a `DPERR_*` code, not `DP_OK`). **Done, after asking
+      the user** whether to add client-side rejection observability now (new scope) or leave it
+      blocked: `docs/directplay-design.md` Decision 13 adds `IDirectPlayTransport::
+      IsConnectedToHost()` (promoted from both backends' existing `HasHostConnection()`/`HasPeer()`
+      test-only accessors), wired into `DirectPlay2AImpl::Receive()`'s joining-role path - checked
+      only after the local message queue comes back empty, so it can never shadow a legitimately
+      queued self-sent message (Decision 12). **Done:**
+      `Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection` - a real `dwMaxPlayers = 2`
+      host and three real joining clients over loopback; the host's own `Receive()` call runs the
+      assignment/rejection loop (admits the first two, rejects the third); the third client's own
+      `Receive()` call returns `DPERR_NOCONNECTION` (the outcome the client actually observes -
+      there is still no join-rejected explanation packet, so "rejected for `dwMaxPlayers`" and "the
+      host disconnected for another reason" look identical today, per Decision 9's existing
+      caveat). **Verified**: 30/30 `tests/directplay_tests.cpp` suite passes; both CMake configs
+      (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has zero ENet/SDL identifiers.
 
 **Acceptance criteria:** the host/client-pair test and the max-players test both pass
 deterministically over loopback; no test depends on real wall-clock timing beyond a small,

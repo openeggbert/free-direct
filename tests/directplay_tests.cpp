@@ -277,6 +277,61 @@ void Test_OpenAsJoinWithHostPresent_Succeeds() {
     hostDp->Release();
 }
 
+// plan.md Phase 7: "Add a test for max-players rejection: a third loopback client joining a
+// two-player-max session receives a rejected outcome (a DPERR_* code, not DP_OK)."
+//
+// Reachable end-to-end now thanks to docs/directplay-design.md Decision 13
+// (IsConnectedToHost(), wired into DirectPlay2AImpl::Receive()): the host's own Receive()
+// call is what actually runs the DPID-assignment/rejection loop (Decision 6's polling
+// model - nothing happens until something calls Receive()), so the host must poll once
+// before the rejection is real. The rejected third client only observes DPERR_NOCONNECTION
+// on its own next Receive() call - Open() itself already returned DP_OK, since the
+// connection was merely pending, not yet rejected, at Open() time.
+void Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.dwMaxPlayers = 2;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    auto openClient = [](LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2) {
+        CHECK(DirectPlayCreate(nullptr, outDp, nullptr) == DP_OK);
+        CHECK((*outDp)->QueryInterface(IID_IDirectPlay2A, (void**)outDp2) == DP_OK);
+        DPSESSIONDESC2 desc{};
+        std::memset(&desc, 0, sizeof(desc));
+        desc.dwSize = sizeof(DPSESSIONDESC2);
+        CHECK((*outDp2)->Open(&desc, DPOPEN_JOIN) == DP_OK);
+    };
+
+    LPDIRECTPLAY dpA = nullptr, dpB = nullptr, dpC = nullptr;
+    LPDIRECTPLAY2A dp2A = nullptr, dp2B = nullptr, dp2C = nullptr;
+    openClient(&dpA, &dp2A);
+    openClient(&dpB, &dp2B);
+    openClient(&dpC, &dp2C);
+
+    // Drives the host's assignment/rejection loop for real - see comment above.
+    DPID from = 0, to = 0;
+    char buf[8];
+    DWORD size = sizeof(buf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DPERR_NOMESSAGES);
+
+    size = sizeof(buf);
+    CHECK(dp2C->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DPERR_NOCONNECTION);
+
+    dp2C->Release();
+    dpC->Release();
+    dp2B->Release();
+    dpB->Release();
+    dp2A->Release();
+    dpA->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 // plan.md Phase 6: "Add a test for invalid host parameters (e.g. dwMaxPlayers == 0, malformed
 // DPSESSIONDESC2.dwSize), asserting a meaningful DPERR_* rather than DP_OK."
 //
@@ -436,7 +491,7 @@ void Test_LoopbackConnect_FindsListeningHostAndQueuesPendingConnection() {
     LoopbackDirectPlayTransport client;
     CHECK(client.Connect("ignored", 20001));
     CHECK(host.HasPendingConnection());
-    CHECK(client.HasHostConnection());
+    CHECK(client.IsConnectedToHost());
 }
 
 void Test_LoopbackConnect_WithNoListeningHost_Fails() {
@@ -444,7 +499,7 @@ void Test_LoopbackConnect_WithNoListeningHost_Fails() {
 
     LoopbackDirectPlayTransport client;
     CHECK(!client.Connect("ignored", 20002));
-    CHECK(!client.HasHostConnection());
+    CHECK(!client.IsConnectedToHost());
 }
 
 void Test_LoopbackListen_OnAlreadyRegisteredPort_Fails() {
@@ -479,7 +534,7 @@ void Test_LoopbackRejectPendingConnection_PopsPendingAndFailsWhenEmpty() {
     CHECK(client.Connect("ignored", 20005));
 
     CHECK(host.RejectPendingConnection());
-    CHECK(!client.HasHostConnection());
+    CHECK(!client.IsConnectedToHost());
     CHECK(!host.RejectPendingConnection()); // nothing left pending
 }
 
@@ -534,9 +589,9 @@ void Test_LoopbackThirdClientOverTwoPlayerCap_IsRejected() {
 
     CHECK(host.RejectPendingConnection()); // clientC, the third, is turned away
     CHECK(!host.HasPendingConnection());
-    CHECK(!clientC.HasHostConnection());
-    CHECK(clientA.HasHostConnection());
-    CHECK(clientB.HasHostConnection());
+    CHECK(!clientC.IsConnectedToHost());
+    CHECK(clientA.IsConnectedToHost());
+    CHECK(clientB.IsConnectedToHost());
 }
 
 void Test_LoopbackHostShutdown_ClearsPeersHostConnection() {
@@ -552,8 +607,8 @@ void Test_LoopbackHostShutdown_ClearsPeersHostConnection() {
 
     host.Shutdown();
 
-    CHECK(!connected.HasHostConnection());
-    CHECK(!pending.HasHostConnection());
+    CHECK(!connected.IsConnectedToHost());
+    CHECK(!pending.IsConnectedToHost());
 }
 
 void Test_LoopbackShutdown_UnregistersPortForReuse() {
@@ -675,6 +730,7 @@ int main() {
     Test_OpenAsHostOverLoopback_ReturnsOk();
     Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions();
     Test_OpenAsJoinWithHostPresent_Succeeds();
+    Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection();
     Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();

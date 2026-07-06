@@ -116,6 +116,18 @@ public:
      */
     virtual bool TakeDisconnectedPeer(DPID* outId) = 0;
 
+    /**
+     * @brief Joining-role counterpart to `HasDisconnectedPeer()`/`TakeDisconnectedPeer()`:
+     * true if this instance's own `Connect()` call is still considered connected to the
+     * host it reached, false once that connection is gone (the host rejected it via
+     * `RejectPendingConnection()`, the host disconnected/shut down, or `Connect()` was
+     * never called at all). A hosting-role instance always returns `false` here - "am I
+     * connected to a host" does not apply to a hosting instance itself; use
+     * `HasPendingConnection()`/`ConnectedPeerCount()`-style backend accessors for the
+     * hosting role's own peers instead (`docs/directplay-design.md` Decision 13).
+     */
+    virtual bool IsConnectedToHost() const = 0;
+
     /** @brief Tears down all connections and releases backend resources. */
     virtual void Shutdown() = 0;
 };

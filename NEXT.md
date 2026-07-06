@@ -12,16 +12,17 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   DirectPlay usage).
 - **Current development phase**: `plan.md` Phases 0-5 complete. Phase 6 ("Session hosting") is
   essentially done — its only remaining tasks are blocked on later phases (Section 8). Phase 7
-  ("Session joining") is underway: a real loopback host + client can now connect end-to-end
+  ("Session joining") is well underway: a real loopback host + client can now connect end-to-end
   (`Open(..., DPOPEN_CREATE)` calls `Listen()`, `Open(..., DPOPEN_JOIN)` calls `Connect()`,
-  Decisions 10-12) — but this is connection-establishment only, not a completed DirectPlay join:
-  no DPID is assigned to the joining side and no session descriptor is exchanged, since the
-  join-request/accepted wire handshake is blocked on per-DPID-addressed `Send()` (Phase 10). The
-  ENet side of "resolve a host address" for joining is also still undecided. Phases 8 onward
-  (enumeration, player management, real Send/Receive routing, error semantics, hardening, CI,
-  docs) have not started.
+  Decisions 10-12), `dwMaxPlayers` cap enforcement works over loopback with the rejected client
+  observing `DPERR_NOCONNECTION` on its own next `Receive()` (Decision 13) — but this is still
+  connection-establishment only, not a completed DirectPlay join: no DPID is assigned to the
+  joining side and no session descriptor is exchanged, since the join-request/accepted wire
+  handshake is blocked on per-DPID-addressed `Send()` (Phase 10). The ENet side of "resolve a host
+  address" for joining is also still undecided. Phases 8 onward (enumeration, player management,
+  real Send/Receive routing, error semantics, hardening, CI, docs) have not started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
-  1-12):
+  1-13):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -50,7 +51,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 29/29 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 30/30 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -86,7 +87,22 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — Resolved the self-send-vs-hosting conflict (Decision 12), asked of
+- (uncommitted, this session) — Added client-side rejection/disconnection observability (Decision
+  13), asked of and confirmed by the user: promoted `LoopbackDirectPlayTransport`'s and
+  `EnetDirectPlayTransport`'s existing test-only `HasHostConnection()`/`HasPeer()` accessors into a
+  real `IDirectPlayTransport::IsConnectedToHost()` method (both backends' implementation is
+  unchanged - `hostPeer_ != nullptr` - this is a rename/promotion, not new logic).
+  `DirectPlay2AImpl::Receive()`'s joining-role path now checks it, but only after the local
+  message queue comes back `DPERR_NOMESSAGES` - preserving Decision 12's guarantee that a
+  self-sent message is always deliverable regardless of host-connection state; only once the
+  queue is genuinely empty does a lost host connection surface as `DPERR_NOCONNECTION`. This
+  closes `plan.md` Phase 7's last remaining reachable task: `dwMaxPlayers` cap enforcement
+  (Decision 9's assignment/rejection loop, already backend-agnostic) now works over loopback
+  end-to-end, and the rejected client can actually observe it. Verified: 30/30
+  `tests/directplay_tests.cpp` suite passes (new
+  `Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection`); both CMake configs
+  (`ENET=OFF`/`ON`) build clean; `include/dplay.h` still has zero ENet/SDL identifiers.
+- `0ad0833` — Resolved the self-send-vs-hosting conflict (Decision 12), asked of
   and confirmed by the user: `DirectPlay2AImpl::Send()`'s self-send branch (`idFrom == idTo`) no
   longer routes through `session_.transport->Send()`/`Receive()` at all - it enqueues a
   `DirectPlayMessagePacket` directly into `session_.messageQueue` instead. Reasoning: sending a
@@ -191,12 +207,13 @@ Full narrative detail and rationale for each decision lives in `docs/directplay-
 
 ## 4. Current blocker / main problem
 
-**No build- or test-breaking blocker exists right now** — everything builds and 29/29 tests pass.
-The self-send-vs-hosting conflict flagged in the previous session is resolved (Decision 12): a real
-loopback host + client can connect end-to-end. What remains is not a blocker but a known scope gap:
-the join is connection-only, with no DPID assignment or session-descriptor exchange, since that
-needs the join-request/accepted wire handshake, which is blocked on per-DPID-addressed `Send()`
-(`plan.md` Phase 10, not started).
+**No build- or test-breaking blocker exists right now** — everything builds and 30/30 tests pass.
+The self-send-vs-hosting conflict is resolved (Decision 12), and client-side rejection
+observability now works too (Decision 13): a real loopback host + client can connect end-to-end,
+and `dwMaxPlayers` cap rejection is observable by the rejected client. What remains is not a
+blocker but a known scope gap: the join is connection-only, with no DPID assignment or
+session-descriptor exchange, since that needs the join-request/accepted wire handshake, which is
+blocked on per-DPID-addressed `Send()` (`plan.md` Phase 10, not started).
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -321,34 +338,21 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-A real loopback host + client can now connect end-to-end (Section 3/4). `plan.md` Phase 7's
-remaining tasks are the join-request/accepted wire handshake itself, which stays blocked on
-per-DPID-addressed `Send()` (Phase 10, not started) - see Section 9. One task, however, looks
-newly reachable and is worth investigating first:
+**`plan.md` Phase 7 has no more reachable tasks.** Every remaining Phase 7 checkbox (send a
+join-request packet, receive a join-accepted packet, receive/store the host-assigned DPID, store
+the session descriptor, handle a join timeout, the ENet side of `DPERR_NOSESSIONS`/`DPERR_TIMEOUT`,
+the full "successful join" DPID/descriptor agreement) is blocked on the join-request/accepted wire
+handshake, which itself is blocked on per-DPID-addressed `Send()` (`plan.md` Phase 10, not started).
 
-1. **Investigate: is "Add a test for max-players rejection" actually reachable now, or does it hit
-   a new gap?** `DirectPlay2AImpl::Receive()`'s DPID-assignment/rejection loop
-   (`src/directplay/DirectPlay.cpp` lines ~232-260) is backend-agnostic - it already calls
-   `session_.transport->HasPendingConnection()`/`AssignPendingConnection()`/
-   `RejectPendingConnection()` through the `IDirectPlayTransport` interface, not gated by
-   `FREE_DIRECT_ENABLE_ENET` - and `LoopbackDirectPlayTransport` now implements all three for real
-   (Decision 10). So a host with `dwMaxPlayers = 2` and three loopback clients connected should
-   already have its own `Receive()` call assign DPIDs to the first two and reject the third.
-   **But**: nothing on the *client* side ever calls `HasDisconnectedPeer()`-equivalent bookkeeping
-   for a joining-role transport - `Receive()`'s disconnect/assignment logic is gated on
-   `session_.isHost` only. A rejected client's own `Open(..., DPOPEN_JOIN)` call already returned
-   `DP_OK` (the connection was merely pending, not yet rejected, at `Open()` time - rejection only
-   happens later, when the *host* calls `Receive()`), and there is no public API today for a
-   joining session to observe "you were rejected" at all. This may mean the literal acceptance
-   criterion ("a third loopback client... receives a rejected outcome, a `DPERR_*` code, not
-   `DP_OK`") isn't satisfiable yet without adding that observability - which would be new scope,
-   not just a test. Confirm this finding (don't assume it without checking the code again fresh),
-   then ask the user how to proceed: add client-side rejection observability now (new design
-   question), or leave this task blocked alongside the wire-handshake ones until Phase 9/10.
-
-Only one `plan.md` Phase 6 task remains, and it is still blocked (unchanged from before): "Add a
-test for closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md`
+Only one `plan.md` Phase 6 task remains, and it is still blocked too (unchanged from before): "Add
+a test for closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md`
 Phase 8, not started).
+
+**This means the next task is a real phase-level scope decision, same as the Phase 6→7 handoff
+earlier**: ask the user which phase to pursue next rather than assuming. Candidates, in
+`plan.md`'s own order: Phase 8 (session enumeration - real `EnumSessions()`, would also unblock
+Phase 6's last task), Phase 9 (player management), Phase 10 (Send/Receive networking - would
+unblock the rest of Phase 7). Do not pick unilaterally.
 
 ## 9. Do not do yet
 
@@ -366,9 +370,8 @@ Phase 8, not started).
   design decision, not something to revisit incidentally while wiring `Open(DPOPEN_JOIN)`.
 - Do not decide the ENet backend's "how does a joining call resolve a host address" question
   unilaterally — ask the user first, same as Decision 5 did for the hosting side's port choice.
-- Do not add client-side rejection observability (a joining session learning it was turned away
-  over `dwMaxPlayers`) without asking the user first — see Section 8's open investigation; it is
-  new scope, not something to add as a quiet side effect of another task.
+- Do not pick which `plan.md` phase to work on next (8, 9, or 10) unilaterally — Phase 7 has no
+  more reachable tasks (Section 8); ask the user, same as the Phase 6→7 handoff did.
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15, deliberately
   deferred until more of Phases 5-11 exist to test).
 - Do not add a run-time backend-selection mechanism for `Open()`'s loopback-vs-ENet choice —
@@ -383,21 +386,17 @@ Phase 8, not started).
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 8 (the next task). A real loopback host + client can now
-connect end-to-end (Open(DPOPEN_CREATE) calls Listen(), Open(DPOPEN_JOIN) calls Connect(),
-Decisions 10-12) - this is connection-establishment only, not a completed DirectPlay join (no
-DPID/session-descriptor exchange, blocked on Phase 10). Investigate Section 8's open question
-first: DirectPlay2AImpl::Receive()'s DPID-assignment/rejection loop is backend-agnostic and
-already works against LoopbackDirectPlayTransport, so a max-players-rejection test might mostly
-work today - EXCEPT nothing lets a joining session observe that it was rejected (Receive()'s
-disconnect bookkeeping is gated on session_.isHost only). Confirm this by re-reading the current
-code (don't trust this summary blindly - re-verify), then ask the user (AskUserQuestion) whether
-to add client-side rejection observability now or leave the "max-players rejection" test blocked
-until later. Do not decide this unilaterally - it's new scope. Do not refactor unrelated code, do
-not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Do not
-implement the join-request/join-accepted wire handshake yet (Section 9 - blocked on per-DPID-
-addressed Send(), Phase 10). Make one small, verified improvement - implement just that one task.
-Run the relevant build/test command from Section 7 and confirm it actually passes before
-considering the task done. Then update NEXT.md to reflect the new state (Sections 2, 3, 8, and
-4/5 if anything changed there).
+Read NEXT.md first, especially Section 8. plan.md Phase 7 has no more reachable tasks - a real
+loopback host + client connect end-to-end, self-send works independently of connection state
+(Decision 12), and dwMaxPlayers cap rejection is observable by the rejected client
+(Decision 13). Everything left in Phase 7 needs the join-request/accepted wire handshake, which
+needs per-DPID-addressed Send() (Phase 10, not started). This is a phase-level scope decision,
+same as the earlier Phase 6->7 handoff: ask the user (AskUserQuestion) which phase to pursue next
+- Phase 8 (session enumeration), Phase 9 (player management), or Phase 10 (Send/Receive
+networking, which would unblock the rest of Phase 7) - rather than picking unilaterally. Do not
+refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
+../planetblupi. Make one small, verified improvement once a phase is chosen - implement just one
+atomic task from it. Run the relevant build/test command from Section 7 and confirm it actually
+passes before considering the task done. Then update NEXT.md to reflect the new state (Sections
+2, 3, 8, and 4/5 if anything changed there).
 ```
