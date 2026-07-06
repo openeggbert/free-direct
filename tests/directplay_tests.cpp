@@ -189,6 +189,31 @@ void Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue() {
     dp->Release();
 }
 
+// plan.md Phase 6: "Add a test for host session creation over loopback, asserting
+// Open(..., DPOPEN_CREATE) returns DP_OK and the session reports itself as host."
+//
+// IDirectPlay2A exposes no public way to query "is this session the host" - there is no
+// getter, and DPOPEN_JOIN/DPOPEN_OPENSESSION currently also return DP_OK (Phase 7's real
+// Connect() doesn't exist yet, so nothing observably distinguishes host from join today).
+// Adding such a query would be new public API surface with no free-eggbert/planetblupi call
+// site behind it - CLAUDE.md requires asking the user before adding that speculatively. This
+// test therefore only asserts the half that genuinely is observable through the real public
+// interface: Open(..., DPOPEN_CREATE) succeeds over the default (loopback) transport.
+void Test_OpenAsHostOverLoopback_ReturnsOk() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DP_OK);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // plan.md Phase 4/9: originally "asserting a non-zero DPID is returned and is unique" -
 // updated per docs/directplay-design.md Decision 3, now implemented: the host's first
 // local player gets DPID 0 (not an error, the correct, expected value, breaking with
@@ -397,6 +422,7 @@ int main() {
     Test_ReceiveSuccessfulCopy_MatchesQueuedPacket();
     Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid();
     Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue();
+    Test_OpenAsHostOverLoopback_ReturnsOk();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();

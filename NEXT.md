@@ -43,7 +43,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 14/14 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 15/15 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -79,6 +79,16 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
+- (uncommitted, this session) — Added `Test_OpenAsHostOverLoopback_ReturnsOk`
+  (`tests/directplay_tests.cpp`), closing `plan.md` Phase 6's "Add a test for host session
+  creation over loopback" task. Found and documented, rather than worked around, that
+  `IDirectPlay2A` has no public way to observe "is this session the host" today (`Open()` returns
+  `DP_OK` for `DPOPEN_JOIN`/`DPOPEN_OPENSESSION` too, since Phase 7's real `Connect()` doesn't
+  exist yet) — the test asserts only the observable half (`Open(..., DPOPEN_CREATE)` succeeds over
+  loopback), and `plan.md`'s checkbox annotation spells out why a host-observing query wasn't
+  added (would be new public API surface with no real-game call site, requiring the user's sign-off
+  first per `CLAUDE.md`). Verified: 15/15 `tests/directplay_tests.cpp` suite passes; both CMake
+  configs (`ENET=OFF`/`ON`) build clean; `include/dplay.h` still has zero ENet/SDL identifiers.
 - `52616cf` — Enforce `dwMaxPlayers` by rejecting over-cap pending connections. New
   `IDirectPlayTransport::RejectPendingConnection()` (mirrors `AssignPendingConnection(DPID)`, no
   DPID parameter — nothing to assign) pops the oldest pending ENet peer and gracefully
@@ -240,17 +250,7 @@ bug (see Section 4).
 
 Remaining `plan.md` Phase 6 tasks, in order:
 
-1. **Add a test for host session creation over loopback**, asserting `Open(..., DPOPEN_CREATE)`
-   returns `DP_OK` and the session reports itself as host.
-   - Files: `tests/directplay_tests.cpp`.
-   - First check whether `IDirectPlay2A` exposes *any* way to observe "is this session the host"
-     from the public interface — if not, this may need to stay a weaker assertion (`DP_OK` only)
-     or a whitebox check; be honest in the test/`plan.md` about which it actually verifies rather
-     than asserting something the public API can't observe.
-   - Verify: rebuild/run via the command in Section 7; confirm the new test plus the existing 14
-     all pass.
-
-2. **Add a test for invalid host parameters** (e.g. malformed `DPSESSIONDESC2.dwSize`), asserting
+1. **Add a test for invalid host parameters** (e.g. malformed `DPSESSIONDESC2.dwSize`), asserting
    a meaningful `DPERR_*` rather than `DP_OK`.
    - Files: `tests/directplay_tests.cpp`, possibly `DirectPlay.cpp`'s `Open()` validation if a gap
      is found.
@@ -259,7 +259,7 @@ Remaining `plan.md` Phase 6 tasks, in order:
      already-shipped, correct behavior.
    - Verify: same as above.
 
-3. **Add a test for closing a host session**, asserting a subsequent `EnumSessions` from another
+2. **Add a test for closing a host session**, asserting a subsequent `EnumSessions` from another
    loopback peer no longer finds it.
    - Blocked on real content: `EnumSessions()` doesn't track sessions yet (`plan.md` Phase 8, not
      started). Do this task after Phase 8's basic discovery exists, or it will only be testing "an

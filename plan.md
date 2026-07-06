@@ -1237,8 +1237,19 @@ whichever transport is configured.
       has no player-count-observing method in this narrow subset. Also re-verified both CMake build
       configurations (`ENET=OFF`/`ON`) end-to-end, the 14/14 `tests/directplay_tests.cpp` suite
       (unaffected), and that `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Add a test for host session creation over loopback, asserting `Open(..., DPOPEN_CREATE)`
-      returns `DP_OK` and the session reports itself as host.
+- [x] Add a test for host session creation over loopback, asserting `Open(..., DPOPEN_CREATE)`
+      returns `DP_OK` and the session reports itself as host. **Done, with a caveat found while
+      implementing:** `IDirectPlay2A` exposes no public way to query "is this session the host" -
+      there is no getter, and `DPOPEN_JOIN`/`DPOPEN_OPENSESSION` currently also return `DP_OK`
+      (Phase 7's real `Connect()` doesn't exist yet, so nothing observably distinguishes host from
+      join today). Adding such a query would be new public API surface with no
+      `free-eggbert`/`planetblupi` call site behind it, which `CLAUDE.md` requires asking the user
+      about first rather than adding speculatively - not done here. `Test_OpenAsHostOverLoopback_
+      ReturnsOk` (`tests/directplay_tests.cpp`) therefore only asserts the half that genuinely is
+      observable through the real public interface: `Open(..., DPOPEN_CREATE)` succeeds over the
+      default loopback transport. **Verified**: 15/15 `tests/directplay_tests.cpp` suite passes;
+      both CMake configs (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has zero ENet/SDL
+      identifiers.
 - [ ] Add a test for invalid host parameters (e.g. `dwMaxPlayers == 0`, malformed
       `DPSESSIONDESC2.dwSize`), asserting a meaningful `DPERR_*` rather than `DP_OK`.
 - [ ] Add a test for closing a host session, asserting a subsequent `EnumSessions` from another
