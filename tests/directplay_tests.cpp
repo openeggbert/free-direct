@@ -499,6 +499,79 @@ void Test_SendOversizedPayloadToRemotePlayer_ReturnsSendTooBig() {
     hostDp->Release();
 }
 
+// plan.md Phase 7 (docs/directplay-design.md Decision 16): the join-request/join-accepted
+// handshake. The client's Open(DPOPEN_JOIN) already sent a join-request (fire-and-forget);
+// the host's own Receive() call assigns a DPID (as before) and now also sends a real
+// join-accepted packet back; the client's own Receive() call drains and adopts it. Proven via
+// the client's own self-send idFrom validation (Decision 16 also added this check): only a
+// truly-adopted DPID passes it, which the test could not observe any other way (no public
+// getter exists for a session's own DPID).
+void Test_JoinHandshake_ClientAdoptsHostAssignedDpid() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    // Host processes the join-request (dropped, unused) and assigns + sends join-accepted.
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    const DPID assignedClientId = 1;
+
+    // Client processes the join-accepted packet (adopts assignedClientId as its own).
+    pollSize = sizeof(pollBuf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+
+    // Proof of adoption: self-send with the adopted id succeeds; an unadopted id doesn't.
+    const char selfMsg[] = "self";
+    CHECK(clientDp2->Send(assignedClientId, assignedClientId, DPSEND_GUARANTEED, (LPVOID)selfMsg,
+                           sizeof(selfMsg)) == DP_OK);
+    CHECK(clientDp2->Send(999, 999, DPSEND_GUARANTEED, (LPVOID)selfMsg, sizeof(selfMsg)) ==
+          DPERR_INVALIDPLAYER);
+
+    // Drain the self-sent message (queued ahead of anything else, FIFO) before checking the
+    // host's separately-sent message below.
+    char selfBuf[32] = {};
+    DWORD selfSize = sizeof(selfBuf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, selfBuf, &selfSize) == DP_OK);
+    CHECK(selfSize == sizeof(selfMsg));
+    CHECK(std::memcmp(selfBuf, selfMsg, sizeof(selfMsg)) == 0);
+
+    // The host can still reach the client by the same id it assigned.
+    const char msg[] = "hello";
+    CHECK(hostDp2->Send(hostPlayer, assignedClientId, DPSEND_GUARANTEED, (LPVOID)msg,
+                         sizeof(msg)) == DP_OK);
+    char buf[32] = {};
+    DWORD size = sizeof(buf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(size == sizeof(msg));
+    CHECK(from == hostPlayer);
+    CHECK(to == assignedClientId);
+    CHECK(std::memcmp(buf, msg, sizeof(msg)) == 0);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 // plan.md Phase 6: "Add a test for invalid host parameters (e.g. dwMaxPlayers == 0, malformed
 // DPSESSIONDESC2.dwSize), asserting a meaningful DPERR_* rather than DP_OK."
 //
@@ -938,6 +1011,7 @@ int main() {
     Test_SendFromUnknownLocalPlayer_ReturnsInvalidPlayer();
     Test_JoiningRoleSendToNonSelf_ReturnsInvalidPlayer();
     Test_SendOversizedPayloadToRemotePlayer_ReturnsSendTooBig();
+    Test_JoinHandshake_ClientAdoptsHostAssignedDpid();
     Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();

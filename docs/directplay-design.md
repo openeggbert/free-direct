@@ -1255,3 +1255,118 @@ any other peer at all); broadcast delivery for `idTo == 0`/`DPID_ALLPLAYERS` (in
 the DPID-0-ambiguity finding above); packet-ordering and reliable-delivery-focused tests; the ENet
 backend's receive-side buffering (still blocked since Decision 14, `Service()` still discards
 `ENET_EVENT_TYPE_RECEIVE`).
+
+---
+
+## Decision 16: the join-request/join-accepted handshake, over loopback, asynchronous (not Open()-blocking)
+
+**Status:** Decided and implemented. The synchronous-vs-asynchronous question was asked of, and
+confirmed by, the user directly; the remaining mechanics (packet shape, where DPID adoption
+happens, what "session descriptor" means here) followed from that answer and from Decisions
+10-15's already-established patterns, not from fresh questions.
+
+### The question
+
+`plan.md` Phase 7's remaining tasks - send a join-request, receive a join-accepted packet and the
+host-assigned DPID, store the session descriptor, handle a join timeout - all became reachable
+once Decision 15 gave `Send()`/`Receive()` real delivery. The central question: does
+`Open(..., DPOPEN_JOIN)` block internally until a join-accepted/rejected packet arrives (matching
+real DirectPlay's synchronous `Open()` contract, and `plan.md`'s own "handle a join timeout: fail
+`Open`..." wording), or does it return immediately once the raw connection exists, with the actual
+join outcome discovered later via `Receive()` polling (matching this project's already-established
+Decision 6 model)?
+
+### The finding that resolved it
+
+`docs/directplay-callsite-audit.md` (via `NEXT.md`'s own already-recorded finding) confirms
+`../free-eggbert`'s own `Open(DPOPEN_JOIN)`/`CreateSession`/`JoinSession` call path is entirely
+**dead code** - `NetCreate`/`NetEnumSessions`/`JoinSession`/`CreateSession`/`NetStartPlay` have zero
+callers anywhere in the game's current source. So there is no real, observed call-site behavior to
+match for `Open()`'s blocking contract specifically - this is FreeDirect-internal mechanism
+territory, like Decisions 4/5/6.
+
+Separately, and decisively for the loopback backend regardless of the above: a blocking `Open()`
+that waits for the *host* to independently call its own `Receive()` (per Decision 6's polling
+model, nothing happens on a hosted session until something calls `Receive()` on it) cannot work in
+a single-threaded test process. There is no second thread to service the host while the client
+"blocks" - the host object and the client object are both driven by the same call stack in every
+committed test. A blocking `Open()` would either hang forever in that setup or require some
+mechanism for `Open()` to reach across and drive the *other* object's `Receive()` itself, which
+would break the transport abstraction (a joining transport instance has no business calling
+methods on the specific `DirectPlay2AImpl` that happens to own the host side).
+
+### Decision
+
+Asynchronous, matching Decision 6's polling model exactly. `Open(..., DPOPEN_JOIN)`:
+1. Calls `Connect()` (Decision 11) - unchanged.
+2. Sends a `DirectPlayWirePacketType::Join` packet to the host, fire-and-forget, via
+   `session_.transport->Send(0, ...)` directly (not through the public, validated `Send()` API -
+   this session has no DPID yet, which is exactly what the response will provide, so there is no
+   `idFrom` to validate against).
+3. Returns `DP_OK` immediately - the same return value as before this decision. No `DPERR_TIMEOUT`
+   is produced by this backend, mirroring Decision 10/11's already-established position that
+   loopback's synchronous `Connect()` needs no timeout concept at all.
+
+The host's existing DPID-assignment loop (Decision 7, inside `Receive()`) is **unchanged in its
+trigger condition** - it still assigns DPIDs to any pending connection, regardless of whether a
+`Join` packet was ever received from it. (The `Join` packet's practical function today is
+therefore mostly protocol-shape completeness/future-proofing for a real network backend, where
+connection-level accept and DirectPlay-level join are more likely to genuinely need to be separate
+events - loopback's connection lifecycle is already fully known out-of-band via Decision 10's
+direct instance-pointer tracking, with or without any wire message.) Immediately after each
+successful `AssignPendingConnection()`, the host now additionally sends a
+`DirectPlayWirePacketType::JoinAccept` packet - `applicationGuid`/`sessionGuid` from the header,
+`idTo` set to the newly-assigned DPID, no payload - addressed via `transport->Send(newId, ...)`,
+which now works because `connectedPeers_[newId]` exists (Decision 14).
+
+`Receive()`'s existing drain loop (Decision 15) gains a `switch` on `header->type`: `Data` behaves
+exactly as before (enqueued to `session_.messageQueue`); `JoinAccept`, for a joining role only,
+adopts the assigned DPID into `session_.localPlayerIds` (if not already present) and bumps
+`session_.nextPlayerId` past it (avoiding a future local `CreatePlayer()` collision with the
+host-given identity), and overwrites `session_.applicationGuid`/`sessionInstanceGuid` with the
+header's values - the closest match, given `DirectPlaySession` deliberately never retains a raw
+`DPSESSIONDESC2` (see its own class comment), to "store the session descriptor received from the
+host." `dwMaxPlayers`/session name/password are **not** synced - no current consumer needs them on
+the joining side, and inventing storage for them now would be exactly the speculative completeness
+`CLAUDE.md` warns against. `Join` (host-side, ignored - see above), `JoinReject`, `Discovery`,
+`DiscoveryResponse` fall through a `default:` case and are silently consumed without effect - none
+are implemented yet.
+
+**A latent validation gap found and closed in passing:** the self-send path (`idTo == idFrom`,
+Decision 12) never validated `idFrom` against `session_.localPlayerIds` at all, unlike the unicast
+path Decision 15 just added - an inconsistency, not a deliberate choice. Fixed here (`Send()`
+returns `DPERR_INVALIDPLAYER` for an unregistered `idFrom` on the self-send path too), which
+incidentally also makes DPID adoption observable in a committed test: since `IDirectPlay2A` has no
+public getter for a session's own DPID, the test proves adoption happened by showing self-send with
+the host-assigned id now succeeds specifically because it is genuinely in `localPlayerIds` - not a
+free pass that would have succeeded regardless.
+
+**Deliberately still out of scope**, consistent with Decision 9's existing note: sending a real
+`JoinReject` explanation packet when a pending connection is turned away for being over
+`dwMaxPlayers`. A rejected `pendingPeers_` entry is, by definition, never assigned a DPID
+(`RejectPendingConnection()` pops it without ever calling `AssignPendingConnection()`), and
+`Send()`'s addressing (Decision 14) only ever reaches `connectedPeers_` entries - so there is
+structurally no DPID to address a `JoinReject` packet to, regardless of anything decided here. The
+same is true for GUID-mismatch rejection, which additionally isn't validated anywhere yet at all
+(`Open()` never compares the joining caller's `guidApplication` against the host's).
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`: `Open()`'s joining branch sends a `Join` packet after a successful
+`Connect()`; the assignment loop in `Receive()` sends a `JoinAccept` packet per newly-assigned
+peer; `Receive()`'s drain loop now switches on packet type; `Send()`'s self-send branch validates
+`idFrom`. **Verified** with a new committed end-to-end test (via the real public `IDirectPlay2A`
+API, not whitebox) in `tests/directplay_tests.cpp` (38/38 total passing),
+`Test_JoinHandshake_ClientAdoptsHostAssignedDpid`: a real host + a real joining client; the host's
+own `Receive()` call processes the join-request (dropped) and sends `JoinAccept`; the client's own
+`Receive()` call adopts the assigned DPID; the client's self-send with that id succeeds while an
+unadopted id fails with `DPERR_INVALIDPLAYER` (proving adoption); the host can still reach the
+client by the same id it assigned, exactly as Decision 15 already demonstrated. Also re-verified
+both CMake build configurations (`ENET=OFF`/`ON`) end-to-end, that every pre-existing test still
+passes unaffected, and that `include/dplay.h` has zero ENet/SDL identifiers.
+
+**Explicitly out of scope, left for later work:** `JoinReject` delivery (structurally blocked, see
+above, until pending-peer addressing exists - a bigger change than this decision's scope);
+GUID-mismatch validation; host-side routing/forwarding and broadcast (`plan.md` Phase 10's own
+remaining tasks, unaffected by this decision); the ENet backend's side of any of this (its
+receive-side buffering remains unimplemented, Decision 14).

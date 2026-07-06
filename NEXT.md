@@ -11,23 +11,23 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   DirectPlay) and `../planetblupi` (*Planet Blupi* — DirectDraw + DirectSound only; confirmed zero
   DirectPlay usage).
 - **Current development phase**: `plan.md` Phases 0-5 complete. Phase 6 ("Session hosting") is
-  essentially done — its only remaining tasks are blocked on later phases (Section 8). Phase 7
-  ("Session joining") got as far as it can go without more of Phase 10: a real loopback host +
-  client connect end-to-end, `dwMaxPlayers` cap enforcement works with client-side rejection
-  observability (Decisions 10-13) — but the join is connection-establishment only (no DPID/session-
-  descriptor exchange), since that needs the join-request/accepted wire handshake. Phase 10
-  ("Send/Receive networking") now has real, working, end-to-end unicast delivery over loopback:
-  a local player can `Send()` to one specific real remote player and the recipient's `Receive()`
-  gets the exact payload (Decisions 14-15) — but **host role and loopback only**: a joining role
-  cannot yet address any specific remote player (it has no way to learn any remote DPID before the
-  join handshake exists), host-side routing/forwarding to a non-host recipient doesn't exist, and
-  broadcast (`idTo == 0`) isn't implemented (Decision 15 flags a real, unresolved ambiguity there -
-  DPID `0` is both a valid real player ID, per Decision 3, and `free-eggbert`'s own broadcast
+  essentially done — its only remaining reachable task is blocked on Phase 8 (Section 8); sending a
+  real join-accepted packet is now done too (Decision 16), leaving only the structurally-blocked
+  join-rejected-explanation task (see Section 5). **Phase 7 ("Session joining") is essentially
+  complete over loopback**: a real host + joining client connect, exchange a join-request/
+  join-accepted handshake, and the client adopts its host-assigned DPID (Decisions 10-16) — only
+  the ENet side (host address resolution, join timeout semantics) and full `DPSESSIONDESC2` sync
+  (today only two GUID fields) remain open. Phase 10 ("Send/Receive networking") has real,
+  end-to-end unicast delivery over loopback, host role only: a local player can `Send()` to one
+  specific real remote player and the recipient's `Receive()` gets the exact payload
+  (Decisions 14-15) — host-side routing/forwarding and broadcast (`idTo == 0`) remain unimplemented,
+  and broadcast specifically has a real, unresolved ambiguity flagged for whoever implements it
+  next (DPID `0` is both a valid real player ID, per Decision 3, and `free-eggbert`'s own broadcast
   convention). The ENet backend's receive-side buffering also remains unimplemented. Phases 8, 9,
   11 onward (enumeration, player management, error semantics, hardening, CI, docs) have not
   started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
-  1-15):
+  1-16):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -56,7 +56,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 37/37 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 38/38 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -92,7 +92,30 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — `plan.md` Phase 10: wired `DirectPlay2AImpl::Send()`/`Receive()`
+- (uncommitted, this session) — `plan.md` Phase 7: implemented the join-request/join-accepted
+  handshake (`docs/directplay-design.md` Decision 16). Asked the user first whether `Open(...,
+  DPOPEN_JOIN)` should block internally waiting for the accept/reject (matching real DirectPlay),
+  or return immediately with the join outcome discovered later via `Receive()` polling (matching
+  this project's Decision 6 model) - confirmed asynchronous, partly because a blocking `Open()`
+  cannot work over loopback in a single-threaded test process anyway (nothing would ever drive the
+  host's own `Receive()` call while the client "blocks"). `Open()`'s joining branch now sends a
+  `Join` packet fire-and-forget after `Connect()` succeeds; the host's existing DPID-assignment
+  loop (unchanged trigger condition) now also sends a `JoinAccept` packet per newly-assigned peer;
+  `Receive()`'s drain loop switches on packet type - `JoinAccept` (joining role only) adopts the
+  assigned DPID into `localPlayerIds` and overwrites `applicationGuid`/`sessionInstanceGuid` from
+  the header (the closest match to "session descriptor" `DirectPlaySession`'s storage model
+  supports); `Join`/`JoinReject`/`Discovery*` are consumed and ignored (not implemented). Also
+  closed a latent gap found in passing: the self-send path never validated `idFrom` against
+  `localPlayerIds` at all (unlike the unicast path) - fixed, which incidentally makes DPID adoption
+  observable in a test (no public getter exists for a session's own DPID otherwise).
+  **Still structurally blocked, confirmed again while implementing**: a real `JoinReject`
+  explanation packet for an over-`dwMaxPlayers` rejection - a rejected pending peer is never
+  assigned a DPID, and addressed `Send()` only reaches assigned peers, so there is nothing to
+  address such a packet to regardless of what this decision implements. Verified: 38/38
+  `tests/directplay_tests.cpp` suite passes (new `Test_JoinHandshake_ClientAdoptsHostAssignedDpid`,
+  via the real public API); both CMake configs (`ENET=OFF`/`ON`) build clean; every pre-existing
+  test still passes unaffected; `include/dplay.h` still has zero ENet/SDL identifiers.
+- `a5757bc` — `plan.md` Phase 10: wired `DirectPlay2AImpl::Send()`/`Receive()`
   (`DirectPlay.cpp`) to Decision 14's transport capability (`docs/directplay-design.md`
   Decision 15) - the direct, already-scoped continuation of the previous commit, not a fresh user
   question. `Send()` for `idTo != idFrom` now validates `idFrom` is local and `idTo` is an
@@ -253,12 +276,13 @@ Full narrative detail and rationale for each decision lives in `docs/directplay-
 
 ## 4. Current blocker / main problem
 
-**No build- or test-breaking blocker exists right now** — everything builds and 37/37 tests pass.
-Real unicast delivery works end-to-end over loopback for the host role (Decisions 14-15). What
-remains is scope, not a blocker: host-side routing/forwarding (a joining peer reaching another
-peer through the host) and broadcast (`idTo == 0`) are both unimplemented, and broadcast in
-particular has a real, flagged-but-unresolved semantic question waiting (see Section 5/8) - DPID
-`0` is both a real player ID (Decision 3) and `free-eggbert`'s own broadcast convention.
+**No build- or test-breaking blocker exists right now** — everything builds and 38/38 tests pass.
+The join-request/join-accepted handshake now works end-to-end over loopback (Decision 16) - a
+joining client genuinely adopts its host-assigned DPID, closing out Phase 7 for this backend.
+What remains is scope, not a blocker: host-side routing/forwarding (a joining peer reaching
+another peer through the host) and broadcast (`idTo == 0`) are both unimplemented, and broadcast
+in particular has a real, flagged-but-unresolved semantic question waiting (see Section 5/8) -
+DPID `0` is both a real player ID (Decision 3) and `free-eggbert`'s own broadcast convention.
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -278,10 +302,15 @@ here) — only the vendored-submodule ENet path is proven. Not currently blockin
 - **Incomplete**: transport-level `Receive()` (ENet backend only - loopback is real now, Decision
   14) unconditionally returns `false`; received packets are destroyed by `Service()`, not delivered
   anywhere (Phase 10).
-- **Incomplete**: a joining-role session cannot address any specific remote player in `Send()` at
-  all (always `DPERR_INVALIDPLAYER`, Decision 15) - it has no way to learn any remote DPID
-  (including the host's own) before the join-accepted handshake exists. This is also what still
-  blocks the join-accepted/join-rejected packet tasks in Phase 6.
+- **Incomplete**: a joining-role session still cannot address any specific remote player in
+  `Send()` at all (always `DPERR_INVALIDPLAYER`, Decision 15) - even after adopting its own
+  host-assigned DPID (Decision 16), it has no way to learn any *other* peer's DPID (e.g. the
+  host's own local player id, or another client's) - that would need a player-list broadcast/sync
+  mechanism that doesn't exist yet (Phase 9).
+- **Structurally blocked, not just unimplemented**: a real `JoinReject` explanation packet for an
+  over-`dwMaxPlayers` rejection (Phase 6). A rejected pending peer is never assigned a DPID, and
+  addressed `Send()` only ever reaches assigned peers (Decision 14) - there is nothing to address
+  such a packet to, regardless of future work, unless pending-peer addressing is added separately.
 - **Incomplete**: no host-side routing/forwarding - a `Send()` addressed to a non-host recipient by
   a joining peer isn't relayed by the host (Phase 10, star-topology routing not started).
 - **Incomplete**: broadcast (`idTo == 0`/`DPID_ALLPLAYERS`) isn't implemented (Phase 10). **Real,
@@ -394,30 +423,36 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-Basic real unicast delivery (host → one specific assigned client, and the reverse validation
-failures) is done (Decisions 14-15). Several genuinely different directions are open next, all
-within `plan.md` Phase 10 or unblocked by it - this is a real choice, not an obvious next step, so
-ask the user rather than picking unilaterally:
+Phase 7's join handshake now works end-to-end over loopback (Decision 16). Several genuinely
+different directions are open next - this is a real choice, not an obvious next step, so ask the
+user rather than picking unilaterally:
 
 1. **Host-side routing/forwarding**: a joining peer's `Send()` addressed to another (non-host)
-   peer gets relayed by the host (star topology, `plan.md`'s own next Phase 10 checklist item).
-   Needs its own design pass - e.g. does the host's `Receive()` drain loop need to distinguish "a
-   packet addressed to me" from "a packet addressed to someone else that I should forward," and
-   what happens to sender/recipient validation in that case.
+   peer gets relayed by the host (star topology, `plan.md` Phase 10's next checklist item). Needs
+   its own design pass - e.g. does the host's `Receive()` drain loop need to distinguish "a packet
+   addressed to me" from "a packet addressed to someone else that I should forward," and what
+   happens to sender/recipient validation in that case. Also needs a way for a joining peer to
+   learn *another* peer's DPID in the first place (see Section 5) - which this task alone doesn't
+   solve.
 2. **Broadcast** (`idTo == 0`/`DPID_ALLPLAYERS`, matching `free-eggbert`'s actual real call
    pattern - see `docs/directplay-callsite-audit.md`). **Must resolve the DPID-0 ambiguity first**
    (Section 5): Decision 3 assigned DPID `0` to the host's own first local player rather than
    reserving it, so `Send(m_dpid, 0, ...)` is ambiguous between "broadcast" and "the player whose
    DPID is `0`" under current semantics - this needs explicit user input, not a unilateral call.
-3. **Phase 7's remaining tasks** (join-request/accepted wire handshake, DPID/session-descriptor
-   agreement) - unblocked in principle now that per-DPID delivery exists, but still needs its own
-   design pass for the handshake protocol itself (what triggers sending a join-accepted packet, how
-   the joining side recognizes and processes one, etc.).
-4. **Phase 8/9** (session enumeration / player management) remain available too, same as before.
+3. **Phase 9** (player management) - would give a joining peer a way to actually learn other
+   peers' DPIDs (a real prerequisite for task 1 above), and covers stable DPID allocation, player
+   naming, and removal more generally.
+4. **Phase 8** (session enumeration) - real `EnumSessions()`, would also unblock Phase 6's one
+   remaining task (below).
+5. **ENet-side work** for any of Decisions 10-16 (host address resolution for joining, join
+   timeout semantics, receive-side buffering) - real, still-open, and independent of the loopback
+   work done so far.
 
-Only one `plan.md` Phase 6 task remains, and it is still blocked (unchanged): "Add a test for
-closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md` Phase 8, not
-started).
+Only one `plan.md` Phase 6 task remains reachable, and it is still blocked (unchanged): "Add a
+test for closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md`
+Phase 8, not started). The join-rejected-explanation task is now confirmed *structurally* blocked
+(Section 5), not just unimplemented - it needs a design change (pending-peer addressing) beyond
+what any of Decisions 10-16 provide.
 
 ## 9. Do not do yet
 
@@ -428,9 +463,12 @@ started).
 - Do not modify game source in `../free-eggbert` or `../planetblupi` under any circumstances.
 - Do not decide broadcast's DPID-0-vs-`DPID_ALLPLAYERS` ambiguity unilaterally (Section 5/8) - ask
   the user before implementing broadcast at all.
-- Do not implement host-side routing/forwarding, broadcast, or the join-accepted/join-rejected wire
-  packet tasks without first asking the user which of Section 8's several open directions to
-  pursue - more than one real option exists now, it is not an obvious single next step.
+- Do not implement host-side routing/forwarding or broadcast without first asking the user which
+  of Section 8's several open directions to pursue - more than one real option exists now, it is
+  not an obvious single next step.
+- Do not attempt a `JoinReject` explanation packet for the over-`dwMaxPlayers` case - it is
+  structurally blocked (Section 5), not just unimplemented; a rejected pending peer is never
+  assigned a DPID, and addressed `Send()` cannot reach an unassigned peer at all.
 - Do not decide the ENet backend's "how does a joining call resolve a host address" question
   unilaterally — ask the user first, same as Decision 5 did for the hosting side's port choice.
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15, deliberately
@@ -447,14 +485,16 @@ started).
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 8 (the next task) and docs/directplay-design.md Decisions
-14-15. Real unicast Send()/Receive() delivery works end-to-end over loopback now, host role only -
-a host can address one of its own remotePlayerIds directly. Several genuinely different
-directions are open next (host-side routing, broadcast - which needs the DPID-0 ambiguity
-resolved first, Phase 7's join-accepted handshake, or Phase 8/9) - this is a real choice, not an
-obvious next step. Ask the user (AskUserQuestion) which to pursue before writing any code. Do not
-refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Once a direction is chosen, implement one small atomic slice and run the relevant
-build/test command from Section 7, confirming it actually passes before considering the task done.
-Then update NEXT.md to reflect the new state (Sections 2, 3, 8, and 4/5 if anything changed there).
+Read NEXT.md first, especially Section 8 (the next task) and docs/directplay-design.md Decision 16.
+The join-request/join-accepted handshake now works end-to-end over loopback - a joining client
+genuinely adopts its host-assigned DPID. Several genuinely different directions are open next
+(host-side routing/forwarding, broadcast - which needs the DPID-0 ambiguity resolved first, Phase
+9 player management, Phase 8 enumeration, or ENet-side work on any prior decision) - this is a
+real choice, not an obvious next step. Ask the user (AskUserQuestion) which to pursue before
+writing any code. Do not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not
+modify ../free-eggbert or ../planetblupi. Do not attempt a JoinReject explanation packet for the
+over-dwMaxPlayers case - it is structurally blocked (Section 5), not just unimplemented. Once a
+direction is chosen, implement one small atomic slice and run the relevant build/test command from
+Section 7, confirming it actually passes before considering the task done. Then update NEXT.md to
+reflect the new state (Sections 2, 3, 8, and 4/5 if anything changed there).
 ```

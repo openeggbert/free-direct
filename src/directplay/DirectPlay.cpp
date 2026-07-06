@@ -149,6 +149,21 @@ namespace {
                     session_.transport.reset();
                     return DPERR_NOSESSIONS;
                 }
+                // Send a join-request packet to the host (docs/directplay-design.md Decision 16),
+                // fire-and-forget - no synchronous wait for a reply here (confirmed with the
+                // user: matches the polling model every other event in this codebase already
+                // uses, Decision 6, rather than real DirectPlay's blocking Open()). This session
+                // has no DPID yet - that is exactly what the host's eventual join-accepted
+                // response provides, processed by Receive()'s drain loop below - so idFrom/idTo
+                // are left at their defaults (unused/meaningless for this packet type) rather than
+                // routed through the validated public Send() path.
+                free_direct_directplay::DirectPlayWirePacketHeader joinHeader;
+                joinHeader.type = free_direct_directplay::DirectPlayWirePacketType::Join;
+                joinHeader.applicationGuid = session_.applicationGuid;
+                joinHeader.sessionGuid = session_.sessionInstanceGuid;
+                std::vector<std::uint8_t> joinBytes;
+                free_direct_directplay::SerializeDirectPlayWireHeader(joinHeader, joinBytes);
+                session_.transport->Send(0, joinBytes.data(), joinBytes.size(), true);
             }
 #endif
             session_.state = free_direct_directplay::DirectPlayObjectState::Open;
@@ -176,6 +191,16 @@ namespace {
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
 
             if (idTo == idFrom) {
+                // Validated against localPlayerIds (docs/directplay-design.md Decision 16) - this
+                // was previously unchecked, an inconsistency with the unicast path below now that
+                // one exists. Matters concretely for a joining session: its localPlayerIds only
+                // contains a real entry once a join-accepted packet has been processed (Decision
+                // 16), so this doubles as an observable proof that adoption actually happened,
+                // not just an abstract correctness nicety.
+                if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
+                    session_.localPlayerIds.end()) {
+                    return DPERR_INVALIDPLAYER;
+                }
                 // Enqueued directly into session_.messageQueue rather than round-tripping
                 // through session_.transport (Phase 4's original approach, changed here per
                 // docs/directplay-design.md Decision 12): sending a message to yourself is
@@ -287,6 +312,20 @@ namespace {
                     if (!session_.transport->AssignPendingConnection(newId)) break;
                     session_.remotePlayerIds.push_back(newId);
                     session_.currentPlayers++;
+
+                    // Send a join-accepted packet to the newly-assigned peer
+                    // (docs/directplay-design.md Decision 16), addressed by the DPID it was
+                    // just assigned - connectedPeers_[newId] now exists on the transport, so
+                    // Send() can reach it directly (Decision 14). Fire-and-forget, same as the
+                    // join-request this answers; no observable error path if it fails.
+                    free_direct_directplay::DirectPlayWirePacketHeader acceptHeader;
+                    acceptHeader.type = free_direct_directplay::DirectPlayWirePacketType::JoinAccept;
+                    acceptHeader.applicationGuid = session_.applicationGuid;
+                    acceptHeader.sessionGuid = session_.sessionInstanceGuid;
+                    acceptHeader.idTo = newId;
+                    std::vector<std::uint8_t> acceptBytes;
+                    free_direct_directplay::SerializeDirectPlayWireHeader(acceptHeader, acceptBytes);
+                    session_.transport->Send(newId, acceptBytes.data(), acceptBytes.size(), true);
                 }
                 // Session is full for real (dwMaxPlayers != 0 - "0" never rejects
                 // anything, matching the "no limit" convention above): any connection
@@ -299,18 +338,16 @@ namespace {
                     }
                 }
             }
-            // Drain every real transport-delivered wire packet into session_.messageQueue
-            // (docs/directplay-design.md Decision 15), for both roles - a host receiving from
-            // one of its remotePlayerIds, or a joining session receiving from the host it
-            // Connect()ed to. Each blob handed back by transport->Receive() is exactly one
-            // Send()-call's worth (LoopbackDirectPlayTransport's buffered_ never coalesces or
-            // splits), so one wire header + payload is parsed per iteration. A blob that fails
-            // to deserialize (too small, or a payloadLength that disagrees with what actually
-            // arrived) is dropped silently rather than crashing or corrupting the queue - the
-            // same defensive posture TryDeserializeDirectPlayWireHeader was built for in Phase 5,
-            // finally exercised here by a real caller. A full messageQueue silently drops the
-            // packet too (Enqueue()'s existing bounded-growth contract, unchanged) - there is no
-            // send-side acknowledgement/backpressure to report the drop to yet.
+            // Drain every real transport-delivered wire packet (docs/directplay-design.md
+            // Decision 15/16), for both roles - a host receiving from one of its
+            // remotePlayerIds (or a join-request), or a joining session receiving from the host
+            // it Connect()ed to (a join-accepted response, or ordinary data). Each blob handed
+            // back by transport->Receive() is exactly one Send()-call's worth
+            // (LoopbackDirectPlayTransport's buffered_ never coalesces or splits), so one wire
+            // header + payload is parsed per iteration. A blob that fails to deserialize (too
+            // small, or a payloadLength that disagrees with what actually arrived) is dropped
+            // silently rather than crashing or corrupting the queue - the same defensive posture
+            // TryDeserializeDirectPlayWireHeader was built for in Phase 5.
             if (session_.transport) {
                 constexpr std::size_t kMaxWireBufferSize =
                     free_direct_directplay::kDirectPlayWireHeaderSize +
@@ -321,13 +358,49 @@ namespace {
                     const auto header = free_direct_directplay::TryDeserializeDirectPlayWireHeader(
                         wireBuf.data(), receivedSize);
                     if (!header) continue;
-                    free_direct_directplay::DirectPlayMessagePacket packet;
-                    packet.idFrom = header->idFrom;
-                    packet.idTo = header->idTo;
-                    packet.payload.assign(
-                        wireBuf.begin() + free_direct_directplay::kDirectPlayWireHeaderSize,
-                        wireBuf.begin() + receivedSize);
-                    session_.messageQueue.Enqueue(std::move(packet));
+
+                    switch (header->type) {
+                        case free_direct_directplay::DirectPlayWirePacketType::Data: {
+                            // A full messageQueue silently drops the packet (Enqueue()'s
+                            // existing bounded-growth contract, unchanged) - there is no
+                            // send-side acknowledgement/backpressure to report the drop to yet.
+                            free_direct_directplay::DirectPlayMessagePacket packet;
+                            packet.idFrom = header->idFrom;
+                            packet.idTo = header->idTo;
+                            packet.payload.assign(
+                                wireBuf.begin() + free_direct_directplay::kDirectPlayWireHeaderSize,
+                                wireBuf.begin() + receivedSize);
+                            session_.messageQueue.Enqueue(std::move(packet));
+                            break;
+                        }
+                        case free_direct_directplay::DirectPlayWirePacketType::JoinAccept: {
+                            // Adopts the host-assigned DPID as this session's own local player
+                            // identity (docs/directplay-design.md Decision 16) - only meaningful
+                            // for a joining role that hasn't already processed this. Not
+                            // enqueued into messageQueue - this is session control state, not a
+                            // user-visible Data message.
+                            if (!session_.isHost) {
+                                session_.applicationGuid = header->applicationGuid;
+                                session_.sessionInstanceGuid = header->sessionGuid;
+                                const DPID assignedId = header->idTo;
+                                if (std::find(session_.localPlayerIds.begin(),
+                                              session_.localPlayerIds.end(),
+                                              assignedId) == session_.localPlayerIds.end()) {
+                                    session_.localPlayerIds.push_back(assignedId);
+                                }
+                                if (session_.nextPlayerId <= assignedId) {
+                                    session_.nextPlayerId = assignedId + 1;
+                                }
+                            }
+                            break;
+                        }
+                        default:
+                            // Join (host-side only meaningful, and assignment already happens
+                            // independently of it - see the assignment loop above),
+                            // JoinReject/Discovery/DiscoveryResponse (not implemented yet) -
+                            // consumed from the queue and otherwise ignored.
+                            break;
+                    }
                 }
             }
             // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on

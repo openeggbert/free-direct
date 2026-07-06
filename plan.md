@@ -1194,9 +1194,19 @@ whichever transport is configured.
       configurations (`ENET=OFF`/`ON`) end-to-end, the 14/14 `tests/directplay_tests.cpp` suite
       (unaffected - no committed test touches multi-peer hosting), and that `include/dplay.h` has
       zero ENet/SDL identifiers.
-- [ ] Send a join-accepted packet (Phase 5 protocol) to a connecting client once accepted.
+- [x] Send a join-accepted packet (Phase 5 protocol) to a connecting client once accepted.
+      **Done** (`docs/directplay-design.md` Decision 16): the assignment loop in `Receive()` sends
+      a `DirectPlayWirePacketType::JoinAccept` packet, addressed to the newly-assigned DPID, right
+      after each successful `AssignPendingConnection()`. **Verified**:
+      `Test_JoinHandshake_ClientAdoptsHostAssignedDpid` (`tests/directplay_tests.cpp`).
 - [ ] Send a join-rejected packet to a connecting client when the session is full or the
-      application GUID does not match.
+      application GUID does not match. **Still not done - structurally blocked for the
+      over-`dwMaxPlayers` case**, confirmed again while implementing Decision 16: a rejected
+      `pendingPeers_` entry is never assigned a DPID (`RejectPendingConnection()` never calls
+      `AssignPendingConnection()`), and addressed `Send()` (Decision 14) only ever reaches
+      `connectedPeers_` - there is structurally no DPID to address a `JoinReject` packet to for
+      this case, regardless of what Decision 16 implements. GUID-mismatch rejection isn't
+      implemented at all yet either (`Open()` never compares `guidApplication` against the host's).
 - [x] Enforce `dwMaxPlayers` by rejecting new joins once `dwCurrentPlayers` reaches the configured
       maximum. **Done:** `docs/directplay-design.md` Decision 9 - a new
       `IDirectPlayTransport::RejectPendingConnection()` (mirrors `AssignPendingConnection`, no DPID
@@ -1280,16 +1290,15 @@ the same test process can host and observe each other's presence; all three new 
 Goal: make `Open(..., DPOPEN_JOIN)`/`Open(..., DPOPEN_OPENSESSION)` actually connect to a hosted
 session and receive an assigned player ID.
 
-- [ ] Implement `Open(..., DPOPEN_JOIN)` (and the `DPOPEN_OPENSESSION` path used by
-      `free-eggbert`) end-to-end on top of the configured transport. **Partially done, loopback
-      only:** `docs/directplay-design.md` Decision 11 - `Open()`'s joining branch calls
-      `transport->Connect()` over loopback, returning `DPERR_NOSESSIONS` on failure. Decision 12
-      then made it safe for the hosting branch to call `Listen()` too (self-send no longer routes
-      through the transport, so hosting no longer breaks it), so a real successful `Connect()` now
-      works end-to-end at the connection level. Still left unchecked - "end-to-end" for this task
-      means the full join-request/accepted handshake (host-assigned DPID, session descriptor
-      sync), which remains blocked on per-DPID-addressed `Send()` (`plan.md` Phase 10) - today's
-      "success" only means the raw connection is established, not a completed DirectPlay join.
+- [x] Implement `Open(..., DPOPEN_JOIN)` (and the `DPOPEN_OPENSESSION` path used by
+      `free-eggbert`) end-to-end on top of the configured transport. **Done, loopback only**
+      (Decisions 11, 12, 16): `Open()`'s joining branch calls `transport->Connect()`, sends a
+      join-request, and returns `DP_OK` immediately (asynchronous, confirmed with the user -
+      Decision 16); the host's `Receive()`-driven assignment loop sends back a real `JoinAccept`
+      packet, which the client's own `Receive()` adopts (assigned DPID + the two GUID fields
+      making up this implementation's version of "session descriptor" - see that task's own
+      caveat). ENet remains completely unaddressed for the joining role - untouched by any of
+      Decisions 11-16.
 - [ ] Resolve an explicit host address if the caller/transport configuration provides one
       (loopback: direct in-process reference; ENet: host/port). **Partially done, loopback side
       only:** `docs/directplay-design.md` Decision 10 - `LoopbackDirectPlayTransport::Connect()`
@@ -1323,14 +1332,37 @@ session and receive an assigned player ID.
       end-to-end at the connection level (`Test_OpenAsJoinWithHostPresent_Succeeds`). The ENet side
       of "connect to the host transport" remains untouched - left unchecked since only the loopback
       backend is done.
-- [ ] Send a join-request packet to the host once connected.
-- [ ] Receive a join-accepted packet from the host and transition local state to "joined."
-- [ ] Receive the host-assigned player ID from the join-accepted packet and store it as this
-      peer's local DPID.
+- [x] Send a join-request packet to the host once connected. **Done** (`docs/directplay-design.md`
+      Decision 16): `Open()`'s joining branch sends a `DirectPlayWirePacketType::Join` packet,
+      fire-and-forget, right after a successful `Connect()` - via `session_.transport->Send(0,
+      ...)` directly (not the validated public `Send()` path, since this session has no DPID yet).
+      Asked of and confirmed by the user first: this is asynchronous (matches Decision 6's polling
+      model), not a blocking `Open()` - see that task below for why blocking cannot work over
+      loopback in a single-threaded test process regardless.
+- [x] Receive a join-accepted packet from the host and transition local state to "joined."
+      **Done, no separate "joined" flag** (Decision 16): the host's own `Receive()`-driven
+      assignment loop (Decision 7) now sends a `JoinAccept` packet per newly-assigned peer; a
+      joining role's `Receive()` drain loop (Decision 15) recognizes it and adopts the assigned
+      DPID. There is no separate boolean "joined" state - adoption into `session_.localPlayerIds`
+      *is* the observable transition, since nothing else in the current API surface would ever
+      observe a distinct "joined" flag.
+- [x] Receive the host-assigned player ID from the join-accepted packet and store it as this
+      peer's local DPID. **Done** (Decision 16): `header->idTo` (the assigned DPID) is added to
+      `session_.localPlayerIds` if not already present, and `session_.nextPlayerId` is bumped past
+      it to avoid a future local `CreatePlayer()` collision.
 - [ ] Store the session descriptor received from the host (or supplied by the caller) on the
-      joining `DirectPlaySession`.
+      joining `DirectPlaySession`. **Partially done** (Decision 16): `applicationGuid` and
+      `sessionInstanceGuid` are overwritten from the `JoinAccept` header's fields - the closest
+      match to "the session descriptor" `DirectPlaySession` can store, since it deliberately never
+      retains a raw `DPSESSIONDESC2` (see its own class comment). `dwMaxPlayers`/session name/
+      password are **not** synced - no current consumer needs them on the joining side. Left
+      unchecked since the full `DPSESSIONDESC2` isn't synced, only two GUID fields.
 - [ ] Handle a join timeout: fail `Open` if no join-accepted/join-rejected packet arrives within a
-      configured timeout.
+      configured timeout. **Not applicable to loopback** (Decision 16, mirroring Decision 10/11's
+      already-established position): `Open()` is asynchronous now (confirmed with the user) - it
+      returns immediately after sending the join-request, never blocks waiting for a response, so
+      there is nothing for a timeout to bound on this backend. ENet's side remains a genuinely
+      open question (a real network round-trip can legitimately hang or get lost).
 - [ ] Return `DPERR_NOSESSIONS` when no host could be reached at all, and `DPERR_TIMEOUT` when a
       host was reached but did not respond in time, matching the distinction implied by
       `DPESC_TIMEDOUT` usage in `free-eggbert/src/network.cpp`'s `EnumSessionsCallback`.
@@ -1346,13 +1378,17 @@ session and receive an assigned player ID.
       ever started returns `DPERR_NOSESSIONS`. **Verified**: 28/28 `tests/directplay_tests.cpp`
       suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean; every pre-existing hosting/
       self-send test still passes unaffected; `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Add a test for a successful join using a local host/client pair over loopback, asserting both
-      peers agree on the assigned DPIDs and session descriptor. **Partially done:**
-      `Test_OpenAsJoinWithHostPresent_Succeeds` (`tests/directplay_tests.cpp`) covers the
-      connection-establishment half - a real host + a real joining client, `Open(...,
-      DPOPEN_JOIN)` returning `DP_OK` - but does not yet assert DPID/session-descriptor agreement,
-      since no join-request/accepted handshake exists yet (blocked on per-DPID-addressed `Send()`,
-      Phase 10). Left unchecked - the full acceptance criterion isn't met.
+- [x] Add a test for a successful join using a local host/client pair over loopback, asserting both
+      peers agree on the assigned DPIDs and session descriptor. **Done** (Decision 16):
+      `Test_JoinHandshake_ClientAdoptsHostAssignedDpid` (`tests/directplay_tests.cpp`) - a real
+      host + a real joining client; the host's `Receive()` assigns a DPID and sends `JoinAccept`;
+      the client's `Receive()` adopts it; proven via the client's own self-send now succeeding
+      with the adopted id and failing with an unadopted one (no public getter exists for a
+      session's own DPID, so this is the observable proof). "Session descriptor agreement" is
+      exercised at the level Decision 16 actually implements (two GUID fields, not the full
+      `DPSESSIONDESC2`) - see that decision and the still-partial task above for the honest scope.
+      **Verified**: 38/38 `tests/directplay_tests.cpp` suite passes; both CMake configs
+      (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has zero ENet/SDL identifiers.
 - [x] Add a test for max-players rejection: a third loopback client joining a two-player-max
       session receives a rejected outcome (a `DPERR_*` code, not `DP_OK`). **Done, after asking
       the user** whether to add client-side rejection observability now (new scope) or leave it
