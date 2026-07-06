@@ -215,6 +215,28 @@ void Test_OpenAsHostOverLoopback_ReturnsOk() {
     dp->Release();
 }
 
+// plan.md Phase 7: "Add a test for a failed join (no host present), asserting
+// DPERR_NOSESSIONS."
+//
+// No loopback host is ever started in this test (docs/directplay-design.md Decision 11:
+// Open()'s hosting role deliberately doesn't call Listen() yet), so Connect() over the
+// well-known loopback port fails immediately and deterministically - no real network, no
+// timeout needed for this backend.
+void Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2->Open(&desc, DPOPEN_JOIN) == DPERR_NOSESSIONS);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // plan.md Phase 6: "Add a test for invalid host parameters (e.g. dwMaxPlayers == 0, malformed
 // DPSESSIONDESC2.dwSize), asserting a meaningful DPERR_* rather than DP_OK."
 //
@@ -611,6 +633,7 @@ int main() {
     Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid();
     Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue();
     Test_OpenAsHostOverLoopback_ReturnsOk();
+    Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions();
     Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();

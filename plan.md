@@ -1281,9 +1281,15 @@ Goal: make `Open(..., DPOPEN_JOIN)`/`Open(..., DPOPEN_OPENSESSION)` actually con
 session and receive an assigned player ID.
 
 - [ ] Implement `Open(..., DPOPEN_JOIN)` (and the `DPOPEN_OPENSESSION` path used by
-      `free-eggbert`) end-to-end on top of the configured transport. **Not started** -
-      `DirectPlay.cpp`'s `Open()` still does not call `transport->Connect()` for either flag; the
-      two tasks below only give the *transport layer* the capability this task will build on.
+      `free-eggbert`) end-to-end on top of the configured transport. **Partially done, failure
+      path only, loopback only:** `docs/directplay-design.md` Decision 11 - `Open()`'s joining
+      branch now calls `transport->Connect()` over loopback and returns `DPERR_NOSESSIONS` on
+      failure. There is no success path yet: nothing wires the hosting role to call `Listen()`
+      (a regression was found and reverted while implementing - see Decision 11 - because it would
+      silently break the existing self-send feature every Phase 4 test depends on), so `Connect()`
+      always fails today. Left unchecked - "end-to-end" means a real successful join must work
+      too, which needs its own follow-up design pass (reconciling "hosted and discoverable" with
+      "still able to self-send").
 - [ ] Resolve an explicit host address if the caller/transport configuration provides one
       (loopback: direct in-process reference; ENet: host/port). **Partially done, loopback side
       only:** `docs/directplay-design.md` Decision 10 - `LoopbackDirectPlayTransport::Connect()`
@@ -1292,7 +1298,10 @@ session and receive an assigned player ID.
       The ENet side of this task (how a joining `Open()` call learns what host/port to dial, given
       `DPSESSIONDESC2` has no address-like field - see Decision 5's analogous port problem) is
       **not** resolved and needs its own design pass. Left unchecked since only half the task is
-      done.
+      done. **Update:** `docs/directplay-design.md` Decision 11 adds the fixed-port choice
+      (`kDefaultDirectPlayLoopbackPort = 51322`, mirroring Decision 5's ENet port exactly, asked of
+      and confirmed by the user) and wires `DirectPlay.cpp`'s `Open()` to actually use it for the
+      joining role. Still left unchecked - the ENet side remains unresolved.
 - [ ] Connect to the host transport (`enet_host_connect` for ENet; direct handoff for loopback).
       **Partially done, loopback side only:** `LoopbackDirectPlayTransport::Connect()`/`Listen()`
       now really link a client instance to a host instance in the same process (Decision 10),
@@ -1308,9 +1317,12 @@ session and receive an assigned player ID.
       `false` for both roles once connected (a deliberate choice, asked of and confirmed by the
       user: real payload delivery is left for a later, separate design decision - see Decision 10).
       Also re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end and that
-      `include/dplay.h` has zero ENet/SDL identifiers. `DirectPlay.cpp`'s `Open()` does not call
-      any of this yet (that's the task above), and the ENet side of "connect to the host
-      transport" is untouched - left unchecked since only the loopback backend is done.
+      `include/dplay.h` has zero ENet/SDL identifiers. **Update:** `DirectPlay.cpp`'s `Open()` now
+      calls `transport->Connect()` for the loopback joining role (Decision 11) - though since
+      nothing wires the hosting role to call `Listen()` yet (see Decision 11's regression note),
+      every real `Connect()` call still fails today; there is no committed test yet where a
+      loopback join actually succeeds. The ENet side of "connect to the host transport" remains
+      untouched - left unchecked since only the loopback backend's failure path is done.
 - [ ] Send a join-request packet to the host once connected.
 - [ ] Receive a join-accepted packet from the host and transition local state to "joined."
 - [ ] Receive the host-assigned player ID from the join-accepted packet and store it as this
@@ -1322,7 +1334,18 @@ session and receive an assigned player ID.
 - [ ] Return `DPERR_NOSESSIONS` when no host could be reached at all, and `DPERR_TIMEOUT` when a
       host was reached but did not respond in time, matching the distinction implied by
       `DPESC_TIMEDOUT` usage in `free-eggbert/src/network.cpp`'s `EnumSessionsCallback`.
-- [ ] Add a test for a failed join (no host present), asserting `DPERR_NOSESSIONS`.
+      **Partially done, loopback `DPERR_NOSESSIONS` only** (Decision 11): `Open()`'s loopback
+      joining branch returns `DPERR_NOSESSIONS` when `Connect()` fails, which today is always
+      (nothing hosts yet - see above). No timeout concept is needed for loopback at all (`Connect()`
+      fails synchronously, per Decision 10), so `DPERR_TIMEOUT` doesn't apply to this backend.
+      ENet's side of both codes is untouched. Left unchecked since only half the task (one code,
+      one backend) is done.
+- [x] Add a test for a failed join (no host present), asserting `DPERR_NOSESSIONS`. **Done:**
+      `Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions` (`tests/directplay_tests.cpp`) - a real,
+      public `IDirectPlay2A::Open(&desc, DPOPEN_JOIN)` call (not whitebox) with no loopback host
+      ever started returns `DPERR_NOSESSIONS`. **Verified**: 28/28 `tests/directplay_tests.cpp`
+      suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean; every pre-existing hosting/
+      self-send test still passes unaffected; `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Add a test for a successful join using a local host/client pair over loopback, asserting both
       peers agree on the assigned DPIDs and session descriptor.
 - [ ] Add a test for max-players rejection: a third loopback client joining a two-player-max

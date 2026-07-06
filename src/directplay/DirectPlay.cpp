@@ -120,7 +120,9 @@ namespace {
             if (session_.isHost) {
                 // Fixed default port (docs/directplay-design.md Decision 5) - DPSESSIONDESC2
                 // has no port-like field to derive one from. Only the hosting role listens
-                // here; a joining role calling Connect() is Phase 7's job, not this one's.
+                // here; a joining role calling Connect() over ENet still isn't wired - how it
+                // would resolve a host address is a separate, still-open design question
+                // (plan.md Phase 7), not decided by this task.
                 if (!session_.transport->Listen(free_direct_directplay::kDefaultDirectPlayEnetPort)) {
                     session_.transport.reset();
                     return DPERR_CANTCREATESESSION;
@@ -128,6 +130,24 @@ namespace {
             }
 #else
             session_.transport = std::make_unique<free_direct_directplay::LoopbackDirectPlayTransport>();
+            // Only the joining role calls Connect() here (docs/directplay-design.md Decision
+            // 10/11) - deliberately NOT wiring the hosting role to call Listen() in this same
+            // task. Doing so would put every hosted session's transport into the "connected"
+            // state, where Send()/Receive() always return false (Decision 10) - silently
+            // breaking the already-working self-send path every existing Phase 4 test and the
+            // real free-eggbert self-send call pattern depend on. Reconciling "hosting" with
+            // "still able to self-send" is a separate design question for whenever the
+            // host-discoverable-for-real-joins task is tackled, not decided here.
+            if (!session_.isHost) {
+                // DPOPEN_JOIN/DPOPEN_OPENSESSION: Connect() resolves the host synchronously via
+                // the fixed port's registry entry and fails immediately - no timeout needed -
+                // when nothing is listening there (nothing does yet, since hosting doesn't call
+                // Listen() - see above), which maps directly to DPERR_NOSESSIONS.
+                if (!session_.transport->Connect(nullptr, free_direct_directplay::kDefaultDirectPlayLoopbackPort)) {
+                    session_.transport.reset();
+                    return DPERR_NOSESSIONS;
+                }
+            }
 #endif
             session_.state = free_direct_directplay::DirectPlayObjectState::Open;
             return DP_OK;

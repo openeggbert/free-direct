@@ -854,3 +854,71 @@ third-client-over-a-two-player-cap-is-rejected test (the transport-level analog 
 acceptance criterion), host-shutdown-clears-peers'-connections, shutdown-unregisters-port-for-reuse,
 and send/receive-false-for-both-roles. Also re-verified both CMake build configurations
 (`ENET=OFF`/`ON`) end-to-end and that `include/dplay.h` has zero ENet/SDL identifiers.
+
+---
+
+## Decision 11: wiring `Open(..., DPOPEN_JOIN)` to `Connect()` over loopback - joining role only, hosting role deliberately not wired yet
+
+**Status:** Decided and implemented. The fixed-port choice was asked of, and confirmed by, the
+user directly (mirroring Decision 5's ENet port problem); the scope-narrowing (joining role only)
+was discovered and self-corrected while implementing, not asked separately, because it fixes a
+regression rather than opening a new design fork.
+
+### The question
+
+With Decision 10 giving `LoopbackDirectPlayTransport` real `Listen()`/`Connect()`, `plan.md` Phase
+7's first task ("wire `Open(..., DPOPEN_JOIN)` to actually connect") needs `DirectPlay.cpp`'s
+`Open()` to call `transport->Connect()`. But `Connect(address, port)` needs a `port` value, and
+`DPSESSIONDESC2` has no port-like field to derive one from - the identical problem Decision 5 faced
+for the ENet backend's `Listen()` call.
+
+### Decision (port choice)
+
+A single fixed constant, `kDefaultDirectPlayLoopbackPort = 51322`
+(`src/directplay/LoopbackDirectPlayTransport.hpp`), mirroring Decision 5's
+`kDefaultDirectPlayEnetPort` exactly - over a per-session-unique-port alternative, which was
+rejected because nothing can yet tell a joining caller which unique port to use (no address field
+on `DPSESSIONDESC2`, and `EnumSessions` doesn't exist yet, `plan.md` Phase 8) without inventing new
+public API with no motivating call site - exactly the kind of speculative addition `CLAUDE.md`
+rules out.
+
+### The regression found while implementing, and the resulting scope correction
+
+The literal task ("wire `Open()` to call `Connect()`") could be read as symmetrically wiring the
+hosting role to call `Listen()` too (mirroring how Decision 5/Phase 6 wired the ENet hosting role).
+**Implementing that symmetric change was tried and reverted before committing**, because it breaks
+an already-working feature: once a hosted session's transport enters the "listening" state,
+Decision 10 makes `Send()`/`Receive()` unconditionally return `false` on it - silently breaking the
+self-send path every Phase 4 test (and `free-eggbert`'s own real self-send call pattern,
+`idFrom == idTo`) depends on. Every existing hosting test opens a session and then self-sends
+through the same transport instance; making `Open()` call `Listen()` there would have made all of
+them fail non-obviously (`Send()` returning `DPERR_GENERIC` instead of `DP_OK`), a regression that
+would not have been caught by this task's own new tests, only by the pre-existing suite.
+
+**Decision: only the joining role's `Open()` branch calls `Connect()` in this task.** The hosting
+role's `Open()` branch is deliberately left unchanged - it does not call `Listen()`. Reconciling
+"a hosted session's transport is discoverable for real joins" with "that same session can still
+self-send" is left as a separate, later design question (needed before Phase 7's "successful join"
+test can be attempted), not decided here as an incidental side effect.
+
+### Consequence
+
+`Open(..., DPOPEN_JOIN)`/`DPOPEN_OPENSESSION` over loopback now calls
+`transport->Connect(nullptr, kDefaultDirectPlayLoopbackPort)`. Since nothing calls `Listen()` on
+that port yet (see above), this **always fails today** - which is the honestly-correct behavior
+right now, not a bug: no loopback host is ever actually listening there yet. `Connect()` failing
+maps directly to `DPERR_NOSESSIONS`, with no timeout needed (Decision 10: loopback `Connect()`
+fails synchronously). The ENet backend's joining role remains completely unwired (untouched by this
+task) - how it would resolve a host address is a separate, still-open question.
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`'s `Open()` (the `#else`/non-ENet branch): a joining call
+(`!session_.isHost`) now calls `transport->Connect()`, resetting the transport and returning
+`DPERR_NOSESSIONS` on failure. `kDefaultDirectPlayLoopbackPort` added to
+`src/directplay/LoopbackDirectPlayTransport.hpp`. **Verified** with a new committed end-to-end test
+in `tests/directplay_tests.cpp` (28/28 total passing), `Test_OpenAsJoinWithNoHostPresent_
+ReturnsNoSessions`, going through the real public `IDirectPlay2A::Open()` (not whitebox) - asserts
+`Open(&desc, DPOPEN_JOIN)` with no host ever started returns `DPERR_NOSESSIONS`. Also re-verified
+both CMake build configurations (`ENET=OFF`/`ON`) end-to-end, that every pre-existing hosting/
+self-send test still passes unaffected, and that `include/dplay.h` has zero ENet/SDL identifiers.

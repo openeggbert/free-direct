@@ -25,6 +25,15 @@
 
 namespace free_direct_directplay {
 
+/// Default loopback registry port `Open()` uses when calling `Connect()` for the joining
+/// role (`DPOPEN_JOIN`/`DPOPEN_OPENSESSION`) (`docs/directplay-design.md` Decision 11) -
+/// mirrors `EnetDirectPlayTransport`'s `kDefaultDirectPlayEnetPort` (Decision 5):
+/// `DPSESSIONDESC2` has no port-like field a real value could be derived from, so a
+/// single fixed, FreeDirect-internal constant is used instead. `Open()`'s hosting role
+/// does **not** yet call `Listen(kDefaultDirectPlayLoopbackPort)` - see Decision 11's
+/// note on why that is deliberately deferred, not an oversight.
+inline constexpr std::uint16_t kDefaultDirectPlayLoopbackPort = 51322;
+
 /**
  * @brief `IDirectPlayTransport` implemented as a same-process byte-buffer queue,
  * with real multi-instance connection lifecycle (`docs/directplay-design.md`
