@@ -622,21 +622,56 @@ void Test_LoopbackShutdown_UnregistersPortForReuse() {
     CHECK(hostB.Listen(20010));
 }
 
-void Test_LoopbackSend_ReturnsFalseForHostingAndJoiningRoles() {
+// plan.md Phase 10 (docs/directplay-design.md Decision 14): a hosting-role instance's
+// Send(targetId, ...) addresses one specific assigned peer directly, delivering into
+// that peer's own inbox.
+void Test_LoopbackSend_HostToAssignedClient_DeliversPayload() {
     using namespace free_direct_directplay;
 
     LoopbackDirectPlayTransport host;
     CHECK(host.Listen(20011));
-    const char msg[] = "x";
-    CHECK(!host.Send(msg, sizeof(msg), true));
-    char buf[8];
-    std::size_t outSize = 0;
-    CHECK(!host.Receive(buf, sizeof(buf), &outSize));
-
     LoopbackDirectPlayTransport client;
     CHECK(client.Connect("ignored", 20011));
-    CHECK(!client.Send(msg, sizeof(msg), true));
-    CHECK(!client.Receive(buf, sizeof(buf), &outSize));
+    CHECK(host.AssignPendingConnection(7));
+
+    const char msg[] = "host-to-client";
+    CHECK(host.Send(7, msg, sizeof(msg), true));
+
+    char buf[32] = {};
+    std::size_t outSize = 0;
+    CHECK(client.Receive(buf, sizeof(buf), &outSize));
+    CHECK(outSize == sizeof(msg));
+    CHECK(std::memcmp(buf, msg, sizeof(msg)) == 0);
+}
+
+// A joining-role instance's Send() has exactly one destination - the host - so targetId
+// is accepted but ignored.
+void Test_LoopbackSend_ClientToHost_DeliversPayload() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20012));
+    LoopbackDirectPlayTransport client;
+    CHECK(client.Connect("ignored", 20012));
+
+    const char msg[] = "client-to-host";
+    CHECK(client.Send(0, msg, sizeof(msg), true)); // targetId ignored on the joining role
+
+    char buf[32] = {};
+    std::size_t outSize = 0;
+    CHECK(host.Receive(buf, sizeof(buf), &outSize));
+    CHECK(outSize == sizeof(msg));
+    CHECK(std::memcmp(buf, msg, sizeof(msg)) == 0);
+}
+
+// Sending to a DPID that names no currently-connected (assigned) peer fails.
+void Test_LoopbackSend_ToUnknownTargetId_Fails() {
+    using namespace free_direct_directplay;
+
+    LoopbackDirectPlayTransport host;
+    CHECK(host.Listen(20013));
+    const char msg[] = "nobody-home";
+    CHECK(!host.Send(999, msg, sizeof(msg), true));
 }
 
 // plan.md Phase 5: "a unit test serializes and deserializes the internal packet header
@@ -747,7 +782,9 @@ int main() {
     Test_LoopbackThirdClientOverTwoPlayerCap_IsRejected();
     Test_LoopbackHostShutdown_ClearsPeersHostConnection();
     Test_LoopbackShutdown_UnregistersPortForReuse();
-    Test_LoopbackSend_ReturnsFalseForHostingAndJoiningRoles();
+    Test_LoopbackSend_HostToAssignedClient_DeliversPayload();
+    Test_LoopbackSend_ClientToHost_DeliversPayload();
+    Test_LoopbackSend_ToUnknownTargetId_Fails();
     Test_WireHeaderRoundTrip_PreservesAllFields();
     Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer();
     Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength();

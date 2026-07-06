@@ -1478,7 +1478,23 @@ Goal: real message delivery between distinct peers (not just self-loopback), inc
 routing, broadcast, and validation.
 
 - [ ] Implement `Send` from a local player to a specific remote player, routed through the
-      configured transport.
+      configured transport. **Partially done, transport layer only:** `docs/directplay-design.md`
+      Decision 14 - `IDirectPlayTransport::Send()` gained a `DPID targetId` parameter, asked of and
+      confirmed by the user (over a separate new `SendTo()` method), addressing one specific
+      connected peer out of a hosting instance's potentially many (`connectedPeers_`), or the sole
+      host for a joining instance. `LoopbackDirectPlayTransport` delivers real payloads for all
+      three modes (hosting/joining/self-send-only) by reaching into the *target instance's* own
+      inbox directly - the same mechanism Decision 10 already used for `Connect()`/
+      `RejectPendingConnection()`/`Shutdown()`. `EnetDirectPlayTransport::Send()` got the equivalent
+      `connectedPeers_` lookup; its `Receive()`/`Service()` receive-side buffering remains
+      unimplemented (a separate, still-open task - loopback-first, matching this session's
+      established pattern). **Verified**: 32/32 `tests/directplay_tests.cpp` suite passes (three
+      new whitebox tests replacing the now-obsolete `Test_LoopbackSend_
+      ReturnsFalseForHostingAndJoiningRoles`); both CMake configs (`ENET=OFF`/`ON`) build clean;
+      `include/dplay.h` has zero ENet/SDL identifiers. Left unchecked - `DirectPlay2AImpl::Send()`/
+      `Receive()` (`DirectPlay.cpp`) still don't use this new capability at all (no wire-header
+      construction/parsing, no recipient-DPID lookup, no host routing) - that wiring is the next
+      task, not yet started.
 - [ ] Implement host-side routing: the host forwards a `Send` addressed to a non-host recipient to
       that recipient's connection (star topology, matching ENet's client/server model).
 - [ ] Implement direct peer-to-peer delivery **only if** a future architectural decision moves away

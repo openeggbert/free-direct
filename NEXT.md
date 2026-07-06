@@ -12,17 +12,19 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   DirectPlay usage).
 - **Current development phase**: `plan.md` Phases 0-5 complete. Phase 6 ("Session hosting") is
   essentially done — its only remaining tasks are blocked on later phases (Section 8). Phase 7
-  ("Session joining") is well underway: a real loopback host + client can now connect end-to-end
-  (`Open(..., DPOPEN_CREATE)` calls `Listen()`, `Open(..., DPOPEN_JOIN)` calls `Connect()`,
-  Decisions 10-12), `dwMaxPlayers` cap enforcement works over loopback with the rejected client
-  observing `DPERR_NOCONNECTION` on its own next `Receive()` (Decision 13) — but this is still
-  connection-establishment only, not a completed DirectPlay join: no DPID is assigned to the
-  joining side and no session descriptor is exchanged, since the join-request/accepted wire
-  handshake is blocked on per-DPID-addressed `Send()` (Phase 10). The ENet side of "resolve a host
-  address" for joining is also still undecided. Phases 8 onward (enumeration, player management,
-  real Send/Receive routing, error semantics, hardening, CI, docs) have not started.
+  ("Session joining") got as far as it can go without Phase 10: a real loopback host + client
+  connect end-to-end, `dwMaxPlayers` cap enforcement works with client-side rejection
+  observability (Decisions 10-13) — but the join is connection-establishment only (no DPID/session-
+  descriptor exchange), since that needs the join-request/accepted wire handshake. Phase 10
+  ("Send/Receive networking") has started to unblock exactly that: `IDirectPlayTransport::Send()`
+  now takes a `targetId` DPID and delivers real payloads to one specific connected peer over
+  loopback (Decision 14) — but this is transport-layer groundwork only; `DirectPlay2AImpl::Send()`/
+  `Receive()` don't use it yet (no wire-header construction/parsing, no host routing, no broadcast).
+  The ENet side of both "resolve a host address for joining" and "receive-side delivery" remain
+  undecided/unimplemented. Phases 8, 9, 11 onward (enumeration, player management, error semantics,
+  hardening, CI, docs) have not started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
-  1-13):
+  1-14):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -51,7 +53,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 30/30 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 32/32 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -87,7 +89,26 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — Added client-side rejection/disconnection observability (Decision
+- (uncommitted, this session) — `plan.md` Phase 10 groundwork: `IDirectPlayTransport::Send()`
+  gained a `DPID targetId` parameter (`docs/directplay-design.md` Decision 14), asked of and
+  confirmed by the user (over adding a separate new `SendTo()` method) - `Send()` had zero callers
+  left in `DirectPlay.cpp` after Decision 12 removed the self-send round-trip, so this interface
+  change broke no production call site. `LoopbackDirectPlayTransport` now delivers real payloads
+  for all three modes (hosting role routes to `connectedPeers_[targetId]`'s own inbox; joining role
+  routes to the sole `hostPeer_`; self-send-only mode unchanged) by reaching into the *target
+  instance's* private `buffered_` directly - the same mechanism Decision 10 already used for
+  `Connect()`/`RejectPendingConnection()`/`Shutdown()`. `Receive()` no longer has any role-based
+  guard - it just pops from `this->buffered_` unconditionally now, since only legitimate senders
+  ever push into it. `EnetDirectPlayTransport::Send()` got the equivalent `connectedPeers_` lookup;
+  its receive-side buffering (`Service()`/`Receive()`) is explicitly left unimplemented, matching
+  this session's loopback-first pattern. Replaced the now-obsolete
+  `Test_LoopbackSend_ReturnsFalseForHostingAndJoiningRoles` (its premise no longer holds) with three
+  new tests covering host→client delivery, client→host delivery, and unknown-target failure.
+  **Not done**: `DirectPlay2AImpl::Send()`/`Receive()` still don't use this new capability at all -
+  no wire-header construction/parsing, no recipient lookup, no host routing/broadcast. Verified:
+  32/32 `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
+  `include/dplay.h` still has zero ENet/SDL identifiers.
+- `60afb4b` — Added client-side rejection/disconnection observability (Decision
   13), asked of and confirmed by the user: promoted `LoopbackDirectPlayTransport`'s and
   `EnetDirectPlayTransport`'s existing test-only `HasHostConnection()`/`HasPeer()` accessors into a
   real `IDirectPlayTransport::IsConnectedToHost()` method (both backends' implementation is
@@ -203,17 +224,19 @@ Most recent commits (newest first):
   (reliable + unreliable), graceful `Shutdown`, build-time backend selection.
 
 Full narrative detail and rationale for each decision lives in `docs/directplay-design.md`
-(Decisions 1-11) and in each commit's own message / `plan.md`'s per-task `**Done:**` annotations.
+(Decisions 1-14) and in each commit's own message / `plan.md`'s per-task `**Done:**` annotations.
 
 ## 4. Current blocker / main problem
 
-**No build- or test-breaking blocker exists right now** — everything builds and 30/30 tests pass.
-The self-send-vs-hosting conflict is resolved (Decision 12), and client-side rejection
-observability now works too (Decision 13): a real loopback host + client can connect end-to-end,
-and `dwMaxPlayers` cap rejection is observable by the rejected client. What remains is not a
-blocker but a known scope gap: the join is connection-only, with no DPID assignment or
-session-descriptor exchange, since that needs the join-request/accepted wire handshake, which is
-blocked on per-DPID-addressed `Send()` (`plan.md` Phase 10, not started).
+**No build- or test-breaking blocker exists right now** — everything builds and 32/32 tests pass.
+`IDirectPlayTransport::Send()` now supports real per-DPID-addressed delivery over loopback
+(Decision 14), which is the capability Phase 7's join handshake and Phase 10's routing/broadcast
+both need - but nothing in `DirectPlay.cpp` uses it yet. The next task is wiring
+`DirectPlay2AImpl::Send()`/`Receive()` to actually construct/parse `DirectPlayWirePacketHeader`s
+and route through this new capability (see Section 8). No open design question is blocking this
+right now, though the wiring itself will likely surface a few (e.g. exactly when/where the
+receiving side's `Service()`/`Receive()` loop should deserialize a wire header and enqueue into
+`session_.messageQueue`).
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -338,21 +361,42 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-**`plan.md` Phase 7 has no more reachable tasks.** Every remaining Phase 7 checkbox (send a
-join-request packet, receive a join-accepted packet, receive/store the host-assigned DPID, store
-the session descriptor, handle a join timeout, the ENet side of `DPERR_NOSESSIONS`/`DPERR_TIMEOUT`,
-the full "successful join" DPID/descriptor agreement) is blocked on the join-request/accepted wire
-handshake, which itself is blocked on per-DPID-addressed `Send()` (`plan.md` Phase 10, not started).
+The user chose `plan.md` Phase 10 (Send/Receive networking) after Phase 7 ran out of reachable
+tasks. Transport-layer groundwork is done (Decision 14: `IDirectPlayTransport::Send(targetId, ...)`
+delivers real payloads over loopback). The next task:
 
-Only one `plan.md` Phase 6 task remains, and it is still blocked too (unchanged from before): "Add
-a test for closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md`
-Phase 8, not started).
+1. **Wire `DirectPlay2AImpl::Send()`/`Receive()` (`src/directplay/DirectPlay.cpp`) to actually use
+   `Send(targetId, ...)` for a non-self-send.**
+   - Files: `src/directplay/DirectPlay.cpp`, likely `src/directplay/DirectPlayWireProtocol.hpp`
+     (already has `DirectPlayWirePacketHeader`/serialize/deserialize, unused by any transport so
+     far - this is where it finally gets consumed).
+   - Concretely: `Send(idFrom, idTo, ...)` for `idTo != idFrom` needs to (a) validate `idTo` is a
+     known player (local broadcast target or a `remotePlayerIds` entry - `plan.md` still has
+     "validate the recipient player ID" as its own unchecked task, don't skip it), (b) serialize a
+     `DirectPlayWirePacketHeader` + payload, (c) call `session_.transport->Send(idTo, wireBytes,
+     wireSize, reliable)`.
+   - Receiving is the less obvious half: `Receive()` needs to actually call `session_.transport
+     ->Receive()` now (it never has, even before Decision 12 - the self-send path bypassed it
+     entirely), deserialize the wire header via `TryDeserializeDirectPlayWireHeader`, and enqueue a
+     `DirectPlayMessagePacket` into `session_.messageQueue` - figure out exactly where this fits
+     relative to the existing `Service()`/disconnect/assignment/rejection calls already in
+     `Receive()`, and whether it should loop (drain everything pending) or just try once per call.
+   - `plan.md` Phase 10 also lists host-side routing (forwarding a non-host-addressed `Send` to its
+     recipient) and broadcast (`idTo == 0`/`DPID_ALLPLAYERS`) as separate checklist items - don't
+     try to do everything in one commit; this task is just "one local player can `Send`/`Receive`
+     to/from one specific other real player over loopback," the smallest real slice.
+   - This will likely raise its own design questions (e.g. exact host-routing shape, broadcast
+     semantics) - ask the user before deciding anything non-obvious, per this project's established
+     pattern (Decisions 10-14 all did this).
+   - Verify: add a host/client integration test over loopback (`plan.md` Phase 10 lists this as its
+     own task too) asserting the exact payload arrives; rebuild both CMake configs; confirm
+     `include/dplay.h` stays free of ENet/SDL identifiers.
 
-**This means the next task is a real phase-level scope decision, same as the Phase 6→7 handoff
-earlier**: ask the user which phase to pursue next rather than assuming. Candidates, in
-`plan.md`'s own order: Phase 8 (session enumeration - real `EnumSessions()`, would also unblock
-Phase 6's last task), Phase 9 (player management), Phase 10 (Send/Receive networking - would
-unblock the rest of Phase 7). Do not pick unilaterally.
+Only one `plan.md` Phase 6 task remains, and it is still blocked (unchanged): "Add a test for
+closing a host session" needs `EnumSessions()` to track real sessions first (`plan.md` Phase 8, not
+started). Phase 7's remaining tasks (join-request/accepted handshake) are unblocked in principle by
+Decision 14 but not yet attempted - likely the task after this one, once basic addressed Send/
+Receive works.
 
 ## 9. Do not do yet
 
@@ -361,17 +405,15 @@ unblock the rest of Phase 7). Do not pick unilaterally.
 - Do not touch DirectDraw or DirectSound source (`src/directdraw/`, `src/directsound/`) — separate
   subsystems on separate, not-yet-started `plan.md` phases (13/14).
 - Do not modify game source in `../free-eggbert` or `../planetblupi` under any circumstances.
-- Do not implement general `Send()`/`Receive()` routing to a specific connected peer, host
-  forwarding, or broadcast (`plan.md` Phase 10) until per-DPID addressing is designed.
-- Do not implement the join-accepted/join-rejected wire packet tasks before per-DPID-addressed
-  `Send()` exists — they need it and will need their own design pass.
-- Do not make `LoopbackDirectPlayTransport::Send()`/`Receive()` return real data once connected —
-  Decision 10 already decided `false` for both roles; real payload delivery is a separate, later
-  design decision, not something to revisit incidentally while wiring `Open(DPOPEN_JOIN)`.
+- Do not implement host-side routing/forwarding or broadcast delivery (`plan.md` Phase 10's later
+  checklist items) in the same commit as basic addressed `Send`/`Receive` wiring - transport-layer
+  addressing exists now (Decision 14), but `DirectPlay.cpp` doesn't use it yet (Section 8); do one
+  slice at a time.
+- Do not implement the join-accepted/join-rejected wire packet tasks (`plan.md` Phase 6/7) as part
+  of this same task - they need real `DirectPlay2AImpl::Send()`/`Receive()` wiring to exist first
+  (Section 8's current task), plus their own separate design pass for the handshake itself.
 - Do not decide the ENet backend's "how does a joining call resolve a host address" question
   unilaterally — ask the user first, same as Decision 5 did for the hosting side's port choice.
-- Do not pick which `plan.md` phase to work on next (8, 9, or 10) unilaterally — Phase 7 has no
-  more reachable tasks (Section 8); ask the user, same as the Phase 6→7 handoff did.
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15, deliberately
   deferred until more of Phases 5-11 exist to test).
 - Do not add a run-time backend-selection mechanism for `Open()`'s loopback-vs-ENet choice —
@@ -386,17 +428,18 @@ unblock the rest of Phase 7). Do not pick unilaterally.
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 8. plan.md Phase 7 has no more reachable tasks - a real
-loopback host + client connect end-to-end, self-send works independently of connection state
-(Decision 12), and dwMaxPlayers cap rejection is observable by the rejected client
-(Decision 13). Everything left in Phase 7 needs the join-request/accepted wire handshake, which
-needs per-DPID-addressed Send() (Phase 10, not started). This is a phase-level scope decision,
-same as the earlier Phase 6->7 handoff: ask the user (AskUserQuestion) which phase to pursue next
-- Phase 8 (session enumeration), Phase 9 (player management), or Phase 10 (Send/Receive
-networking, which would unblock the rest of Phase 7) - rather than picking unilaterally. Do not
-refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Make one small, verified improvement once a phase is chosen - implement just one
-atomic task from it. Run the relevant build/test command from Section 7 and confirm it actually
-passes before considering the task done. Then update NEXT.md to reflect the new state (Sections
-2, 3, 8, and 4/5 if anything changed there).
+Read NEXT.md first, especially Section 8 (the next task) and docs/directplay-design.md Decision 14.
+IDirectPlayTransport::Send() now takes a DPID targetId and delivers real payloads to one specific
+connected peer over loopback - transport-layer groundwork only. DirectPlay2AImpl::Send()/Receive()
+(src/directplay/DirectPlay.cpp) still don't use this at all for a non-self-send. Wire the smallest
+real slice: one local player Send()s to one specific other real player over loopback, using
+DirectPlayWireProtocol.hpp's existing (currently unused) header serialize/deserialize, and the
+other player's Receive() actually gets it. Do not implement host-side routing/forwarding or
+broadcast in this same task (Section 9) - those are separate, later Phase 10 checklist items. Ask
+the user (AskUserQuestion) before deciding anything non-obvious this wiring surfaces (e.g. exactly
+where in Receive() to deserialize and enqueue) - this project has consistently asked before
+interface/behavior decisions all session (Decisions 10-14). Do not refactor unrelated code, do not
+touch DirectDraw/DirectSound, and do not modify ../free-eggbert or ../planetblupi. Run the relevant
+build/test command from Section 7 and confirm it actually passes before considering the task done.
+Then update NEXT.md to reflect the new state (Sections 2, 3, 8, and 4/5 if anything changed there).
 ```

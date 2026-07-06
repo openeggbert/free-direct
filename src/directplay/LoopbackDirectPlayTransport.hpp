@@ -38,20 +38,24 @@ inline constexpr std::uint16_t kDefaultDirectPlayLoopbackPort = 51322;
 /**
  * @brief `IDirectPlayTransport` implemented as a same-process byte-buffer queue,
  * with real multi-instance connection lifecycle (`docs/directplay-design.md`
- * Decision 10).
+ * Decision 10) and real addressed delivery (Decision 14).
  *
- * Two distinct usage modes:
- * - **Self-send** (no `Listen()`/`Connect()` ever called): `Send()` appends to
- *   this instance's own FIFO, `Receive()` pops from the same FIFO. This is the
- *   only mode the default (non-ENet) build uses today, via
- *   `DirectPlay2AImpl::Send()`'s self-send path (`idTo == idFrom`).
- * - **Connected** (`Listen()` or `Connect()` succeeded): a process-wide static
- *   registry (keyed by the `port` passed to `Listen()`/`Connect()`) lets a
- *   separate "client" instance find and connect to a separate "host" instance
- *   in the same process, mirroring `EnetDirectPlayTransport`'s
- *   pending/connected/disconnected-peer model. `Send()`/`Receive()`
- *   deliberately return `false` for both roles once connected - real payload
- *   delivery is a separate, later design decision (Decision 10).
+ * Every instance owns one inbox, `buffered_` - a plain FIFO of received byte blobs.
+ * `Receive()` always just pops from this instance's own `buffered_`, regardless of role;
+ * what varies by role is *who can push into it* via `Send()`:
+ * - **Self-send** (no `Listen()`/`Connect()` ever called): `Send()` pushes into this same
+ *   instance's own `buffered_` - the only mode the default (non-ENet) build's `Open()`
+ *   ever puts a transport into, though `DirectPlay2AImpl::Send()`'s self-send path
+ *   (`idTo == idFrom`) no longer even goes through the transport for this (Decision 12) -
+ *   this mode now exists mainly for whitebox test symmetry with the connected modes below.
+ * - **Joining role** (`Connect()` succeeded, `hostPeer_` set): `Send()` pushes into
+ *   `hostPeer_->buffered_` - the one host this instance connected to. `targetId` is
+ *   accepted but ignored (there is only one possible destination).
+ * - **Hosting role** (`Listen()` succeeded): `Send(targetId, ...)` looks up `targetId` in
+ *   `connectedPeers_` and pushes into *that specific peer's* `buffered_` - reaching into
+ *   another instance's private state directly, the same mechanism already used by
+ *   `Connect()`/`RejectPendingConnection()`/`Shutdown()` (Decision 10). Returns `false` if
+ *   `targetId` names no currently-connected peer.
  * @note Status: PARTIAL
  */
 class LoopbackDirectPlayTransport final : public IDirectPlayTransport {
@@ -66,7 +70,7 @@ public:
 
     bool Listen(std::uint16_t port) override;
     bool Connect(const char* address, std::uint16_t port) override;
-    bool Send(const void* data, std::size_t size, bool reliable) override;
+    bool Send(DPID targetId, const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Service() override;
     bool HasPendingConnection() const override;

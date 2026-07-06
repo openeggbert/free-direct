@@ -1076,3 +1076,82 @@ two and rejects the third; the third client's own subsequent `Receive()` call re
 `DPERR_NOCONNECTION` - this finally closes Phase 7's "max-players rejection" task. Also
 re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end and that `include/dplay.h`
 has zero ENet/SDL identifiers.
+
+---
+
+## Decision 14: `IDirectPlayTransport::Send()` gains a `targetId` parameter for real peer-addressed delivery
+
+**Status:** Decided and implemented. Asked of, and confirmed by, the user directly: extend
+`Send()`'s existing signature with a `DPID targetId` parameter (over adding a separate new
+`SendTo()` method alongside the unchanged old `Send()`).
+
+### The question
+
+`plan.md` Phase 10's first task, "Implement `Send` from a local player to a specific remote
+player, routed through the configured transport," needs a way for a hosting-role transport
+instance (with potentially many `connectedPeers_`) to address one specific recipient - something
+`Send()`'s original signature (`Send(const void* data, std::size_t size, bool reliable)`) has never
+supported, going all the way back to Decision 7's explicit deferral ("real per-DPID-addressed send
+is Phase 10's job, not this one's"). Before touching this, confirmed that `session_.transport
+->Send()`/`->Receive()` have **zero callers left in `DirectPlay.cpp`** - Decision 12 removed the
+only one (the self-send round-trip) - so this interface change breaks no production call site,
+only whitebox test call sites.
+
+### Decision
+
+`Send(DPID targetId, const void* data, std::size_t size, bool reliable)`. Over a separate
+`SendTo()` method: `Send()` was already completely unused by production code, so leaving its old
+signature around unused while adding a parallel addressed method would be dead API surface for no
+benefit - a straight signature change is simpler and leaves nothing stale behind.
+
+`targetId` is DPID-shaped but the transport never validates or allocates it (same rule as every
+other DPID-shaped parameter on this interface, e.g. `AssignPendingConnection(DPID id)`) - it is
+purely an opaque lookup key into `connectedPeers_`. Semantics by role:
+- **Hosting role** (`connectedPeers_` populated): `targetId` is looked up in `connectedPeers_`;
+  `false` is returned if no peer is currently assigned that id.
+- **Joining role** (`hostPeer_` set): there is exactly one possible destination - the host itself
+  - so `targetId` is accepted (for interface uniformity) but ignored.
+- **Self-send-only mode** (neither role - `Listen()`/`Connect()` never called): unaffected,
+  `targetId` is accepted but ignored, same as the joining role.
+
+`LoopbackDirectPlayTransport` implements real delivery for all three modes now, by giving every
+instance one inbox (`buffered_`, the same FIFO the self-send-only mode already had) and having
+`Send()` reach into the *target instance's* `buffered_` directly - the hosting role via
+`connectedPeers_[targetId]->buffered_`, the joining role via `hostPeer_->buffered_`. This is the
+same "reach into another instance's private state directly" mechanism Decision 10 already
+established for `Connect()`/`RejectPendingConnection()`/`Shutdown()`, applied one more place.
+`Receive()` no longer has any role-based guard - it unconditionally pops from `this->buffered_`,
+since by construction only legitimate senders (addressed via `targetId`, or the sole `hostPeer_`)
+ever push into it.
+
+`EnetDirectPlayTransport::Send()` gained the equivalent `connectedPeers_.find(targetId)` lookup for
+the hosting role (falling back to `hostPeer_` first, since a hosting instance's `hostPeer_` is
+always null - Decision 7 - so this order is unambiguous). **Receive-side delivery over ENet is
+deliberately left unimplemented in this same task** (loopback-first, matching this session's
+established pattern - Decisions 10/11/12/13 all did the loopback side of a capability before, or
+instead of, the ENet side): `Service()` still discards `ENET_EVENT_TYPE_RECEIVE` packets rather
+than buffering them, so `EnetDirectPlayTransport::Receive()` still unconditionally returns `false`
+for every role. A real ENet host can now genuinely *send* a packet to one specific connected
+client, but nothing can *receive* it yet on either backend's ENet side - a real, separate, still-
+open task, not a silent gap.
+
+### Implemented
+
+`src/directplay/DirectPlayTransport.hpp` (`Send()`'s new `targetId` parameter, documented),
+`src/directplay/LoopbackDirectPlayTransport.hpp`/`.cpp` (real addressed delivery for all three
+modes, `Receive()`'s guard removed), `src/directplay/EnetDirectPlayTransport.hpp`/`.cpp` (`Send()`'s
+`targetId` lookup added; `Receive()` unchanged). `tests/directplay_tests.cpp`: replaced the now-
+obsolete `Test_LoopbackSend_ReturnsFalseForHostingAndJoiningRoles` (its entire premise - `Send()`
+always fails once connected - no longer holds) with three new tests -
+`Test_LoopbackSend_HostToAssignedClient_DeliversPayload`, `Test_LoopbackSend_ClientToHost_
+DeliversPayload`, `Test_LoopbackSend_ToUnknownTargetId_Fails`. **Verified**: 32/32 `tests/
+directplay_tests.cpp` suite passes; both CMake build configurations (`ENET=OFF`/`ON`) build clean;
+`include/dplay.h` has zero ENet/SDL identifiers.
+
+Not yet done, and explicitly out of scope for this task: wiring `DirectPlay2AImpl::Send()`/
+`Receive()` (`DirectPlay.cpp`) to actually use this new transport capability for non-self sends -
+constructing/parsing `DirectPlayWirePacketHeader`s, looking up a recipient's DPID against
+`remotePlayerIds`, host-side routing/broadcast, and the remaining `plan.md` Phase 10 checklist
+items. This decision covers transport-layer groundwork only, mirroring how Decision 10 gave
+connection lifecycle at the transport layer before `DirectPlay.cpp` was wired to use it
+(Decision 11).

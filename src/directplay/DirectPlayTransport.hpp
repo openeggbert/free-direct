@@ -52,11 +52,23 @@ public:
     virtual bool Connect(const char* address, std::uint16_t port) = 0;
 
     /**
-     * @brief Sends a payload to a peer. `reliable` selects guaranteed, ordered
+     * @brief Sends a payload to a specific peer, addressed by `targetId`
+     * (`docs/directplay-design.md` Decision 14). `reliable` selects guaranteed, ordered
      * delivery vs. best-effort delivery; backends with no such distinction (e.g.
      * loopback) accept and ignore it.
+     *
+     * `targetId` is only meaningful for a hosting-role instance with more than one
+     * connected peer (`connectedPeers_`, populated via `AssignPendingConnection()`) - it
+     * is looked up there to find the one specific peer to send to; `false` is returned if
+     * `targetId` names no currently-connected peer. A joining-role instance
+     * (`hostPeer_` set) has exactly one possible destination - the host it `Connect()`ed
+     * to - so `targetId` is accepted but ignored; there is nothing else to address. DPID
+     * allocation/validation stays entirely outside the transport, as with every other
+     * DPID-shaped parameter on this interface (`AssignPendingConnection()`,
+     * `TakeDisconnectedPeer()`) - the transport only ever uses `targetId` as an opaque map
+     * key into `connectedPeers_`.
      */
-    virtual bool Send(const void* data, std::size_t size, bool reliable) = 0;
+    virtual bool Send(DPID targetId, const void* data, std::size_t size, bool reliable) = 0;
 
     /** @brief Retrieves the next received payload, if any, without blocking. */
     virtual bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) = 0;

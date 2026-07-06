@@ -53,21 +53,33 @@ bool LoopbackDirectPlayTransport::Connect(const char* /*address*/, std::uint16_t
     return true;
 }
 
-bool LoopbackDirectPlayTransport::Send(const void* data, std::size_t size, bool /*reliable*/) {
-    // Once connected (either role), there is no single unambiguous recipient - real per-DPID
-    // addressed delivery is a separate, later design decision, not an incidental side effect of
-    // connection-lifecycle work (docs/directplay-design.md Decision 10). Only the self-send path
-    // (never Listen()/Connect()ed) uses the plain FIFO below.
-    if (listening_ || hostPeer_) return false;
-
+bool LoopbackDirectPlayTransport::Send(DPID targetId, const void* data, std::size_t size,
+                                        bool /*reliable*/) {
     const auto* bytes = static_cast<const std::uint8_t*>(data);
+
+    // Hosting role: targetId addresses one specific connected peer out of potentially many
+    // (docs/directplay-design.md Decision 14) - reaching into that peer's own buffered_
+    // directly, the same mechanism Connect()/RejectPendingConnection()/Shutdown() already use.
+    if (listening_) {
+        auto it = connectedPeers_.find(targetId);
+        if (it == connectedPeers_.end()) return false;
+        it->second->buffered_.emplace_back(bytes, bytes + size);
+        return true;
+    }
+
+    // Joining role: exactly one possible destination - the host - so targetId is accepted but
+    // ignored.
+    if (hostPeer_) {
+        hostPeer_->buffered_.emplace_back(bytes, bytes + size);
+        return true;
+    }
+
+    // Self-send-only mode (never Listen()/Connect()ed): push into this instance's own inbox.
     buffered_.emplace_back(bytes, bytes + size);
     return true;
 }
 
 bool LoopbackDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) {
-    if (listening_ || hostPeer_) return false;
-
     if (buffered_.empty()) return false;
     const auto& front = buffered_.front();
     if (front.size() > bufferSize) return false;

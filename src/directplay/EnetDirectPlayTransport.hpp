@@ -23,9 +23,10 @@
  * created-but-never-connected client host is not independently testable); `Shutdown()`
  * (and the destructor) perform a real graceful disconnect (`enet_peer_disconnect` +
  * a bounded wait for `ENET_EVENT_TYPE_DISCONNECT`, generalized to every peer this
- * instance still knows about - see below) before destroying the host; `Send()` sends a
- * real ENet packet (`ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED`,
- * selected by its `reliable` parameter) to `hostPeer_` (client role only - see below);
+ * instance still knows about - see below) before destroying the host; `Send(targetId, ...)`
+ * sends a real ENet packet (`ENET_PACKET_FLAG_RELIABLE` or `ENET_PACKET_FLAG_UNSEQUENCED`,
+ * selected by its `reliable` parameter) to `hostPeer_` (client role) or to the specific
+ * `connectedPeers_[targetId]` peer (hosting role, `docs/directplay-design.md` Decision 14);
  * `Service()` (`docs/directplay-design.md` Decision 6) drains pending ENet events.
  *
  * Hosting (`Listen()`) and joining (`Connect()`) are not symmetric
@@ -36,12 +37,14 @@
  *   `AssignPendingConnection()` - the transport never allocates a DPID itself) and
  *   `pendingPeers_` (a queue of connected-but-unidentified peers, populated by
  *   `Service()` on `ENET_EVENT_TYPE_CONNECT`). A hosting instance's `hostPeer_` stays
- *   null forever, so `Send()`/`Receive()` always return `false` for it today - real
- *   per-DPID-addressed send/receive to a specific connected peer is `plan.md` Phase
- *   10's job, not this one's (this is an intentional, documented limitation, not a
- *   silent regression - see Decision 7's sub-question 3). When an *already-assigned*
- *   peer disconnects, its `DPID` is queued in `disconnectedPeerIds_`
- *   (`docs/directplay-design.md` Decision 8), retrievable via
+ *   null forever; `Send(targetId, ...)` now routes to `connectedPeers_[targetId]`
+ *   directly (Decision 14) - `Receive()` still always returns `false` for every role,
+ *   since `Service()` still discards `ENET_EVENT_TYPE_RECEIVE` packets rather than
+ *   buffering them; real receive-side delivery over ENet is a separate, still-open task
+ *   (this is an intentional, documented limitation, not a silent regression - see
+ *   Decision 7's sub-question 3, now narrowed by Decision 14 to just the receive side).
+ *   When an *already-assigned* peer disconnects, its `DPID` is queued in
+ *   `disconnectedPeerIds_` (`docs/directplay-design.md` Decision 8), retrievable via
  *   `HasDisconnectedPeer()`/`TakeDisconnectedPeer()` - a peer that disconnects while
  *   still only in `pendingPeers_` (never assigned) is not reported, since nothing
  *   outside the transport knows about it yet.
@@ -79,7 +82,7 @@ public:
 
     bool Listen(std::uint16_t port) override;
     bool Connect(const char* address, std::uint16_t port) override;
-    bool Send(const void* data, std::size_t size, bool reliable) override;
+    bool Send(DPID targetId, const void* data, std::size_t size, bool reliable) override;
     bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) override;
     void Service() override;
     bool HasPendingConnection() const override;

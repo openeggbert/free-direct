@@ -101,12 +101,18 @@ bool EnetDirectPlayTransport::Connect(const char* address, std::uint16_t port) {
     return true;
 }
 
-bool EnetDirectPlayTransport::Send(const void* data, std::size_t size, bool reliable) {
-    // Client role only - hostPeer_ is the one host this instance connected to. A
-    // hosting instance's hostPeer_ stays null forever (docs/directplay-design.md
-    // Decision 7): with potentially many connectedPeers_, there is no single implicit
-    // recipient to send to - real per-DPID-addressed send is Phase 10's job.
-    if (!hostPeer_) return false;
+bool EnetDirectPlayTransport::Send(DPID targetId, const void* data, std::size_t size, bool reliable) {
+    // Joining role: hostPeer_ is the one host this instance connected to - targetId is
+    // accepted but ignored, there is nothing else to address. Hosting role: targetId
+    // addresses one specific connectedPeers_ entry out of potentially many
+    // (docs/directplay-design.md Decision 14) - a hosting instance's hostPeer_ stays null
+    // forever (Decision 7), so it falls through to the connectedPeers_ lookup below.
+    ENetPeer* peer = hostPeer_;
+    if (!peer) {
+        auto it = connectedPeers_.find(targetId);
+        if (it == connectedPeers_.end()) return false;
+        peer = it->second;
+    }
 
     // ENET_PACKET_FLAG_UNSEQUENCED (not just "no RELIABLE bit") for the unreliable
     // path: it also skips ENet's ordering guarantee, matching "best-effort" as
@@ -122,7 +128,7 @@ bool EnetDirectPlayTransport::Send(const void* data, std::size_t size, bool reli
     // kChannelLimit = 1. plan.md's "decide the default ENet channel layout" task is
     // still open; this reuses that same provisional single-channel assumption rather
     // than introducing a second, undocumented one.
-    if (enet_peer_send(hostPeer_, 0, packet) != 0) {
+    if (enet_peer_send(peer, 0, packet) != 0) {
         // enet_peer_send() takes ownership of the packet only on success; on failure
         // it does not, so it must be destroyed here to avoid leaking it.
         enet_packet_destroy(packet);
