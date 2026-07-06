@@ -1508,9 +1508,21 @@ Phase 0 DPID-vs-index finding.
       **Verified**: `Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer` and
       `Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects` (`tests/directplay_tests.cpp`).
 - [ ] Validate against duplicate players (the same peer calling `CreatePlayer` twice without an
-      intervening `Close`) and decide/document the resulting behavior.
+      intervening `Close`) and decide/document the resulting behavior. **Investigated, not
+      implemented** (`docs/directplay-design.md` Decision 17's amendment): this task has no
+      concrete meaning to implement against yet - `CreatePlayer()`'s sequential DPID allocator
+      (Decision 3) makes every call's assigned DPID unique by construction, and there is no other
+      caller-identity concept `DPNAME` or any other parameter could dedupe against.
+      `free-eggbert` itself only ever calls `CreatePlayer()` once per `CNetwork` instance, so
+      there's no real call-site behavior to match either. Needs a concrete definition of
+      "duplicate" from the user before any code could target it.
 - [ ] Implement a player-lost state (transport-level disconnect detected for a remote player
-      without an explicit `Close`) distinct from a clean removal.
+      without an explicit `Close`) distinct from a clean removal. **Investigated, not implemented**
+      (`docs/directplay-design.md` Decision 17's amendment): hits the same observability wall as
+      player-name storage - there is no public way for anything to ever query "is this player
+      lost vs. cleanly removed" (no system messages exist, correctly, per the two tasks below).
+      Adding an internal-only distinction nothing can observe would be the same dead,
+      untestable-state problem already flagged for player names.
 - [ ] Generate a player-created system message (`DPID_SYSMSG`-sourced) **only if** Phase 0's audit
       finds a concrete `free-eggbert` dependency on receiving one — it did not find explicit
       system-message handling in `event.cpp`/`decnet.cpp`; verify before implementing.
@@ -1522,8 +1534,15 @@ Phase 0 DPID-vs-index finding.
 - [ ] Add a test asserting stored short/long player names round-trip correctly. **Blocked** -
       depends on the deferred name-storage tasks above (Decision 17); nothing to test until that
       future conversation resolves how (or whether) names become observable.
-- [ ] Add a test asserting player removal (via `Close` or disconnect) updates `dwCurrentPlayers`
-      and removes the player from future `EnumSessions`/roster queries.
+- [x] Add a test asserting player removal (via `Close` or disconnect) updates `dwCurrentPlayers`
+      and removes the player from future `EnumSessions`/roster queries. **Done, `dwCurrentPlayers`
+      half only** (`docs/directplay-design.md` Decision 17's amendment): `dwCurrentPlayers` has no
+      public getter, so `Test_RemotePlayerDisconnect_DecrementsCurrentPlayers` proves the decrement
+      indirectly, reusing this phase's own `dwMaxPlayers` cap check as the observable - a host at
+      the cap rejects a local `CreatePlayer()`, and the same call succeeds once the remote player
+      that filled the cap disconnects and is processed. The "roster queries" half isn't covered -
+      no such API exists in this narrow `IDirectPlay2A` subset, and `EnumSessions()` is Phase 8,
+      not started.
 
 **Acceptance criteria:** the DPID-vs-index conflict has an explicit written decision in
 `docs/directplay-design.md` merged *before* any other Phase 9 code lands (**satisfied**: Decision

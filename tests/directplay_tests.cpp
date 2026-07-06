@@ -666,6 +666,60 @@ void Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects() {
     dp->Release();
 }
 
+// plan.md Phase 9: "Add a test asserting player removal (via Close or disconnect) updates
+// dwCurrentPlayers..." - dwCurrentPlayers itself has no public getter (same observability gap
+// as player names, docs/directplay-design.md Decision 17), so this proves the decrement
+// indirectly through Decision 17's own dwMaxPlayers cap check on CreatePlayer(): a session at
+// capacity rejects a new local player; once the one remote player that filled that capacity
+// disconnects and the host's Receive() processes it (Decision 8), the same CreatePlayer() call
+// succeeds - which could only happen if dwCurrentPlayers genuinely went back down.
+// "...and removes the player from future EnumSessions/roster queries" is not covered - no
+// roster-query API exists in this narrow IDirectPlay2A subset, and EnumSessions() is Phase 8,
+// not started.
+void Test_RemotePlayerDisconnect_DecrementsCurrentPlayers() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.dwMaxPlayers = 1;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    // Assigns the client, filling the dwMaxPlayers = 1 cap.
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) ==
+          DPERR_CANTCREATEPLAYER);
+
+    // The client disconnects (Release() tears down its transport, notifying the host).
+    clientDp2->Release();
+    clientDp->Release();
+
+    pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+
+    // dwCurrentPlayers is genuinely back down - the same call that failed above now succeeds.
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 // plan.md Phase 4: "Add a unit test for Send to self over loopback, asserting DP_OK."
 void Test_LoopbackSendToSelf_ReturnsOk() {
     LPDIRECTPLAY dp = nullptr;
@@ -1064,6 +1118,7 @@ int main() {
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer();
     Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects();
+    Test_RemotePlayerDisconnect_DecrementsCurrentPlayers();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();

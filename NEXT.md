@@ -24,11 +24,14 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
   and broadcast specifically has a real, unresolved ambiguity flagged for whoever implements it
   next (DPID `0` is both a valid real player ID, per Decision 3, and `free-eggbert`'s own broadcast
   convention). The ENet backend's receive-side buffering also remains unimplemented. **Phase 9
-  ("Player management") has started**: `CreatePlayer()` now validates `dwMaxPlayers` before
-  allocating a DPID (Decision 17); player-name storage is deliberately deferred, not attempted -
-  see Section 5's new finding (stored names would be permanently unobservable, since
-  `IDirectPlay2A` has no `GetPlayerName`-style method and `free-eggbert` never calls one either).
-  Phases 8, 11 onward (enumeration, error semantics, hardening, CI, docs) have not started.
+  ("Player management") has no more reachable tasks**: `CreatePlayer()` validates `dwMaxPlayers`
+  (Decision 17), and `dwCurrentPlayers`'s decrement-on-disconnect is proven indirectly (same
+  decision's amendment) - every remaining Phase 9 checkbox either needs an observability question
+  resolved first (player names, a player-lost state - both would be permanently unobservable via
+  the current `IDirectPlay2A` subset) or a concrete "what does duplicate even mean here" answer
+  from the user (duplicate-player validation), or is already correctly conditional on a call site
+  Phase 0 found doesn't exist (player data bytes/event handle/system messages). Phases 8, 11
+  onward (enumeration, error semantics, hardening, CI, docs) have not started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
   1-17):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
@@ -59,7 +62,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 40/40 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 41/41 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -95,7 +98,24 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — `plan.md` Phase 9: `CreatePlayer()` now validates
+- (uncommitted, this session) — `plan.md` Phase 9 wrap-up (worked autonomously through the
+  remaining ordered tasks, per the user's direction): added
+  `Test_RemotePlayerDisconnect_DecrementsCurrentPlayers` (`tests/directplay_tests.cpp`), proving
+  `dwCurrentPlayers` genuinely decrements on a remote disconnect - indirectly, by reusing
+  Decision 17's own `dwMaxPlayers` cap check as the observable (`dwCurrentPlayers` itself has no
+  public getter): a host at `dwMaxPlayers = 1` rejects a local `CreatePlayer()` while a remote
+  player fills the cap; once that player disconnects and `Receive()` processes it, the same call
+  succeeds. Investigated (not implemented) the two remaining substantive Phase 9 tasks: duplicate-
+  player validation has no concrete meaning to target (DPIDs are unique by construction, no other
+  caller-identity concept exists to dedupe against, and `free-eggbert` only calls `CreatePlayer()`
+  once anyway); a distinct player-lost state hits the identical unobservability wall as player
+  names (Decision 17). Both left for the user to define/decide, not guessed at
+  (`docs/directplay-design.md` Decision 17's amendment). With this, Phase 9 has no more reachable
+  tasks - every remaining checkbox needs either a scope/observability answer from the user, or is
+  already correctly conditional on a call site Phase 0 found doesn't exist. Verified: 41/41
+  `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
+  `include/dplay.h` still has zero ENet/SDL identifiers.
+- `7434ba7` — `plan.md` Phase 9: `CreatePlayer()` now validates
   `session_.currentPlayers` against `session_.maxPlayers` before allocating a DPID, returning
   `DPERR_CANTCREATEPLAYER` when full (`dwMaxPlayers == 0` still means "no limit", Decision 9's
   existing convention, reused verbatim) - `docs/directplay-design.md` Decision 17. **Found and
@@ -295,11 +315,11 @@ Full narrative detail and rationale for each decision lives in `docs/directplay-
 
 ## 4. Current blocker / main problem
 
-**No build- or test-breaking blocker exists right now** — everything builds and 40/40 tests pass.
-`CreatePlayer()` now enforces `dwMaxPlayers` (Decision 17). What remains is scope, not a blocker:
-host-side routing/forwarding, broadcast (`idTo == 0`, with its own unresolved DPID-0 ambiguity),
-and player-name storage (deliberately deferred, see Section 5 - stored names would be permanently
-unobservable without new public API) are all open, unpicked next steps.
+**No build- or test-breaking blocker exists right now** — everything builds and 41/41 tests pass.
+`plan.md` Phase 9 has no more reachable tasks. What remains is scope, not a blocker: host-side
+routing/forwarding, broadcast (`idTo == 0`, with its own unresolved DPID-0 ambiguity), player-name
+storage, a distinct player-lost state, and duplicate-player validation are all open questions
+needing the user's input before any code lands (Section 5).
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -343,6 +363,14 @@ here) — only the vendored-submodule ENet path is proven. Not currently blockin
   would be permanently unobservable by anything, and `DirectPlaySession` has no whitebox test path
   (unlike `LoopbackDirectPlayTransport`). Needs a future conversation about whether/how to make it
   observable (`docs/directplay-design.md` Decision 17) before any storage code lands.
+- **Needs a concrete definition from the user, not implemented**: "validate against duplicate
+  players" (`plan.md` Phase 9) has no clear target - `CreatePlayer()`'s sequential DPID allocator
+  makes every call's DPID unique by construction, and no other field defines caller identity to
+  dedupe against. `free-eggbert` itself only calls `CreatePlayer()` once per `CNetwork` instance.
+- **Deliberately deferred, same observability gap as player names**: a distinct "player-lost"
+  state (transport disconnect without an explicit `Close`) vs. a clean removal (`plan.md` Phase 9)
+  - nothing in the current `IDirectPlay2A` subset could ever query this distinction even if it
+  were tracked internally.
 - **Incomplete**: `EnumSessions()` always reports zero sessions (Phase 8, not started).
 - **Incomplete**: no CTest/CI wiring for `tests/directplay_tests.cpp` (Phase 15).
 - **Needs verification**: `FREE_DIRECT_USE_SYSTEM_ENET=ON` — logic written and reviewed, never
@@ -446,37 +474,24 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-The user chose `plan.md` Phase 9 (player management) after Phase 7 ran out of reachable tasks.
-`CreatePlayer()`'s `dwMaxPlayers` validation is done (Decision 17); player-name storage is
-deliberately deferred pending a future conversation (Section 5) - do not attempt it without that
-conversation happening first. Remaining Phase 9 tasks, in order, with their real status:
+`plan.md` Phase 9 has no more reachable tasks (Decision 17's amendment - see Section 5 for the
+three open questions blocking the rest of it: player-name observability, player-lost-state
+observability, and what "duplicate player" even means). Continuing autonomously in a sensible
+order (per the user's direction), the next well-scoped, unblocked, real-call-site-backed task is
+**`plan.md` Phase 8 (session enumeration)** - `EnumSessions()` currently always reports zero
+sessions; `free-eggbert`'s `CNetwork::EnumSessions()` is a real, if currently-unreachable-via-UI,
+call site (`src/network.cpp:141`, sets `guidApplication` and `DPENUMSESSIONS_AVAILABLE`). Concrete
+first step: decide (explicit-host-only discovery is the obvious minimal choice for this project,
+`plan.md`'s own text already leans this way) and implement `EnumSessions()` actually finding a real
+loopback-hosted session, filling in `DPSESSIONDESC2` fields from the host's `DirectPlaySession`,
+and invoking the callback - mirroring the Decision 10 registry mechanism already used for
+`Connect()`. This would also unblock Phase 6's one remaining task ("add a test for closing a host
+session, asserting `EnumSessions` no longer finds it").
 
-1. **Validate against duplicate players** (the same peer calling `CreatePlayer` twice without an
-   intervening `Close`) and decide/document the resulting behavior. Not started - needs a design
-   decision on what "duplicate" even means here (same `idFrom`? There's no caller identity concept
-   beyond DPIDs) and what `DPERR_*` to return; `free-eggbert` only ever calls `CreatePlayer()` once
-   per `CNetwork` instance, so this is defensive hardening, not a directly-observed need - flag
-   that when discussing scope.
-2. **Implement a player-lost state** (transport-level disconnect detected for a remote player
-   without an explicit `Close`) distinct from a clean removal. Partially exists already - the
-   existing disconnect-handling loop in `Receive()` already removes a disconnected remote player
-   from `remotePlayerIds`/decrements `currentPlayers` - but there is no *distinct state* (a
-   "lost" flag or similar) separating that from an explicit, clean removal. Whether that
-   distinction is worth adding without an observed consumer needing it is worth asking about.
-3. **Player data bytes / event handle / system messages** (three separate Phase 9 checkboxes) -
-   `plan.md` already documents these as "only if a concrete call site needs it," and Phase 0's
-   audit found none. These are very likely candidates to strike through with a documented reason
-   (`plan.md`'s own policy allows this) rather than ever implement - confirm with the user before
-   striking, since `plan.md` edits of that kind still count as a real change worth a heads-up.
-4. **Add a test asserting player removal updates `dwCurrentPlayers`** - partially testable already
-   (disconnect already decrements it, per Decision 8/Phase 6); "removes the player from future
-   `EnumSessions`/roster queries" has no meaning yet - there is no roster-query API at all in this
-   narrow `IDirectPlay2A` subset, and `EnumSessions()` itself is Phase 8, not started.
-
-Other directions from before remain open too: host-side routing/forwarding and broadcast (Phase
-10, Section 5), Phase 8 (session enumeration, would also unblock Phase 6's one remaining task),
-and ENet-side work on Decisions 10-17. Ask the user which to pursue rather than picking
-unilaterally - same as every phase-level handoff this session.
+Other directions remain open too, each needing the user's input before proceeding (do not decide
+unilaterally): host-side routing/forwarding and broadcast (Phase 10, Section 5 - broadcast
+specifically needs the DPID-0 ambiguity resolved first), ENet-side work on Decisions 10-17, and
+the three Phase 9 questions above.
 
 ## 9. Do not do yet
 
@@ -515,20 +530,18 @@ unilaterally - same as every phase-level handoff this session.
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 8 (the next task) and docs/directplay-design.md Decision 17.
-CreatePlayer() now validates dwMaxPlayers; player-name storage is deliberately deferred pending a
-future conversation (Section 5 - a stored name would be permanently unobservable, no
-GetPlayerName-style method exists). Remaining Phase 9 tasks are: duplicate-player validation,
-a distinct player-lost state, and three "only if a call site needs it" tasks Phase 0's audit
-already found no site for (candidates to strike, but confirm with the user first). Other open
-directions from before remain too (host-side routing/forwarding, broadcast - needs the DPID-0
-ambiguity resolved first, Phase 8 enumeration, ENet-side work). Ask the user (AskUserQuestion)
-which to pursue before writing any code - this is a real choice, not an obvious next step. Do not
-refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert or
-../planetblupi. Do not attempt a JoinReject explanation packet for the over-dwMaxPlayers case - it
-is structurally blocked (Section 5), not just unimplemented. Do not implement player name storage
-without the conversation above happening first. Once a direction is chosen, implement one small
-atomic slice and run the relevant build/test command from Section 7, confirming it actually passes
-before considering the task done. Then update NEXT.md to reflect the new state (Sections 2, 3, 8,
-and 4/5 if anything changed there).
+Read NEXT.md first, especially Section 8 (the next task) and docs/directplay-design.md Decision
+17's amendment. plan.md Phase 9 has no more reachable tasks - the rest need user decisions on
+player-name/player-lost-state observability and what "duplicate player" means. Continue into
+Phase 8 (session enumeration): make EnumSessions() actually find a real loopback-hosted session,
+matching free-eggbert's real (if UI-unreachable) CNetwork::EnumSessions() call site
+(src/network.cpp:141). Explicit-host-only discovery is the obvious minimal design (plan.md's own
+text already leans this way) - confirm this design choice and any other non-obvious ones with the
+user (AskUserQuestion) before implementing, same as every transport/interface decision this
+session. Do not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify
+../free-eggbert or ../planetblupi. Do not decide broadcast's DPID-0 ambiguity or attempt
+host-side routing without asking first - those remain open, separate directions (Section 8). Once
+implemented, verify with the relevant build/test command from Section 7, confirming it actually
+passes before considering the task done. Then update NEXT.md to reflect the new state (Sections 2,
+3, 8, and 4/5 if anything changed there).
 ```

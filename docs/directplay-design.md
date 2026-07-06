@@ -1445,3 +1445,51 @@ left at its default `0`; three `CreatePlayer()` calls all succeed - confirmed th
 the same "no limit" convention). Also re-verified both CMake build configurations (`ENET=OFF`/`ON`)
 end-to-end, that every pre-existing test still passes unaffected, and that `include/dplay.h` has
 zero ENet/SDL identifiers.
+
+### Amendment: closing out the rest of `plan.md` Phase 9's reachable work
+
+Continuing this decision's own reasoning (real call site vs. unobservable state) across the rest
+of Phase 9's task list, worked autonomously per the user's direction to proceed through the
+remaining ordered tasks:
+
+- **"Add a test asserting player removal... updates `dwCurrentPlayers`"**: `dwCurrentPlayers`
+  itself has no public getter (the identical observability gap this decision already found for
+  player names). Proven *indirectly* instead, reusing this decision's own cap check as the
+  observable: `Test_RemotePlayerDisconnect_DecrementsCurrentPlayers`
+  (`tests/directplay_tests.cpp`) - a host at `dwMaxPlayers = 1` (filled by one assigned remote
+  player) rejects a local `CreatePlayer()` with `DPERR_CANTCREATEPLAYER`; once that remote player
+  disconnects and the host's `Receive()` processes it (Decision 8), the *same* `CreatePlayer()`
+  call succeeds - which could only happen if `dwCurrentPlayers` genuinely went back down. The
+  "...removes the player from future `EnumSessions`/roster queries" half of this task is not
+  covered - no roster-query API exists in this narrow `IDirectPlay2A` subset, and `EnumSessions()`
+  itself is Phase 8, not started. **Verified**: 41/41 `tests/directplay_tests.cpp` suite passes;
+  both CMake configs (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has zero ENet/SDL
+  identifiers.
+- **"Validate against duplicate players"**: found, while scoping this, that the task doesn't have
+  a concrete meaning to implement against. `CreatePlayer()`'s sequential DPID allocator
+  (Decision 3) makes every call's assigned DPID unique by construction - there is no way for two
+  `CreatePlayer()` calls to collide on identity at all, and no other field (no caller identity
+  concept beyond the DPID a call *produces*, since `DPNAME` is caller-supplied and never validated
+  against existing players) that could define "the same peer calling twice." `free-eggbert` itself
+  only ever calls `CreatePlayer()` once per `CNetwork` instance (confirmed in
+  `docs/directplay-callsite-audit.md`), so there's no real call-site behavior to match either.
+  **Not implemented** - flagged as needing a concrete definition of "duplicate" from the user
+  before any code could meaningfully target it, not silently skipped.
+- **"Implement a player-lost state... distinct from a clean removal"**: hits the exact same
+  observability wall as player names and `dwCurrentPlayers` - there is no public way for anything
+  to ever query "is this player lost vs. cleanly removed" (no system messages, Phase 9's own
+  "only if a concrete call site needs it" caveat on those - correctly not implemented, per Phase 0's
+  audit finding no dependency). Adding an internal-only distinction with no way to observe it would
+  be the same "dead, untestable state" problem the name-storage finding already identified. **Not
+  implemented** - needs the same kind of observability conversation as player names before
+  proceeding.
+- **Player data bytes / event handle / player-created / player-destroyed system messages** (four
+  separate Phase 9 checkboxes, all already worded "only if a concrete call site needs it"):
+  Phase 0's audit already found no `free-eggbert` dependency on any of these. Left as-is in
+  `plan.md` (not struck through) - annotating them as "confirmed not needed" is a `plan.md` edit
+  the user should see and confirm, not something to make silently, even though the underlying
+  finding is already on record.
+
+With this, `plan.md` Phase 9 has no further reachable tasks: every remaining checkbox either needs
+a scope/observability question resolved with the user first, or is already correctly marked
+conditional on a call site that Phase 0 found does not exist.
