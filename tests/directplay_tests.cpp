@@ -618,6 +618,54 @@ void Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero() {
     dp->Release();
 }
 
+// plan.md Phase 9: "Validate player count against dwMaxPlayers before allocating a new DPID
+// in CreatePlayer, returning DPERR_CANTCREATEPLAYER when the session is full."
+//
+// dwMaxPlayers bounds the session's *total* player count, not just remote ones - a local
+// CreatePlayer() call counts against the same cap Receive()'s remote-assignment loop already
+// enforces (docs/directplay-design.md Decision 9).
+void Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    desc.dwMaxPlayers = 1;
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DP_OK);
+
+    DPID p1 = 0, p2 = 0;
+    CHECK(dp2->CreatePlayer(&p1, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(dp2->CreatePlayer(&p2, nullptr, nullptr, nullptr, 0, 0) == DPERR_CANTCREATEPLAYER);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// dwMaxPlayers == 0 is the real, intentional "no limit" case (Decision 9) - confirmed here
+// through CreatePlayer() specifically, not just Receive()'s remote-assignment loop. Uses its
+// own Open() call (rather than the OpenLoopbackSession helper, whose desc.dwMaxPlayers is 4,
+// a real limit that wouldn't prove "no limit" for the handful of players created here).
+void Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DP_OK);
+
+    DPID p1 = 0, p2 = 0, p3 = 0;
+    CHECK(dp2->CreatePlayer(&p1, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(dp2->CreatePlayer(&p2, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(dp2->CreatePlayer(&p3, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // plan.md Phase 4: "Add a unit test for Send to self over loopback, asserting DP_OK."
 void Test_LoopbackSendToSelf_ReturnsOk() {
     LPDIRECTPLAY dp = nullptr;
@@ -1014,6 +1062,8 @@ int main() {
     Test_JoinHandshake_ClientAdoptsHostAssignedDpid();
     Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
+    Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer();
+    Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();

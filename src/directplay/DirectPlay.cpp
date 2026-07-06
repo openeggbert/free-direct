@@ -176,6 +176,14 @@ namespace {
             // its size is validated when one is actually provided.
             if (lpPlayerName && lpPlayerName->dwSize != sizeof(DPNAME)) return DPERR_INVALIDPARAMS;
 
+            // dwMaxPlayers == 0 means "no limit" (docs/directplay-design.md Decision 9's
+            // existing convention, reused here) - a local CreatePlayer() call counts against
+            // the same cap as remote assignment (Receive()'s assignment loop), since
+            // dwMaxPlayers bounds the session's total player count, not just remote ones.
+            if (session_.maxPlayers != 0 && session_.currentPlayers >= session_.maxPlayers) {
+                return DPERR_CANTCREATEPLAYER;
+            }
+
             // Sequential allocator starting at 0 (docs/directplay-design.md Decision 3) -
             // the host's own first local player gets DPID 0, matching free-eggbert's own
             // comparison pattern, not real DirectPlay's DPID_SYSMSG/DPID_ALLPLAYERS

@@ -1474,21 +1474,39 @@ Phase 0 DPID-vs-index finding.
       `DirectPlaySession::nextPlayerId` starts at `0`. Checked done because the conflict this task
       asks to resolve **is** resolved and implemented - just not in the "reserve 0" direction the
       task's own title assumed going in.
-- [ ] Register a local player on `CreatePlayer`, storing it in `DirectPlaySession`'s local-player
-      list.
-- [ ] Register a remote player when a join-accepted/player-joined notification arrives from the
-      transport, storing it in the remote-player list.
+- [x] Register a local player on `CreatePlayer`, storing it in `DirectPlaySession`'s local-player
+      list. **Already done, pre-dates Phase 9's explicit start**: `CreatePlayer()`
+      (`DirectPlay.cpp`) has pushed each allocated DPID onto `session_.localPlayerIds` since
+      Phase 2/4. No new code needed - checked here since Phase 9 formally covers it.
+- [x] Register a remote player when a join-accepted/player-joined notification arrives from the
+      transport, storing it in the remote-player list. **Already done** via Decision 7's
+      assignment loop (`Receive()`) and Decision 16's `JoinAccept` handling - both push the
+      relevant DPID onto `remotePlayerIds`/`localPlayerIds` respectively. No new code needed.
 - [ ] Store each player's short name (`DPNAME.lpszShortNameA`) as an owned `std::string`.
+      **Deliberately deferred, not attempted** (`docs/directplay-design.md` Decision 17): a real
+      short name is genuinely supplied at both `../free-eggbert` `CreatePlayer()` call sites
+      (`src/network.cpp:183-185,231-233`), so this is not out-of-scope by the two-game rule - but
+      `IDirectPlay2A` has no `GetPlayerName`-style method at all, and `free-eggbert` never calls
+      one either, so a stored name would be permanently unobservable by anything (test or real
+      caller) without adding new public API surface, which needs its own separate ask-the-user
+      pass first (`CLAUDE.md`). Storing genuinely dead, unverifiable state would violate this
+      project's own Testing Policy.
 - [ ] Store each player's long name (`DPNAME.lpszLongNameA`) as an owned `std::string`, allowing it
-      to be empty since `free-eggbert` always passes `NULL` for it.
+      to be empty since `free-eggbert` always passes `NULL` for it. **Deferred alongside the short
+      name task above** - same observability gap, same reasoning.
 - [ ] Store player data bytes (`lpData`/`dwDataSize` from `CreatePlayer`) **only if** a concrete
       call site is found requiring it — Phase 0 found `free-eggbert` always passes `NULL`/`0`;
       confirm before adding storage, per the two-game scope rule.
 - [ ] Signal an event handle (`hEvent` from `CreatePlayer`) on message arrival **only if** a
       concrete call site needs it — Phase 0 found `free-eggbert` always passes `NULL`; confirm
       before implementing, per the two-game scope rule.
-- [ ] Validate player count against `dwMaxPlayers` before allocating a new DPID in `CreatePlayer`,
-      returning `DPERR_CANTCREATEPLAYER` when the session is full.
+- [x] Validate player count against `dwMaxPlayers` before allocating a new DPID in `CreatePlayer`,
+      returning `DPERR_CANTCREATEPLAYER` when the session is full. **Done** (`docs/
+      directplay-design.md` Decision 17): checked before DPID allocation, reusing Decision 9's
+      existing "`dwMaxPlayers == 0` means no limit" convention; a local `CreatePlayer()` call
+      counts against the same cap `Receive()`'s remote-assignment loop already enforces.
+      **Verified**: `Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer` and
+      `Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects` (`tests/directplay_tests.cpp`).
 - [ ] Validate against duplicate players (the same peer calling `CreatePlayer` twice without an
       intervening `Close`) and decide/document the resulting behavior.
 - [ ] Implement a player-lost state (transport-level disconnect detected for a remote player
@@ -1497,8 +1515,13 @@ Phase 0 DPID-vs-index finding.
       finds a concrete `free-eggbert` dependency on receiving one — it did not find explicit
       system-message handling in `event.cpp`/`decnet.cpp`; verify before implementing.
 - [ ] Generate a player-destroyed system message under the same condition as above.
-- [ ] Add a test asserting DPID uniqueness across multiple `CreatePlayer` calls within one session.
-- [ ] Add a test asserting stored short/long player names round-trip correctly.
+- [x] Add a test asserting DPID uniqueness across multiple `CreatePlayer` calls within one session.
+      **Already satisfied**, pre-dates Phase 9's formal start:
+      `Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero`
+      (`tests/directplay_tests.cpp`, added in Phase 4/6's work).
+- [ ] Add a test asserting stored short/long player names round-trip correctly. **Blocked** -
+      depends on the deferred name-storage tasks above (Decision 17); nothing to test until that
+      future conversation resolves how (or whether) names become observable.
 - [ ] Add a test asserting player removal (via `Close` or disconnect) updates `dwCurrentPlayers`
       and removes the player from future `EnumSessions`/roster queries.
 

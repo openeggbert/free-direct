@@ -1370,3 +1370,78 @@ above, until pending-peer addressing exists - a bigger change than this decision
 GUID-mismatch validation; host-side routing/forwarding and broadcast (`plan.md` Phase 10's own
 remaining tasks, unaffected by this decision); the ENet backend's side of any of this (its
 receive-side buffering remains unimplemented, Decision 14).
+
+---
+
+## Decision 17: `CreatePlayer` validates against `dwMaxPlayers`; player-name storage deferred as unobservable
+
+**Status:** Decided and implemented, without a fresh user question for the cap-validation part
+(a small, self-contained, already-scoped `plan.md` task). The player-name-storage finding below
+is flagged, not decided - it needs its own future conversation before any code lands.
+
+### The question
+
+`plan.md` Phase 9's first reachable tasks: validate `CreatePlayer()`'s player count against
+`dwMaxPlayers`, and store each player's short/long name (`DPNAME.lpszShortNameA`/`lpszLongNameA`).
+`../free-eggbert/src/network.cpp:183-185,231-233` (both `JoinSession` and `CreateSession`)
+confirm a real, concrete pattern: `name.lpszShortNameA = pPlayerName; name.lpszLongNameA = NULL;
+m_pDP->CreatePlayer(&m_dpid, &name, NULL, NULL, 0, 0);` - a real short name is always supplied, the
+long name/data/event-handle parameters are always empty/null, matching what `plan.md`'s own
+"only if a concrete call site needs it" caveats on those fields already anticipated.
+
+### The finding that split this into "do now" vs "flag and defer"
+
+`docs/directplay-callsite-audit.md` already establishes that `free-eggbert`'s `CreatePlayer()` call
+sites are only reachable through `JoinSession`/`CreateSession`, which have **zero callers**
+anywhere in the game's current source (the same dead-UI-flow caveat `CLAUDE.md`'s DirectPlay Policy
+and `NEXT.md`'s "Known bugs" section already record for `Open()` and `EnumSessions()`). This was
+already a known, accepted condition of working on this subsystem at all - not a new problem - but
+re-checking `include/dplay.h` while scoping this task surfaced a *new* consequence specific to name
+storage: **`IDirectPlay2A` has no `GetPlayerName`-style method at all** (confirmed absent from the
+header, and confirmed `free-eggbert` never calls one either -
+`docs/directplay-callsite-audit.md` §1: "No group methods, no lobby methods, no
+`SetSessionDesc`/`GetPlayerName`/etc."). If a player's name were stored today, there would be
+**no way for anything - test or real caller - to ever observe it**, since `DirectPlaySession` is
+only reachable through the anonymous-namespace `DirectPlay2AImpl` (no whitebox path either, unlike
+`LoopbackDirectPlayTransport`, which has its own installable header tests can include directly).
+Storing a value that can never be read back is not "partially done, observable behavior TBD" like
+earlier partial decisions in this document - it would be genuinely untestable, dead state,
+violating this project's Testing Policy (`CLAUDE.md`: "New behavior... must ship with tests
+covering at least the success path"). Adding a `GetPlayerName`-shaped method to make it observable
+would itself be new public API surface with no `free-eggbert` call site behind it - exactly the
+kind of speculative addition `CLAUDE.md` requires asking the user about first, not something to
+decide as an implementation detail of a "store the name" task.
+
+### Decision
+
+**Implemented now**: `CreatePlayer()` validates `session_.currentPlayers` against
+`session_.maxPlayers` before allocating a new DPID, returning `DPERR_CANTCREATEPLAYER` when full -
+`dwMaxPlayers == 0` still means "no limit" (Decision 9's existing convention, reused verbatim). A
+local `CreatePlayer()` call counts against the same cap `Receive()`'s remote-assignment loop
+already enforces, since `dwMaxPlayers` bounds the session's total player count, not just remote
+ones. This is fully observable through the existing public `IDirectPlay2A::CreatePlayer()` return
+code - no new API surface, no design fork, safe to implement directly.
+
+**Flagged, not implemented**: short/long name storage (`plan.md`'s next two Phase 9 checkboxes).
+Left undone pending a future conversation with the user about how (or whether) to make stored names
+observable - candidate directions to present then, not decided now: (a) add a narrow
+`GetPlayerName`-equivalent as a deliberate, asked-for exception to the two-game scope rule
+(`CLAUDE.md` already requires this ask); (b) store names anyway, accepting they can only ever be
+verified by a future whitebox mechanism if `DirectPlaySession` is ever restructured to be
+test-reachable (a bigger, separate architectural change, not something to fold into "store a
+name"); (c) decide name storage genuinely isn't worth doing until a real consumer exists, striking
+the task with a documented reason (`plan.md`'s own policy: "do not delete tasks that turn out to be
+unnecessary; strike them through or annotate them instead").
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`'s `CreatePlayer()`: the `dwMaxPlayers` cap check, placed after the
+existing `dwSize` validation and before DPID allocation. **Verified** with two new committed tests
+in `tests/directplay_tests.cpp` (40/40 total passing): `Test_CreatePlayerOverMaxPlayers_
+ReturnsCantCreatePlayer` (`dwMaxPlayers = 1`; a second `CreatePlayer()` call returns
+`DPERR_CANTCREATEPLAYER`) and `Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects` (`dwMaxPlayers`
+left at its default `0`; three `CreatePlayer()` calls all succeed - confirmed through
+`CreatePlayer()` specifically, not just `Receive()`'s existing remote-assignment-loop coverage of
+the same "no limit" convention). Also re-verified both CMake build configurations (`ENET=OFF`/`ON`)
+end-to-end, that every pre-existing test still passes unaffected, and that `include/dplay.h` has
+zero ENet/SDL identifiers.
