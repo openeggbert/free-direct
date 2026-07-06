@@ -332,6 +332,173 @@ void Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection() {
     hostDp->Release();
 }
 
+// plan.md Phase 10 (docs/directplay-design.md Decision 15): "Implement Send from a local
+// player to a specific remote player, routed through the configured transport." Host role
+// only, over loopback - the joining role cannot yet address any specific remote DPID (see
+// Test_JoiningRoleSendToNonSelf_ReturnsInvalidPlayer below).
+//
+// nextPlayerId allocation is deterministic (Decision 3): the host's own CreatePlayer() call
+// consumes DPID 0, so the one connecting client - the next thing to consume an ID, via the
+// host's own Receive()-driven assignment loop (Decision 7) - is assigned DPID 1.
+void Test_SendToSpecificRemotePlayer_HostDeliversToAssignedClient() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    // Drives the host's pending-connection assignment loop for real (Decision 6/7).
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    const DPID assignedClientId = 1;
+
+    const char msg[] = "hello-client";
+    CHECK(hostDp2->Send(hostPlayer, assignedClientId, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
+
+    char buf[32] = {};
+    DWORD size = sizeof(buf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(size == sizeof(msg));
+    CHECK(from == hostPlayer);
+    CHECK(to == assignedClientId);
+    CHECK(std::memcmp(buf, msg, sizeof(msg)) == 0);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+void Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DP_OK);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "x";
+    CHECK(dp2->Send(player, 999, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DPERR_INVALIDPLAYER);
+
+    dp2->Release();
+    dp->Release();
+}
+
+void Test_SendFromUnknownLocalPlayer_ReturnsInvalidPlayer() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DP_OK);
+
+    const char msg[] = "x";
+    CHECK(dp2->Send(999, 1, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DPERR_INVALIDPLAYER);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// The joining role has no way to learn any remote DPID (including the host's own) before the
+// join-accepted handshake exists (still blocked, see NEXT.md) - a non-self Send() is always
+// DPERR_INVALIDPLAYER for it today, an honest "not supported yet" rather than the old silent
+// no-op.
+void Test_JoiningRoleSendToNonSelf_ReturnsInvalidPlayer() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    DPID clientPlayer = 0;
+    CHECK(clientDp2->CreatePlayer(&clientPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "x";
+    CHECK(clientDp2->Send(clientPlayer, clientPlayer + 1, DPSEND_GUARANTEED, (LPVOID)msg,
+                           sizeof(msg)) == DPERR_INVALIDPLAYER);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+void Test_SendOversizedPayloadToRemotePlayer_ReturnsSendTooBig() {
+    using namespace free_direct_directplay;
+
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    const DPID assignedClientId = 1;
+
+    std::vector<char> oversized(DirectPlayMessageQueue::kMaxPayloadBytes + 1, 'x');
+    CHECK(hostDp2->Send(hostPlayer, assignedClientId, DPSEND_GUARANTEED, oversized.data(),
+                         static_cast<DWORD>(oversized.size())) == DPERR_SENDTOOBIG);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 // plan.md Phase 6: "Add a test for invalid host parameters (e.g. dwMaxPlayers == 0, malformed
 // DPSESSIONDESC2.dwSize), asserting a meaningful DPERR_* rather than DP_OK."
 //
@@ -766,6 +933,11 @@ int main() {
     Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions();
     Test_OpenAsJoinWithHostPresent_Succeeds();
     Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection();
+    Test_SendToSpecificRemotePlayer_HostDeliversToAssignedClient();
+    Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer();
+    Test_SendFromUnknownLocalPlayer_ReturnsInvalidPlayer();
+    Test_JoiningRoleSendToNonSelf_ReturnsInvalidPlayer();
+    Test_SendOversizedPayloadToRemotePlayer_ReturnsSendTooBig();
     Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();

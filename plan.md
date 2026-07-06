@@ -1477,26 +1477,24 @@ Phase 0 DPID-vs-index finding.
 Goal: real message delivery between distinct peers (not just self-loopback), including host
 routing, broadcast, and validation.
 
-- [ ] Implement `Send` from a local player to a specific remote player, routed through the
-      configured transport. **Partially done, transport layer only:** `docs/directplay-design.md`
-      Decision 14 - `IDirectPlayTransport::Send()` gained a `DPID targetId` parameter, asked of and
-      confirmed by the user (over a separate new `SendTo()` method), addressing one specific
-      connected peer out of a hosting instance's potentially many (`connectedPeers_`), or the sole
-      host for a joining instance. `LoopbackDirectPlayTransport` delivers real payloads for all
-      three modes (hosting/joining/self-send-only) by reaching into the *target instance's* own
-      inbox directly - the same mechanism Decision 10 already used for `Connect()`/
-      `RejectPendingConnection()`/`Shutdown()`. `EnetDirectPlayTransport::Send()` got the equivalent
-      `connectedPeers_` lookup; its `Receive()`/`Service()` receive-side buffering remains
-      unimplemented (a separate, still-open task - loopback-first, matching this session's
-      established pattern). **Verified**: 32/32 `tests/directplay_tests.cpp` suite passes (three
-      new whitebox tests replacing the now-obsolete `Test_LoopbackSend_
-      ReturnsFalseForHostingAndJoiningRoles`); both CMake configs (`ENET=OFF`/`ON`) build clean;
-      `include/dplay.h` has zero ENet/SDL identifiers. Left unchecked - `DirectPlay2AImpl::Send()`/
-      `Receive()` (`DirectPlay.cpp`) still don't use this new capability at all (no wire-header
-      construction/parsing, no recipient-DPID lookup, no host routing) - that wiring is the next
-      task, not yet started.
+- [x] Implement `Send` from a local player to a specific remote player, routed through the
+      configured transport. **Done, host role and loopback only:** `docs/directplay-design.md`
+      Decision 14 gave `IDirectPlayTransport::Send()` a `DPID targetId` parameter (transport-layer
+      groundwork); Decision 15 wired `DirectPlay2AImpl::Send()`/`Receive()` (`DirectPlay.cpp`) to
+      actually use it - `Send()` validates `idFrom`/`idTo`, serializes a
+      `DirectPlayWirePacketHeader` + payload (`DirectPlayWireProtocol.hpp`, built in Phase 5, unused
+      until now), and calls `transport->Send(idTo, ...)`; `Receive()` drains real transport-
+      delivered blobs, deserializes them, and enqueues into `session_.messageQueue`. Only the
+      hosting role can address a specific remote player today - `docs/directplay-callsite-audit.md`
+      confirms `free-eggbert` never does this anyway (its one real `Send()` call site is always
+      `Send(m_dpid, 0, ...)`, a broadcast); a joining role has no way to learn any remote DPID yet
+      (blocked on the still-unimplemented join-accepted handshake), so it gets `DPERR_INVALIDPLAYER`
+      for any non-self `Send()`. **Verified** with the exact task below's own test plus four
+      validation tests - see that task and Decision 15 for full detail.
 - [ ] Implement host-side routing: the host forwards a `Send` addressed to a non-host recipient to
-      that recipient's connection (star topology, matching ENet's client/server model).
+      that recipient's connection (star topology, matching ENet's client/server model). Not
+      started - today only "host directly addresses one of its own `remotePlayerIds`" works; a
+      joining peer still cannot reach any other peer (host or otherwise) at all.
 - [ ] Implement direct peer-to-peer delivery **only if** a future architectural decision moves away
       from the host-hub star topology — not needed under the current plan; leave as a documented
       non-task unless the topology decision changes.
@@ -1505,24 +1503,54 @@ routing, broadcast, and validation.
 - [ ] Add the `DPID_ALLPLAYERS` and `DPID_SYSMSG` constants to `include/dplay.h` (if not already
       added in Phase 0/Phase 2), so broadcast sends have named constants available even though
       current call sites use a literal `0`.
-- [ ] Preserve DirectPlay-like packet boundaries: each `Send` call must arrive as exactly one
-      `Receive`-visible message, never coalesced or split.
+- [x] Preserve DirectPlay-like packet boundaries: each `Send` call must arrive as exactly one
+      `Receive`-visible message, never coalesced or split. **Done, loopback:**
+      `LoopbackDirectPlayTransport::Send()`/`Receive()` (Decision 10/14) never coalesce or split -
+      each `Send()` call is one `buffered_` entry, popped whole by exactly one `Receive()` call;
+      `DirectPlay2AImpl::Receive()`'s drain loop (Decision 15) parses one wire header + payload per
+      transport-level `Receive()` call, preserving the same one-to-one boundary up to
+      `session_.messageQueue`. ENet's side is moot until its receive-side buffering exists.
 - [ ] Preserve reliable, ordered delivery for `DPSEND_GUARANTEED` sends (mapped to
-      `ENET_PACKET_FLAG_RELIABLE` per Phase 5 when using the ENet backend).
-- [ ] Validate the sender player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idFrom` does
-      not correspond to a locally-registered player.
+      `ENET_PACKET_FLAG_RELIABLE` per Phase 5 when using the ENet backend). Loopback trivially
+      preserves order (a plain FIFO, no real network to reorder anything) and never drops a
+      packet regardless of the `reliable` flag - `DPSEND_GUARANTEED` genuinely mattering (real
+      loss/reordering to guard against) only applies to the ENet backend, whose receive side isn't
+      implemented yet. Left unchecked - no test yet demonstrates *ordering* specifically (see the
+      still-open "packet-ordering test" task below).
+- [x] Validate the sender player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idFrom` does
+      not correspond to a locally-registered player. **Done** (Decision 15): checked against
+      `session_.localPlayerIds`. **Verified**: `Test_SendFromUnknownLocalPlayer_
+      ReturnsInvalidPlayer` (`tests/directplay_tests.cpp`).
 - [ ] Validate the recipient player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idTo` is
-      neither a known player DPID nor the broadcast ID.
+      neither a known player DPID nor the broadcast ID. **Partially done** (Decision 15): `idTo`
+      not in `session_.remotePlayerIds` correctly returns `DPERR_INVALIDPLAYER` for the hosting
+      role (**verified**: `Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer`); the "nor the
+      broadcast ID" half is unchecked since broadcast doesn't exist yet, and Decision 15 flags a
+      real, unresolved ambiguity for whoever implements it: Decision 3 assigned DPID `0` to the
+      host's own first local player rather than reserving it as `DPID_ALLPLAYERS`, so
+      `free-eggbert`'s own broadcast call (`Send(m_dpid, 0, ...)`) is genuinely ambiguous under
+      current semantics between "broadcast" and "the specific player whose DPID is `0`."
 - [ ] Validate a null payload with zero length (`lpData == nullptr && dwDataSize == 0`) as an
       accepted no-payload send, only if a call site needs it; otherwise document it as rejected.
 - [ ] Reject a null payload with nonzero length (`lpData == nullptr && dwDataSize > 0`) with
       `DPERR_INVALIDPARAMS`.
-- [ ] Reject messages larger than the maximum payload size (Phase 3/Phase 11) with
+- [x] Reject messages larger than the maximum payload size (Phase 3/Phase 11) with
       `DPERR_SENDTOOBIG`, sized to comfortably exceed the largest observed `free-eggbert` payload
       (e.g. `sizeof(NetMessage) * pack.nbMessages + 20` in `src/decnet.cpp`, and the 128/132-byte
-      packets in `src/event.cpp`).
-- [ ] Add a host/client integration test over loopback: host sends to a specific client, client
-      receives the exact payload.
+      packets in `src/event.cpp`). **Done** (Decision 15): `dwDataSize >
+      DirectPlayMessageQueue::kMaxPayloadBytes` (4096, already comfortably exceeding every
+      `free-eggbert` payload observed in the Phase 0 audit) returns `DPERR_SENDTOOBIG`, checked
+      before ever reaching the transport - enforced there specifically because an oversized packet
+      that reached the wire would exceed `Receive()`'s fixed-size read buffer and wedge the
+      receiver's queue forever. **Verified**: `Test_SendOversizedPayloadToRemotePlayer_
+      ReturnsSendTooBig`.
+- [x] Add a host/client integration test over loopback: host sends to a specific client, client
+      receives the exact payload. **Done**: `Test_SendToSpecificRemotePlayer_
+      HostDeliversToAssignedClient` (`tests/directplay_tests.cpp`) - a real host and a real joining
+      client over loopback; the host `Send()`s to the client's assigned DPID and the client's own
+      `Receive()` gets the exact payload, with `idFrom`/`idTo` matching. **Verified**: 37/37
+      `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
+      `include/dplay.h` has zero ENet/SDL identifiers.
 - [ ] Add a two-client routing test over loopback (if feasible with the loopback transport's
       design): client A sends to client B via the host; client B receives it and client A does not.
 - [ ] Add a packet-ordering test: multiple guaranteed sends from the same sender arrive at the

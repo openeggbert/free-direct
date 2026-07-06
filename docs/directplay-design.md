@@ -1155,3 +1155,103 @@ constructing/parsing `DirectPlayWirePacketHeader`s, looking up a recipient's DPI
 items. This decision covers transport-layer groundwork only, mirroring how Decision 10 gave
 connection lifecycle at the transport layer before `DirectPlay.cpp` was wired to use it
 (Decision 11).
+
+---
+
+## Decision 15: wiring `DirectPlay2AImpl::Send()`/`Receive()` to real per-DPID delivery, host role only
+
+**Status:** Decided and implemented, without a fresh user question - this is the direct,
+previously-scoped continuation of Decision 14 ("this decision covers transport-layer groundwork
+only... [Send()/Receive() wiring] is the next task, not yet started"), not a new architectural
+fork.
+
+### The question
+
+Decision 14 gave `IDirectPlayTransport` real addressed delivery, but `DirectPlay2AImpl::Send()`/
+`Receive()` (`DirectPlay.cpp`) still only handled the `idTo == idFrom` self-send case (Decision
+12). `plan.md` Phase 10's first task asks for real delivery "from a local player to a specific
+remote player."
+
+### The finding that scoped it down to host-only
+
+`docs/directplay-callsite-audit.md` confirms `free-eggbert`'s only real `Send()` call site is
+`Send(m_dpid, 0, ...)` - **always a broadcast to `idTo == 0`, never a specific named remote
+DPID**. So this task's own scenario (a local player addressing one specific remote player) doesn't
+literally match any known call site - it is Phase 10's own necessary building block (broadcast, a
+later checklist item, is naturally "send to each known remote player," so the unicast primitive has
+to exist first regardless of whether free-eggbert calls it directly). Implementing it now is
+`plan.md`-scheduled groundwork, not speculative scope.
+
+More importantly: only the **hosting** role can meaningfully validate/address "a specific remote
+player" at all today. A joining-role session has no way to learn *any* remote DPID yet - not the
+host's own local player ID, not any other client's - because that information only ever arrives via
+the join-accepted handshake, which remains blocked on this same Send()/Receive() capability
+(circular - Phase 7's remaining tasks and Phase 9's player-list sync both depend on delivery
+existing first, in exactly the order these decisions are landing). So for now, a joining role's
+attempt to `Send()` to anything other than itself is honestly `DPERR_INVALIDPLAYER` - "not
+supported yet," not a silently-wrong success.
+
+**Also found, and worth flagging for whoever implements broadcast next:** Decision 3 chose to
+assign DPID `0` to the host's own first local player (not reserve it as `DPID_ALLPLAYERS`, unlike
+real DirectPlay) specifically to match `free-eggbert`'s comparison pattern. This means
+`free-eggbert`'s own broadcast call, `Send(m_dpid, 0, ...)`, is genuinely ambiguous under
+FreeDirect's current DPID semantics: is `0` "broadcast to everyone," or "the specific player whose
+DPID happens to be `0`" (typically the host)? This decision does not resolve that ambiguity - it
+is explicitly out of scope here (broadcast is untouched) - but it is a real, concrete question the
+broadcast task will have to answer, not an invented one.
+
+### Decision
+
+`Send(idFrom, idTo, dwFlags, lpData, dwDataSize)` for `idTo != idFrom`:
+1. `idFrom` must be in `session_.localPlayerIds`, or `DPERR_INVALIDPLAYER` (applies to both
+   roles - `plan.md`'s own "validate the sender player ID" task).
+2. If not hosting, or no transport: `DPERR_INVALIDPLAYER` (the joining-role limitation above).
+3. `idTo` must be in `session_.remotePlayerIds` (an already-assigned remote player - Decision 7/9's
+   bookkeeping), or `DPERR_INVALIDPLAYER` (`plan.md`'s "validate the recipient player ID" task).
+4. `dwDataSize` must not exceed `DirectPlayMessageQueue::kMaxPayloadBytes`, or
+   `DPERR_SENDTOOBIG` - enforced here, before the transport, not just as a `Receive()`-side
+   nicety: an oversized packet that made it onto the wire would arrive larger than `Receive()`'s
+   fixed-size read buffer (see below) and get stuck at the front of the receiver's queue forever,
+   wedging every message behind it. This folds in `plan.md`'s own "reject messages larger than the
+   maximum payload size" task, since Decision 14's new delivery path would otherwise ship with that
+   exact landmine already armed.
+5. A `DirectPlayWirePacketHeader` (`idFrom`/`idTo`/`payloadLength`/`applicationGuid`/
+   `sessionGuid`, `type` left at its `Data` default) is serialized (`DirectPlayWireProtocol.hpp`,
+   built in Phase 5, unused by any real caller until now) and the payload appended; the whole
+   buffer is handed to `session_.transport->Send(idTo, ...)`, `reliable` derived from
+   `DPSEND_GUARANTEED` exactly as the self-send path already does.
+
+`Receive()` gains a drain loop, for **both** roles, right before the existing
+`messageQueue.TryReceive()` call: repeatedly calls `session_.transport->Receive()` into a
+fixed-size buffer (`kDirectPlayWireHeaderSize + DirectPlayMessageQueue::kMaxPayloadBytes`,
+generous enough for anything `Send()`'s own size check above allows through), deserializes each
+blob via `TryDeserializeDirectPlayWireHeader`, and enqueues a `DirectPlayMessagePacket` into
+`session_.messageQueue`. A blob that fails to deserialize (too small, or a `payloadLength` that
+disagrees with what actually arrived) is dropped silently, matching the defensive posture that
+function was already built for in Phase 5. A full `messageQueue` also drops the packet silently
+(`Enqueue()`'s existing bounded-growth behavior, unchanged) - there is no send-side
+acknowledgement/backpressure channel to report the drop through yet.
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`: `Send()`'s new validation + serialization + `transport->Send()`
+call for `idTo != idFrom`; `Receive()`'s new drain loop. **Verified** with five new committed
+end-to-end tests (via the real public `IDirectPlay2A` API, not whitebox) in
+`tests/directplay_tests.cpp` (37/37 total passing):
+`Test_SendToSpecificRemotePlayer_HostDeliversToAssignedClient` (a real host + a real joining
+client; the host creates its own local player - deterministically DPID `0`, Decision 3 - `Receive()`s
+once to assign the connecting client DPID `1`, `Send()`s to it, and the client's own `Receive()`
+gets the exact payload back, with `idFrom`/`idTo` matching), `Test_SendToUnknownRemotePlayer_
+ReturnsInvalidPlayer`, `Test_SendFromUnknownLocalPlayer_ReturnsInvalidPlayer`,
+`Test_JoiningRoleSendToNonSelf_ReturnsInvalidPlayer`, and
+`Test_SendOversizedPayloadToRemotePlayer_ReturnsSendTooBig`. Also re-verified both CMake build
+configurations (`ENET=OFF`/`ON`) end-to-end and that `include/dplay.h` has zero ENet/SDL
+identifiers.
+
+**Explicitly out of scope, left for later `plan.md` Phase 10 tasks:** host-side routing/forwarding
+of a `Send` a non-host peer addresses to another non-host peer (star-topology relay - today only
+"host directly addresses one of its own `remotePlayerIds`" works, a joining peer still cannot reach
+any other peer at all); broadcast delivery for `idTo == 0`/`DPID_ALLPLAYERS` (including resolving
+the DPID-0-ambiguity finding above); packet-ordering and reliable-delivery-focused tests; the ENet
+backend's receive-side buffering (still blocked since Decision 14, `Service()` still discards
+`ENET_EVENT_TYPE_RECEIVE`).

@@ -5,6 +5,7 @@
  */
 #include "dplay.h"
 #include "DirectPlaySession.hpp"
+#include "DirectPlayWireProtocol.hpp"
 #include "LoopbackDirectPlayTransport.hpp"
 #ifdef FREE_DIRECT_ENABLE_ENET
 #include "EnetDirectPlayTransport.hpp"
@@ -174,10 +175,6 @@ namespace {
         HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) override {
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
 
-            // Only the self-send loopback path (Phase 4) is implemented so far. Sender/recipient
-            // player ID validation, payload validation, host routing, and broadcast all land in
-            // Phase 10; a non-self idTo is currently a silent no-op, matching the pre-Phase-4
-            // stub behavior for anything this phase doesn't cover.
             if (idTo == idFrom) {
                 // Enqueued directly into session_.messageQueue rather than round-tripping
                 // through session_.transport (Phase 4's original approach, changed here per
@@ -196,6 +193,50 @@ namespace {
                 packet.flags = dwFlags;
                 packet.payload.assign(bytes, bytes + dwDataSize);
                 if (!session_.messageQueue.Enqueue(std::move(packet))) return DPERR_SENDTOOBIG;
+                return DP_OK;
+            }
+
+            // Real unicast-to-a-specific-remote-player delivery (docs/directplay-design.md
+            // Decision 15), host role only for now: idFrom must be a locally-registered
+            // player, and idTo must be a remote player this host has actually assigned a DPID
+            // to (Decision 7/9's assignment loop) - anything else is DPERR_INVALIDPLAYER,
+            // matching plan.md Phase 10's own validation tasks rather than the old silent
+            // no-op. The joining role cannot yet address a specific remote player at all - it
+            // has no way to learn any remote DPID (including the host's own) before the
+            // join-accepted handshake exists (blocked Phase 7 tasks) - so it always gets
+            // DPERR_INVALIDPLAYER here too, an honest "not supported yet."
+            if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
+                session_.localPlayerIds.end()) {
+                return DPERR_INVALIDPLAYER;
+            }
+            if (!session_.isHost || !session_.transport) return DPERR_INVALIDPLAYER;
+            if (std::find(session_.remotePlayerIds.begin(), session_.remotePlayerIds.end(), idTo) ==
+                session_.remotePlayerIds.end()) {
+                return DPERR_INVALIDPLAYER;
+            }
+            // Enforced here, before ever reaching the transport, not just as a Receive()-side
+            // nicety: an oversized packet that made it onto the wire would arrive larger than
+            // Receive()'s fixed-size read buffer (see Receive(), below) and get stuck at the
+            // front of the receiver's queue forever, wedging every message behind it too.
+            if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
+                return DPERR_SENDTOOBIG;
+            }
+
+            free_direct_directplay::DirectPlayWirePacketHeader header;
+            header.applicationGuid = session_.applicationGuid;
+            header.sessionGuid = session_.sessionInstanceGuid;
+            header.idFrom = idFrom;
+            header.idTo = idTo;
+            header.payloadLength = dwDataSize;
+
+            std::vector<std::uint8_t> wireBytes;
+            free_direct_directplay::SerializeDirectPlayWireHeader(header, wireBytes);
+            const auto* payloadBytes = static_cast<const std::uint8_t*>(lpData);
+            wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
+
+            const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
+            if (!session_.transport->Send(idTo, wireBytes.data(), wireBytes.size(), reliable)) {
+                return DPERR_GENERIC;
             }
             return DP_OK;
         }
@@ -256,6 +297,37 @@ namespace {
                     while (session_.currentPlayers >= session_.maxPlayers &&
                            session_.transport->RejectPendingConnection()) {
                     }
+                }
+            }
+            // Drain every real transport-delivered wire packet into session_.messageQueue
+            // (docs/directplay-design.md Decision 15), for both roles - a host receiving from
+            // one of its remotePlayerIds, or a joining session receiving from the host it
+            // Connect()ed to. Each blob handed back by transport->Receive() is exactly one
+            // Send()-call's worth (LoopbackDirectPlayTransport's buffered_ never coalesces or
+            // splits), so one wire header + payload is parsed per iteration. A blob that fails
+            // to deserialize (too small, or a payloadLength that disagrees with what actually
+            // arrived) is dropped silently rather than crashing or corrupting the queue - the
+            // same defensive posture TryDeserializeDirectPlayWireHeader was built for in Phase 5,
+            // finally exercised here by a real caller. A full messageQueue silently drops the
+            // packet too (Enqueue()'s existing bounded-growth contract, unchanged) - there is no
+            // send-side acknowledgement/backpressure to report the drop to yet.
+            if (session_.transport) {
+                constexpr std::size_t kMaxWireBufferSize =
+                    free_direct_directplay::kDirectPlayWireHeaderSize +
+                    free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes;
+                std::vector<std::uint8_t> wireBuf(kMaxWireBufferSize);
+                std::size_t receivedSize = 0;
+                while (session_.transport->Receive(wireBuf.data(), wireBuf.size(), &receivedSize)) {
+                    const auto header = free_direct_directplay::TryDeserializeDirectPlayWireHeader(
+                        wireBuf.data(), receivedSize);
+                    if (!header) continue;
+                    free_direct_directplay::DirectPlayMessagePacket packet;
+                    packet.idFrom = header->idFrom;
+                    packet.idTo = header->idTo;
+                    packet.payload.assign(
+                        wireBuf.begin() + free_direct_directplay::kDirectPlayWireHeaderSize,
+                        wireBuf.begin() + receivedSize);
+                    session_.messageQueue.Enqueue(std::move(packet));
                 }
             }
             // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
