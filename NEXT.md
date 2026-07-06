@@ -43,7 +43,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 15/15 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 16/16 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -79,7 +79,16 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — Added `Test_OpenAsHostOverLoopback_ReturnsOk`
+- (uncommitted, this session) — Added `Test_OpenWithMalformedDwSize_ReturnsInvalidParams`
+  (`tests/directplay_tests.cpp`), closing `plan.md` Phase 6's "Add a test for invalid host
+  parameters" task. Found and documented a scope correction while implementing: `dwMaxPlayers == 0`
+  (mentioned in the task's own wording) is deliberately **not** an error case (Decision 9's
+  intentional "no limit" value) and `Open()` never validates it, so the test only covers the real
+  gap — a malformed `DPSESSIONDESC2.dwSize` making `Open()` return `DPERR_INVALIDPARAMS` instead of
+  `DP_OK`. `tests/directplay_tests.cpp` is not referenced by `CMakeLists.txt` (Phase 15, not
+  CTest-wired), so this change cannot affect either CMake build config either way. Verified: 16/16
+  `tests/directplay_tests.cpp` suite passes; `include/dplay.h` still has zero ENet/SDL identifiers.
+- `4e26809` — Added `Test_OpenAsHostOverLoopback_ReturnsOk`
   (`tests/directplay_tests.cpp`), closing `plan.md` Phase 6's "Add a test for host session
   creation over loopback" task. Found and documented, rather than worked around, that
   `IDirectPlay2A` has no public way to observe "is this session the host" today (`Open()` returns
@@ -248,22 +257,19 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-Remaining `plan.md` Phase 6 tasks, in order:
+Only one `plan.md` Phase 6 task remains, and it is currently blocked:
 
-1. **Add a test for invalid host parameters** (e.g. malformed `DPSESSIONDESC2.dwSize`), asserting
-   a meaningful `DPERR_*` rather than `DP_OK`.
-   - Files: `tests/directplay_tests.cpp`, possibly `DirectPlay.cpp`'s `Open()` validation if a gap
-     is found.
-   - Note: `dwMaxPlayers == 0` is a real, intentional "no limit" case (Decision 9), not an error —
-     re-read `Open()`'s current validation logic first so the new test doesn't assert against
-     already-shipped, correct behavior.
-   - Verify: same as above.
-
-2. **Add a test for closing a host session**, asserting a subsequent `EnumSessions` from another
+1. **Add a test for closing a host session**, asserting a subsequent `EnumSessions` from another
    loopback peer no longer finds it.
    - Blocked on real content: `EnumSessions()` doesn't track sessions yet (`plan.md` Phase 8, not
-     started). Do this task after Phase 8's basic discovery exists, or it will only be testing "an
-     empty list stays empty," which isn't meaningful.
+     started). Doing this task now would only test "an empty list stays empty," which isn't
+     meaningful — leave it until Phase 8's basic discovery exists.
+
+With that, Phase 6 has no more unblocked tasks. The next unstarted phases are Phase 7 (session
+joining — `Open(..., DPOPEN_JOIN/DPOPEN_OPENSESSION)`, `Connect()`) and Phase 8 (session
+enumeration — real `EnumSessions()`, which would also unblock the Phase 6 task above). Picking
+between them (or another phase) is a real scope decision or new work; ask the user before
+starting either rather than assuming which one they want next.
 
 ## 9. Do not do yet
 

@@ -214,6 +214,30 @@ void Test_OpenAsHostOverLoopback_ReturnsOk() {
     dp->Release();
 }
 
+// plan.md Phase 6: "Add a test for invalid host parameters (e.g. dwMaxPlayers == 0, malformed
+// DPSESSIONDESC2.dwSize), asserting a meaningful DPERR_* rather than DP_OK."
+//
+// dwMaxPlayers == 0 is deliberately NOT exercised here as an error case: it is a real,
+// intentional "no limit" value (docs/directplay-design.md Decision 9), and Open() never
+// validates it as invalid - asserting a DPERR_* for it would pin down wrong behavior, not
+// verify correct behavior. The one real gap this test covers is dwSize itself: Open()
+// (DirectPlay.cpp) already checks lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2), but no
+// committed test exercised that check through the public interface before this one.
+void Test_OpenWithMalformedDwSize_ReturnsInvalidParams() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2) - 1; // malformed: real struct size is required exactly
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE) == DPERR_INVALIDPARAMS);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // plan.md Phase 4/9: originally "asserting a non-zero DPID is returned and is unique" -
 // updated per docs/directplay-design.md Decision 3, now implemented: the host's first
 // local player gets DPID 0 (not an error, the correct, expected value, breaking with
@@ -423,6 +447,7 @@ int main() {
     Test_OpenAsHostWithZeroGuidInstance_GeneratesNonZeroGuid();
     Test_OpenAsHostWithNonZeroGuidInstance_PreservesCallerValue();
     Test_OpenAsHostOverLoopback_ReturnsOk();
+    Test_OpenWithMalformedDwSize_ReturnsInvalidParams();
     Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();

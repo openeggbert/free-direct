@@ -1250,8 +1250,22 @@ whichever transport is configured.
       default loopback transport. **Verified**: 15/15 `tests/directplay_tests.cpp` suite passes;
       both CMake configs (`ENET=OFF`/`ON`) build clean; `include/dplay.h` has zero ENet/SDL
       identifiers.
-- [ ] Add a test for invalid host parameters (e.g. `dwMaxPlayers == 0`, malformed
-      `DPSESSIONDESC2.dwSize`), asserting a meaningful `DPERR_*` rather than `DP_OK`.
+- [x] Add a test for invalid host parameters (e.g. `dwMaxPlayers == 0`, malformed
+      `DPSESSIONDESC2.dwSize`), asserting a meaningful `DPERR_*` rather than `DP_OK`. **Done, with
+      a scope correction found while implementing:** `dwMaxPlayers == 0` is deliberately **not**
+      tested as an error case - it is a real, intentional "no limit" value (Decision 9), and
+      `Open()` never validates it as invalid, so asserting a `DPERR_*` for it would pin down wrong
+      behavior rather than verify correct behavior. The one real gap was `dwSize`: `Open()`
+      (`DirectPlay.cpp`) already checks `lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2)`, but
+      nothing exercised that check through the public interface before this task. Added
+      `Test_OpenWithMalformedDwSize_ReturnsInvalidParams` (`tests/directplay_tests.cpp`): a
+      `dwSize` one byte short of `sizeof(DPSESSIONDESC2)` makes `Open(..., DPOPEN_CREATE)` return
+      `DPERR_INVALIDPARAMS` instead of `DP_OK`. **Verified**: 16/16 `tests/directplay_tests.cpp`
+      suite passes. `tests/directplay_tests.cpp` is not referenced anywhere in `CMakeLists.txt`
+      (Phase 15, not yet CTest-wired), so this change cannot affect either CMake build
+      configuration; re-ran `cmake --build cmake-build-debug` anyway as a sanity check (no
+      recompilation triggered, as expected) and re-confirmed `include/dplay.h` has zero ENet/SDL
+      identifiers.
 - [ ] Add a test for closing a host session, asserting a subsequent `EnumSessions` from another
       loopback peer no longer finds it.
 
