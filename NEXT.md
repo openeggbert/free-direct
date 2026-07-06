@@ -10,30 +10,27 @@ scope is bounded by what the two target games' real call sites need (see `CLAUDE
 - **Target games** (sibling repos): `../free-eggbert` (*Speedy Blupi* — DirectDraw + DirectSound +
   DirectPlay) and `../planetblupi` (*Planet Blupi* — DirectDraw + DirectSound only; confirmed zero
   DirectPlay usage).
-- **Current development phase**: `plan.md` Phases 0-5 complete. Phase 6 ("Session hosting") is
-  essentially done — its only remaining reachable task is blocked on Phase 8 (Section 8); sending a
-  real join-accepted packet is now done too (Decision 16), leaving only the structurally-blocked
-  join-rejected-explanation task (see Section 5). **Phase 7 ("Session joining") is essentially
-  complete over loopback**: a real host + joining client connect, exchange a join-request/
-  join-accepted handshake, and the client adopts its host-assigned DPID (Decisions 10-16) — only
-  the ENet side (host address resolution, join timeout semantics) and full `DPSESSIONDESC2` sync
-  (today only two GUID fields) remain open. Phase 10 ("Send/Receive networking") has real,
-  end-to-end unicast delivery over loopback, host role only: a local player can `Send()` to one
-  specific real remote player and the recipient's `Receive()` gets the exact payload
-  (Decisions 14-15) — host-side routing/forwarding and broadcast (`idTo == 0`) remain unimplemented,
-  and broadcast specifically has a real, unresolved ambiguity flagged for whoever implements it
-  next (DPID `0` is both a valid real player ID, per Decision 3, and `free-eggbert`'s own broadcast
-  convention). The ENet backend's receive-side buffering also remains unimplemented. **Phase 9
-  ("Player management") has no more reachable tasks**: `CreatePlayer()` validates `dwMaxPlayers`
-  (Decision 17), and `dwCurrentPlayers`'s decrement-on-disconnect is proven indirectly (same
-  decision's amendment) - every remaining Phase 9 checkbox either needs an observability question
-  resolved first (player names, a player-lost state - both would be permanently unobservable via
-  the current `IDirectPlay2A` subset) or a concrete "what does duplicate even mean here" answer
-  from the user (duplicate-player validation), or is already correctly conditional on a call site
-  Phase 0 found doesn't exist (player data bytes/event handle/system messages). Phases 8, 11
-  onward (enumeration, error semantics, hardening, CI, docs) have not started.
+- **Current development phase**: `plan.md` Phases 0-5 complete. **Phase 6 ("Session hosting") is
+  fully resolved**: its only remaining task (a `JoinReject` explanation packet for over-
+  `dwMaxPlayers` rejections) is confirmed structurally blocked, not just unimplemented (Section 5).
+  **Phase 7 ("Session joining") is essentially complete over loopback**: a real host + joining
+  client connect, exchange a join-request/join-accepted handshake, and the client adopts its
+  host-assigned DPID (Decisions 10-16) — only the ENet side and full `DPSESSIONDESC2` sync (today
+  only two GUID fields) remain open. **Phase 8 ("Session enumeration") is done over loopback**:
+  `EnumSessions()` really discovers a hosted loopback session via a synchronous DirectPlay-level
+  registry (Decision 18) - explicit-host-only, with real `guidApplication`/
+  `DPENUMSESSIONS_AVAILABLE` filtering matching `free-eggbert`'s own call site; ENet discovery is
+  untouched (would need a real wire exchange, a separate later task). Phase 10 ("Send/Receive
+  networking") has real, end-to-end unicast delivery over loopback, host role only (Decisions
+  14-15) — host-side routing/forwarding and broadcast (`idTo == 0`, with its own unresolved DPID-0
+  ambiguity) remain unimplemented. The ENet backend's receive-side buffering also remains
+  unimplemented. **Phase 9 ("Player management") has no more reachable tasks**: every remaining
+  checkbox needs an observability question resolved first (player names, a player-lost state) or
+  a concrete "what does duplicate even mean here" answer (duplicate-player validation), or is
+  already correctly conditional on a call site Phase 0 found doesn't exist. Phase 11 onward (error
+  semantics, hardening, CI, docs) has not started.
 - **Key architectural decisions** (`docs/directplay-design.md` has the full record, Decisions
-  1-17):
+  1-18):
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/ENet/SDL3_net symbol may ever appear in them.
   - SDL3 backs DirectDraw/DirectSound. ENet is the preferred DirectPlay network transport (over
@@ -62,7 +59,7 @@ cmake --build cmake-build-enet -j4
 (The `cmake-build-enet` directory is a scratch build dir, not committed — recreate and delete it
 as needed; it is not part of the repository.)
 
-**Test status: 41/41 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
+**Test status: 46/46 passing.** `tests/directplay_tests.cpp` is a standalone file with its own
 `main()`, **not yet wired into CMake/CTest** (`plan.md` Phase 15, not started). Build/run command
 in Section 7. No other automated tests exist in the repository.
 
@@ -98,7 +95,24 @@ type starting at `0`.
 ## 3. Recent changes
 
 Most recent commits (newest first):
-- (uncommitted, this session) — `plan.md` Phase 9 wrap-up (worked autonomously through the
+- (uncommitted, this session) — `plan.md` Phase 8: real `EnumSessions()` over loopback
+  (`docs/directplay-design.md` Decision 18). Asked the user first whether to implement `plan.md`'s
+  literally-worded Discovery/DiscoveryResponse wire exchange, or a simpler synchronous
+  DirectPlay-level registry - confirmed the registry, since a wire round-trip hits the same
+  async/host-must-poll tension Decision 16 already solved for joins, but worse here since
+  `EnumSessions()` isn't even called on an `Open()`ed object. A new static registry (separate from
+  `LoopbackDirectPlayTransport`'s own port registry, Decision 10 - this one maps to a live
+  `DirectPlaySession*`, keeping DirectPlay-level concepts out of the transport layer) is populated
+  by `Open(DPOPEN_CREATE)` and cleared by `Close()`/`Release()`. `EnumSessions()` now really
+  filters by `guidApplication`/`DPENUMSESSIONS_AVAILABLE` (both confirmed real, used by
+  `free-eggbert`'s own call site) and fills `DPSESSIONDESC2` from the live session. This finally
+  unblocks and closes `plan.md` Phase 6's last remaining task too (`EnumSessions` no longer finds a
+  closed session). Verified: 46/46 `tests/directplay_tests.cpp` suite passes (five new end-to-end
+  tests); both CMake configs (`ENET=OFF`/`ON`) build clean; `include/dplay.h` still has zero
+  ENet/SDL identifiers. Not implemented, honestly flagged: `plan.md`'s callback-stop-with-two-
+  sessions test - only one loopback-hosted session can exist per process at a time (Decisions
+  11/12), so it can't be constructed.
+- `5fa8b6b` — `plan.md` Phase 9 wrap-up (worked autonomously through the
   remaining ordered tasks, per the user's direction): added
   `Test_RemotePlayerDisconnect_DecrementsCurrentPlayers` (`tests/directplay_tests.cpp`), proving
   `dwCurrentPlayers` genuinely decrements on a remote disconnect - indirectly, by reusing
@@ -315,11 +329,12 @@ Full narrative detail and rationale for each decision lives in `docs/directplay-
 
 ## 4. Current blocker / main problem
 
-**No build- or test-breaking blocker exists right now** — everything builds and 41/41 tests pass.
-`plan.md` Phase 9 has no more reachable tasks. What remains is scope, not a blocker: host-side
-routing/forwarding, broadcast (`idTo == 0`, with its own unresolved DPID-0 ambiguity), player-name
-storage, a distinct player-lost state, and duplicate-player validation are all open questions
-needing the user's input before any code lands (Section 5).
+**No build- or test-breaking blocker exists right now** — everything builds and 46/46 tests pass.
+`plan.md` Phases 6, 8, and 9 have no more reachable loopback tasks. What remains is scope, not a
+blocker: host-side routing/forwarding, broadcast (`idTo == 0`, with its own unresolved DPID-0
+ambiguity), player-name storage, a distinct player-lost state, duplicate-player validation, LAN
+broadcast discovery, and all the ENet-side catch-up work are open questions/directions needing the
+user's input before any code lands (Section 5/8).
 
 A minor, non-blocking open item: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` (the system-package ENet path)
 has never been exercised successfully in this environment (no `libenet` system package installed
@@ -371,7 +386,13 @@ here) — only the vendored-submodule ENet path is proven. Not currently blockin
   state (transport disconnect without an explicit `Close`) vs. a clean removal (`plan.md` Phase 9)
   - nothing in the current `IDirectPlay2A` subset could ever query this distinction even if it
   were tracked internally.
-- **Incomplete**: `EnumSessions()` always reports zero sessions (Phase 8, not started).
+- **Incomplete**: `EnumSessions()` only discovers a *loopback*-hosted session (Decision 18) - a
+  session hosted over ENet is not discoverable at all yet; that would need a real Discovery/
+  DiscoveryResponse wire exchange, a separate, later task for that backend.
+- **Not provably tested, honestly flagged**: `EnumSessions()`'s callback-`FALSE`-stops-enumeration
+  behavior is implemented (a `break`) but cannot be exercised by a real test today - only one
+  loopback-hosted session can exist per process at a time (Decisions 11/12), so there is no way to
+  construct a genuine two-simultaneous-sessions scenario.
 - **Incomplete**: no CTest/CI wiring for `tests/directplay_tests.cpp` (Phase 15).
 - **Needs verification**: `FREE_DIRECT_USE_SYSTEM_ENET=ON` — logic written and reviewed, never
   actually exercised against a real `libenet` install (see Section 4).
@@ -474,24 +495,24 @@ bug (see Section 4).
 
 ## 8. Next smallest tasks
 
-`plan.md` Phase 9 has no more reachable tasks (Decision 17's amendment - see Section 5 for the
-three open questions blocking the rest of it: player-name observability, player-lost-state
-observability, and what "duplicate player" even means). Continuing autonomously in a sensible
-order (per the user's direction), the next well-scoped, unblocked, real-call-site-backed task is
-**`plan.md` Phase 8 (session enumeration)** - `EnumSessions()` currently always reports zero
-sessions; `free-eggbert`'s `CNetwork::EnumSessions()` is a real, if currently-unreachable-via-UI,
-call site (`src/network.cpp:141`, sets `guidApplication` and `DPENUMSESSIONS_AVAILABLE`). Concrete
-first step: decide (explicit-host-only discovery is the obvious minimal choice for this project,
-`plan.md`'s own text already leans this way) and implement `EnumSessions()` actually finding a real
-loopback-hosted session, filling in `DPSESSIONDESC2` fields from the host's `DirectPlaySession`,
-and invoking the callback - mirroring the Decision 10 registry mechanism already used for
-`Connect()`. This would also unblock Phase 6's one remaining task ("add a test for closing a host
-session, asserting `EnumSessions` no longer finds it").
+`plan.md` Phases 6, 8, and 9 have no more reachable, unblocked, loopback-only tasks left (Decisions
+17/18's amendments). Every remaining direction now needs the user's explicit input before any code
+lands - there is no more "obviously next" atomic task to pick autonomously:
 
-Other directions remain open too, each needing the user's input before proceeding (do not decide
-unilaterally): host-side routing/forwarding and broadcast (Phase 10, Section 5 - broadcast
-specifically needs the DPID-0 ambiguity resolved first), ENet-side work on Decisions 10-17, and
-the three Phase 9 questions above.
+1. **Host-side routing/forwarding** (Phase 10) - a joining peer's `Send()` addressed to another
+   non-host peer gets relayed. Still blocked on a joining peer having no way to learn any other
+   peer's DPID (Phase 9's player-list-sync gap).
+2. **Broadcast** (`idTo == 0`, Phase 10) - matches `free-eggbert`'s actual real call pattern, but
+   needs the DPID-0-vs-`DPID_ALLPLAYERS` ambiguity resolved first (Section 5).
+3. **LAN broadcast discovery** (Phase 8) - `plan.md` explicitly says ask before starting this;
+   not clearly needed (`free-eggbert`'s own `EnumSessions()` call is UI-unreachable anyway).
+4. **Phase 9's three open questions** (Section 5): player-name/player-lost-state observability,
+   and what "duplicate player" means.
+5. **ENet catch-up** on any of Decisions 10-18 - the loopback backend has pulled significantly
+   ahead of ENet across hosting, joining, Send/Receive, and enumeration.
+6. **Phase 11 onward** (error semantics, hardening, CI, docs) - not yet started at all.
+
+Ask the user which to pursue - do not decide unilaterally.
 
 ## 9. Do not do yet
 
@@ -514,6 +535,9 @@ the three Phase 9 questions above.
 - Do not strike the player-data-bytes/event-handle/system-message Phase 9 tasks from `plan.md`
   without confirming with the user first, even though Phase 0's audit already found no call site
   needs them - editing `plan.md` to mark tasks as intentionally-skipped is still a real change.
+- Do not start LAN broadcast discovery (Phase 8) without asking the user first - `plan.md` already
+  says so explicitly, and `free-eggbert`'s own `EnumSessions()` call site is UI-unreachable anyway,
+  so there's no concrete pull toward it.
 - Do not decide the ENet backend's "how does a joining call resolve a host address" question
   unilaterally — ask the user first, same as Decision 5 did for the hosting side's port choice.
 - Do not wire `tests/directplay_tests.cpp` into CMake/CTest yet (`plan.md` Phase 15, deliberately
@@ -530,18 +554,14 @@ the three Phase 9 questions above.
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first, especially Section 8 (the next task) and docs/directplay-design.md Decision
-17's amendment. plan.md Phase 9 has no more reachable tasks - the rest need user decisions on
-player-name/player-lost-state observability and what "duplicate player" means. Continue into
-Phase 8 (session enumeration): make EnumSessions() actually find a real loopback-hosted session,
-matching free-eggbert's real (if UI-unreachable) CNetwork::EnumSessions() call site
-(src/network.cpp:141). Explicit-host-only discovery is the obvious minimal design (plan.md's own
-text already leans this way) - confirm this design choice and any other non-obvious ones with the
-user (AskUserQuestion) before implementing, same as every transport/interface decision this
-session. Do not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify
-../free-eggbert or ../planetblupi. Do not decide broadcast's DPID-0 ambiguity or attempt
-host-side routing without asking first - those remain open, separate directions (Section 8). Once
-implemented, verify with the relevant build/test command from Section 7, confirming it actually
-passes before considering the task done. Then update NEXT.md to reflect the new state (Sections 2,
-3, 8, and 4/5 if anything changed there).
+Read NEXT.md first, especially Section 8. plan.md Phases 6, 8, and 9 have no more reachable,
+unblocked, loopback-only tasks - every remaining direction (host-side routing/forwarding,
+broadcast, LAN discovery, Phase 9's observability questions, ENet catch-up, Phase 11 onward) needs
+the user's explicit input before any code lands. Ask the user (AskUserQuestion) which to pursue -
+do not decide unilaterally, there is no more "obviously next" atomic task to pick autonomously. Do
+not refactor unrelated code, do not touch DirectDraw/DirectSound, and do not modify ../free-eggbert
+or ../planetblupi. Once a direction is chosen, implement one small atomic slice and run the
+relevant build/test command from Section 7, confirming it actually passes before considering the
+task done. Then update NEXT.md to reflect the new state (Sections 2, 3, 8, and 4/5 if anything
+changed there).
 ```

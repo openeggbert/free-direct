@@ -1493,3 +1493,93 @@ remaining ordered tasks:
 With this, `plan.md` Phase 9 has no further reachable tasks: every remaining checkbox either needs
 a scope/observability question resolved with the user first, or is already correctly marked
 conditional on a call site that Phase 0 found does not exist.
+
+---
+
+## Decision 18: `EnumSessions()` via a synchronous, DirectPlay-level registry, not a wire round-trip
+
+**Status:** Decided and implemented. Asked of, and confirmed by, the user directly: a
+separate, DirectPlay2AImpl-level static registry (over implementing `plan.md`'s literally-worded
+Discovery/DiscoveryResponse wire-protocol exchange for this task).
+
+### The question
+
+`plan.md` Phase 8 wants `EnumSessions()` to discover real hosted sessions instead of always
+reporting none, and lays out a detailed task list implying a real Discovery/DiscoveryResponse wire
+exchange (`DirectPlayWirePacketType::Discovery`/`DiscoveryResponse`, already defined in
+`DirectPlayWireProtocol.hpp` since Phase 5, unused until this point). But a real exchange requires
+the *host* to process the discovery request and respond during its own `Receive()` call
+(Decision 6's polling model) - the exact same asynchronous tension Decision 16 already hit for the
+join handshake, except worse here: `EnumSessions()` is called on an object that isn't even
+`Open()`ed yet, so there is no existing connection to send a request over in the first place, and
+no natural point at which the *caller* of `EnumSessions()` would call `Receive()` again to pick up
+a response (`EnumSessions()`'s own callback-based contract implies synchronous-ish behavior within
+one call, bounded by `dwTimeout`, not "call this again later like `Receive()`").
+
+### Decision
+
+A second, separate static registry - `LoopbackHostedSessionRegistry()`, in `DirectPlay.cpp`'s
+anonymous namespace - keyed by the same fixed loopback port (Decisions 11/12), mapping to a raw
+`DirectPlaySession*` (not a snapshot copy): `Open(..., DPOPEN_CREATE)`'s loopback branch registers
+`&session_` immediately after `Listen()` succeeds; `Close()` and `Release()`'s defensive path
+(mirroring how both already handle `session_.transport->Shutdown()`) unregister it.
+`EnumSessions()` iterates this registry directly and synchronously - no wire packets, no waiting,
+no second call needed - reading the *live* `DirectPlaySession` fields (`applicationGuid`,
+`sessionInstanceGuid`, `sessionName`, `maxPlayers`, `currentPlayers`) at the moment of the call, so
+results are never stale even as the session's player count changes after registration.
+
+This is deliberately **separate** from `LoopbackDirectPlayTransport`'s own port registry
+(Decision 10): that one maps to a transport instance, for `Connect()`'s use; this one maps to
+DirectPlay-level session state the transport layer must never know about (`CLAUDE.md`'s Internal
+Backend Policy - the transport stays backend-agnostic and ignorant of `DPSESSIONDESC2`-shaped
+concepts). Keeping them distinct avoids leaking DirectPlay concepts into the transport abstraction
+just to serve this one feature.
+
+**Explicitly loopback-only, matching this session's established pattern** (Decisions 10-17 all did
+the loopback side of a capability first, deferring or explicitly not deciding the ENet side): a
+session hosted under `FREE_DIRECT_ENABLE_ENET` is not discoverable by this mechanism at all - it
+would need the real Discovery/DiscoveryResponse wire packets `plan.md`'s task list already
+anticipates, which remain a separate, later task for that backend, not decided here.
+
+**Explicit-host-only discovery** (over LAN broadcast discovery) was the other half of `plan.md`'s
+first Phase 8 task, already effectively decided by `plan.md`'s own text ("`free-eggbert`'s
+`CNetwork::EnumSessions` only needs *some* list of sessions... explicit-host-only is the minimal
+viable choice") - not re-litigated as a fresh question, since nothing found while implementing
+contradicted that reasoning.
+
+**Two real, call-site-backed filters implemented alongside the base lookup**, both confirmed by
+`docs/directplay-callsite-audit.md`'s record of `../free-eggbert/src/network.cpp:141`
+(`CNetwork::EnumSessions()` calls the real `IDirectPlay2A::EnumSessions()` with `guidApplication`
+set and the `DPENUMSESSIONS_AVAILABLE` flag):
+- `lpEnumSessionsDesc->guidApplication`, when non-zero, filters to only matching hosted sessions.
+- `DPENUMSESSIONS_AVAILABLE` (`dwFlags`) excludes sessions already at `dwMaxPlayers` capacity.
+
+`lpszPasswordA` is always reported as `nullptr` in the callback's descriptor - never revealing a
+session's password via enumeration, matching real DirectPlay convention (a password is only
+required at `Open(DPOPEN_JOIN/OPENSESSION)` time, not before).
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`: the new registry and `UnregisterHostedSession()` helper
+(anonymous namespace), registration in `Open()`'s loopback hosting branch, unregistration in
+`Close()`/`Release()`, and `EnumSessions()`'s real implementation (`guidApplication`/
+`DPENUMSESSIONS_AVAILABLE` filters, `DPSESSIONDESC2` field population, callback invocation,
+respecting a `FALSE` return to stop enumerating). **Verified** with five new committed end-to-end
+tests (via the real public API) in `tests/directplay_tests.cpp` (46/46 total passing):
+`Test_EnumSessions_FindsZeroSessions`, `Test_EnumSessions_FindsOneHostedSession` (asserts exact
+`DPSESSIONDESC2` field values, matching `plan.md`'s own acceptance criterion precisely),
+`Test_EnumSessions_FiltersByApplicationGuid`, `Test_EnumSessions_AvailableFlagExcludesFullSessions`,
+and `Test_EnumSessions_NoLongerFindsSessionAfterClose` - which finally closes `plan.md` Phase 6's
+last remaining task ("add a test for closing a host session, asserting `EnumSessions` no longer
+finds it"). Also re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end, that
+every pre-existing test still passes unaffected, and that `include/dplay.h` has zero ENet/SDL
+identifiers.
+
+**Not implemented, honestly flagged rather than tested shallowly**: `plan.md`'s third Phase 8 test
+("a callback returning `FALSE` after the first result must prevent a second invocation even when
+two sessions exist") cannot be constructed under the current design - only one loopback-hosted
+session can exist per process at a time (Decisions 11/12's fixed single-port constraint), so there
+is no way to create a real two-simultaneous-sessions scenario to exercise this against. The
+`break` on a `FALSE` return is implemented and will behave correctly whenever more than one
+session is ever discoverable at once (e.g. once the ENet backend's discovery exists), but nothing
+today can prove it via a real multi-session test.

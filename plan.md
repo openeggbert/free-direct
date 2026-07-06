@@ -1034,7 +1034,14 @@ asserts round-trip equality.
 Goal: make `Open(..., DPOPEN_CREATE)` actually start a session other peers can join, on top of
 whichever transport is configured.
 
-- [ ] Implement `Open(..., DPOPEN_CREATE)` end-to-end on top of the configured transport.
+- [x] Implement `Open(..., DPOPEN_CREATE)` end-to-end on top of the configured transport. **Done,
+      loopback only** - this umbrella task is satisfied by the sum of the sub-tasks below plus
+      later phases' work: a hosted loopback session real-listens (Decision 11/12), is discoverable
+      via `EnumSessions()` (Decision 18), accepts and assigns real joining clients up to
+      `dwMaxPlayers` with a real join-accepted handshake (Decisions 7-9, 16), and can send/receive
+      real messages to/from them (Decisions 14-15). ENet's hosting side works through `Listen()`
+      but is not discoverable (Phase 8 is loopback-only, Decision 18) and its receive-side
+      delivery is unimplemented (Decision 14).
 - [x] Create a session instance GUID (`guidInstance`) when hosting, if the caller did not already
       supply one. **Done:** added `GenerateSessionInstanceGuid()` (anonymous namespace,
       `DirectPlay.cpp`) - fills `Data1`/`Data2`/`Data3`/`Data4` individually from
@@ -1276,8 +1283,13 @@ whichever transport is configured.
       configuration; re-ran `cmake --build cmake-build-debug` anyway as a sanity check (no
       recompilation triggered, as expected) and re-confirmed `include/dplay.h` has zero ENet/SDL
       identifiers.
-- [ ] Add a test for closing a host session, asserting a subsequent `EnumSessions` from another
-      loopback peer no longer finds it.
+- [x] Add a test for closing a host session, asserting a subsequent `EnumSessions` from another
+      loopback peer no longer finds it. **Done**, finally unblocked by Phase 8's real
+      `EnumSessions()` (`docs/directplay-design.md` Decision 18):
+      `Test_EnumSessions_NoLongerFindsSessionAfterClose` (`tests/directplay_tests.cpp`) - a hosted
+      session is found once, then `Close()`d, then no longer found. **Verified**: 46/46
+      `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
+      `include/dplay.h` has zero ENet/SDL identifiers.
 
 **Acceptance criteria:** two `DirectPlaySession` instances over `LoopbackDirectPlayTransport` in
 the same test process can host and observe each other's presence; all three new tests pass with
@@ -1416,39 +1428,83 @@ generous timeout bound.
 
 Goal: make `EnumSessions` discover real hosted sessions instead of always reporting none.
 
-- [ ] Decide whether `EnumSessions` supports explicit-host-only discovery, LAN broadcast
+- [x] Decide whether `EnumSessions` supports explicit-host-only discovery, LAN broadcast
       discovery, or both, and record the decision with rationale in `docs/directplay-design.md`.
       Given `free-eggbert`'s `CNetwork::EnumSessions` only needs *some* list of sessions to
       populate a picker, explicit-host-only is the minimal viable choice — confirm against Phase 0
-      findings before committing to broadcast.
-- [ ] Implement explicit-host enumeration first (query one or more known host addresses/loopback
-      sessions directly).
+      findings before committing to broadcast. **Done** (`docs/directplay-design.md` Decision 18):
+      explicit-host-only, exactly as this task's own text already reasoned - nothing found while
+      implementing contradicted it, so not re-litigated as a fresh question. LAN broadcast
+      discovery remains a separate, not-yet-asked-about task (see the task below).
+- [x] Implement explicit-host enumeration first (query one or more known host addresses/loopback
+      sessions directly). **Done, loopback only** (Decision 18): asked of and confirmed by the
+      user - a synchronous, DirectPlay2AImpl-level static registry (keyed by the fixed loopback
+      port, mapping to a live `DirectPlaySession*`), not a wire-protocol round-trip - resolving the
+      same async/host-must-poll tension Decision 16 already hit for the join handshake, but worse
+      here since `EnumSessions()` isn't even called on an `Open()`ed object. Deliberately separate
+      from `LoopbackDirectPlayTransport`'s own port registry (Decision 10), which must stay
+      ignorant of DirectPlay-level concepts. ENet-hosted sessions are not discoverable by this
+      mechanism - untouched, a separate later task.
 - [ ] Add LAN broadcast discovery later, **only if a concrete need is confirmed** — ask the user
       before starting this task, per the two-game scope rule in `CLAUDE.md`.
-- [ ] Define a discovery-request packet in the Phase 5 protocol.
-- [ ] Define a discovery-response packet in the Phase 5 protocol.
-- [ ] Include the protocol version field in both discovery packets.
-- [ ] Include the application GUID field in both discovery packets.
+- [ ] Define a discovery-request packet in the Phase 5 protocol. **Not needed for the loopback
+      mechanism implemented** (Decision 18) - `DirectPlayWirePacketType::Discovery` already exists
+      in `DirectPlayWireProtocol.hpp` (Phase 5) for whenever a real wire exchange is needed (e.g.
+      the ENet backend's own discovery, still unimplemented).
+- [ ] Define a discovery-response packet in the Phase 5 protocol. Same note as above -
+      `DirectPlayWirePacketType::DiscoveryResponse` already exists, unused by the loopback
+      mechanism implemented.
+- [ ] Include the protocol version field in both discovery packets. N/A to the loopback mechanism
+      implemented (no wire packets involved) - applies only once a real wire-based discovery
+      exchange is built (ENet backend).
+- [x] Include the application GUID field in both discovery packets. **Done, as a direct registry
+      filter rather than a wire-packet field** (Decision 18): `EnumSessions()`'s
+      `lpEnumSessionsDesc->guidApplication`, when non-zero, filters to only matching hosted
+      sessions - a real, call-site-backed behavior (`docs/directplay-callsite-audit.md`:
+      `free-eggbert`'s own `CNetwork::EnumSessions()` supplies a real filter). **Verified**:
+      `Test_EnumSessions_FiltersByApplicationGuid` (`tests/directplay_tests.cpp`).
 - [ ] Ignore discovery responses whose application GUID does not match the requesting
-      application's GUID.
-- [ ] Fill `DPSESSIONDESC2` correctly for the `EnumSessions` callback, from each discovered
-      session's advertised descriptor fields.
-- [ ] Call the `EnumSessions` callback exactly once per discovered session.
-- [ ] Respect the callback's `BOOL` return value: stop enumerating further sessions once it
-      returns `FALSE`.
+      application's GUID. Same effect achieved via the direct filter above, for loopback - no
+      discovery *responses* exist to ignore in this mechanism; applies to a real wire exchange
+      once one exists (ENet backend).
+- [x] Fill `DPSESSIONDESC2` correctly for the `EnumSessions` callback, from each discovered
+      session's advertised descriptor fields. **Done** (Decision 18): `guidApplication`,
+      `guidInstance`, `dwMaxPlayers`, `dwCurrentPlayers`, `lpszSessionNameA` filled from the live
+      `DirectPlaySession`; `lpszPasswordA` deliberately always `nullptr` (never reveal a password
+      via enumeration, matching real DirectPlay convention). **Verified**:
+      `Test_EnumSessions_FindsOneHostedSession` asserts exact field values, matching this phase's
+      own acceptance criterion precisely.
+- [x] Call the `EnumSessions` callback exactly once per discovered session. **Done** - the registry
+      lookup loop invokes the callback once per matching entry; only one entry can exist at a time
+      today (Decisions 11/12), so this is currently trivially true, but the loop shape is correct
+      for whenever more than one entry can exist.
+- [x] Respect the callback's `BOOL` return value: stop enumerating further sessions once it
+      returns `FALSE`. **Implemented** (a `break` on a `FALSE` return), but **not provably tested**
+      - see the struck-through test task below for why.
 - [ ] Respect the `dwTimeout` parameter passed to `EnumSessions`, bounding how long discovery
-      waits for responses.
-- [ ] Return `DPERR_NOSESSIONS` only if confirmed necessary by `free-eggbert`'s exact expected
+      waits for responses. N/A to the synchronous loopback mechanism implemented - there is no
+      waiting to bound (the registry lookup is instantaneous). Applies once a real, potentially-
+      slow wire exchange exists (ENet backend).
+- [x] Return `DPERR_NOSESSIONS` only if confirmed necessary by `free-eggbert`'s exact expected
       behavior (Phase 0 found no explicit dependency on this specific code — verify before
-      hard-coding it as a required return).
-- [ ] Add a test for `EnumSessions` finding zero sessions.
-- [ ] Add a test for `EnumSessions` finding exactly one local (loopback-hosted) session, asserting
-      the exact `DPSESSIONDESC2` fields the callback received.
+      hard-coding it as a required return). **Confirmed still not needed**: `EnumSessions()`
+      returns `DP_OK` even when zero sessions are found (never invoking the callback) - matches
+      the pre-existing stub's own reasoning, still correct now that real discovery exists.
+- [x] Add a test for `EnumSessions` finding zero sessions. **Done**:
+      `Test_EnumSessions_FindsZeroSessions` (`tests/directplay_tests.cpp`).
+- [x] Add a test for `EnumSessions` finding exactly one local (loopback-hosted) session, asserting
+      the exact `DPSESSIONDESC2` fields the callback received. **Done**:
+      `Test_EnumSessions_FindsOneHostedSession`.
 - [ ] Add a test for callback-stop behavior: a callback returning `FALSE` after the first result
-      must prevent a second invocation even when two sessions exist.
+      must prevent a second invocation even when two sessions exist. **Not implemented - honestly
+      flagged, not shallowly faked** (Decision 18): only one loopback-hosted session can exist per
+      process at a time (Decisions 11/12's fixed single-port constraint), so there is no way to
+      construct a real two-simultaneous-sessions scenario to exercise this against today.
 
 **Acceptance criteria:** all three enumeration tests pass over loopback with zero real network
 I/O; the "one session" test asserts on exact `DPSESSIONDESC2` field values, not just call count.
+**Two of three satisfied** - the callback-stop test is not constructible under the current
+single-session-at-a-time design (see above), not a shortfall in the implementation itself.
 
 ---
 

@@ -16,6 +16,7 @@
 #include <memory>
 #include <new>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -45,6 +46,32 @@ namespace {
         return guid;
     }
 
+    // Process-wide static registry (docs/directplay-design.md Decision 18), keyed by the fixed
+    // loopback port (docs/directplay-design.md Decisions 11/12) - lets EnumSessions() find a
+    // currently-hosted loopback session's *live* DirectPlaySession directly and synchronously,
+    // with no wire-protocol round-trip needed. Deliberately separate from
+    // LoopbackDirectPlayTransport's own port registry (Decision 10): that one maps to a
+    // transport instance for Connect() to reach; this one maps to DirectPlay-level session
+    // state (applicationGuid, sessionName, player counts, ...) that the transport layer must
+    // never know about. Loopback-only - a session hosted over ENet is not discoverable yet (real
+    // Discovery/DiscoveryResponse wire packets, already defined in DirectPlayWireProtocol.hpp,
+    // are a separate, later task for that backend).
+    std::unordered_map<std::uint16_t, free_direct_directplay::DirectPlaySession*>&
+    LoopbackHostedSessionRegistry() {
+        static std::unordered_map<std::uint16_t, free_direct_directplay::DirectPlaySession*> registry;
+        return registry;
+    }
+
+    void UnregisterHostedSession(free_direct_directplay::DirectPlaySession* session) {
+        auto& registry = LoopbackHostedSessionRegistry();
+        for (auto it = registry.begin(); it != registry.end(); ++it) {
+            if (it->second == session) {
+                registry.erase(it);
+                return;
+            }
+        }
+    }
+
     class DirectPlay2AImpl final : public IDirectPlay2A {
     public:
         DirectPlay2AImpl() : refCount_(1) {}
@@ -70,6 +97,8 @@ namespace {
                 // Covers the case where Release() is called without a prior Close() - Open()
                 // (Phase 4) now assigns a real LoopbackDirectPlayTransport, and Close() already
                 // shuts it down and clears session_.transport itself, so this is a no-op then.
+                // Same defensive reasoning for the EnumSessions() registry (Decision 18).
+                UnregisterHostedSession(&session_);
                 if (session_.transport) session_.transport->Shutdown();
                 delete this;
             }
@@ -77,14 +106,49 @@ namespace {
         }
 
         HRESULT WINAPI EnumSessions(LPDPSESSIONDESC2 lpEnumSessionsDesc, DWORD dwTimeout, LPDPENUMSESSIONS_CALLBACK2 lpEnumSessionsCallback, LPVOID lpContext, DWORD dwFlags) override {
-            (void)dwTimeout; (void)lpContext; (void)dwFlags;
             // lpEnumSessionsDesc is optional (null means "enumerate everything"); its dwSize is
             // only validated when a filter descriptor is actually provided.
             if (lpEnumSessionsDesc && lpEnumSessionsDesc->dwSize != sizeof(DPSESSIONDESC2)) return DPERR_INVALIDPARAMS;
             if (!lpEnumSessionsCallback) return DPERR_INVALIDPARAMS;
-            // Real session discovery lands in Phase 8 (hosting/joining don't exist yet), so
-            // there is genuinely nothing to discover today: reporting zero sessions (never
-            // invoking the callback) is honestly correct right now, not a placeholder stub.
+
+            // Explicit-host-only discovery (docs/directplay-design.md Decision 18), asked of and
+            // confirmed by the user - a synchronous, DirectPlay-level registry lookup, not a
+            // wire-protocol round-trip. guidApplication is a real filter free-eggbert's own
+            // CNetwork::EnumSessions() actually supplies (docs/directplay-callsite-audit.md);
+            // DPENUMSESSIONS_AVAILABLE is the other real flag that call site passes.
+            const GUID zeroGuid{};
+            const bool hasGuidFilter =
+                lpEnumSessionsDesc && !IsEqualGuid(lpEnumSessionsDesc->guidApplication, zeroGuid);
+            const bool availableOnly = (dwFlags & DPENUMSESSIONS_AVAILABLE) != 0;
+
+            for (const auto& [port, hostedSession] : LoopbackHostedSessionRegistry()) {
+                (void)port;
+                if (hasGuidFilter &&
+                    !IsEqualGuid(hostedSession->applicationGuid, lpEnumSessionsDesc->guidApplication)) {
+                    continue;
+                }
+                if (availableOnly && hostedSession->maxPlayers != 0 &&
+                    hostedSession->currentPlayers >= hostedSession->maxPlayers) {
+                    continue;
+                }
+
+                DPSESSIONDESC2 desc{};
+                desc.dwSize = sizeof(DPSESSIONDESC2);
+                desc.guidApplication = hostedSession->applicationGuid;
+                desc.guidInstance = hostedSession->sessionInstanceGuid;
+                desc.dwMaxPlayers = hostedSession->maxPlayers;
+                desc.dwCurrentPlayers = hostedSession->currentPlayers;
+                // Valid only for the duration of this callback invocation, matching real
+                // DirectPlay's documented descriptor lifetime - never retained past it.
+                desc.lpszSessionNameA = hostedSession->sessionName.empty()
+                                            ? nullptr
+                                            : const_cast<char*>(hostedSession->sessionName.c_str());
+                // Never revealed via enumeration, matching real DirectPlay convention - a
+                // password is only required at Open(DPOPEN_JOIN)/OPENSESSION) time.
+                desc.lpszPasswordA = nullptr;
+
+                if (!lpEnumSessionsCallback(&desc, &dwTimeout, dwFlags, lpContext)) break;
+            }
             return DP_OK;
         }
 
@@ -141,6 +205,11 @@ namespace {
                     session_.transport.reset();
                     return DPERR_CANTCREATESESSION;
                 }
+                // Makes this session discoverable via EnumSessions() (docs/directplay-design.md
+                // Decision 18) - registered by live pointer, not a snapshot, so the reported
+                // dwCurrentPlayers/etc. stay accurate as the session changes after this point.
+                LoopbackHostedSessionRegistry()[free_direct_directplay::kDefaultDirectPlayLoopbackPort] =
+                    &session_;
             } else {
                 // DPOPEN_JOIN/DPOPEN_OPENSESSION: Connect() resolves the host synchronously via
                 // the fixed port's registry entry and fails immediately - no timeout needed -
@@ -430,6 +499,10 @@ namespace {
         }
 
         HRESULT WINAPI Close() override {
+            // Makes this session stop being discoverable via EnumSessions() (docs/
+            // directplay-design.md Decision 18) - a no-op if it was never registered (joining
+            // role, or hosting under FREE_DIRECT_ENABLE_ENET).
+            UnregisterHostedSession(&session_);
             if (session_.transport) {
                 session_.transport->Shutdown();
                 session_.transport.reset();

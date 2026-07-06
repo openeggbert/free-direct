@@ -720,6 +720,163 @@ void Test_RemotePlayerDisconnect_DecrementsCurrentPlayers() {
     hostDp->Release();
 }
 
+namespace {
+struct EnumSessionsResult {
+    int callCount = 0;
+    DPSESSIONDESC2 lastDesc{};
+    std::string lastSessionName;
+};
+
+BOOL CountingEnumSessionsCallback(LPDPSESSIONDESC2 desc, LPDWORD, DWORD, LPVOID lpContext) {
+    auto* result = static_cast<EnumSessionsResult*>(lpContext);
+    ++result->callCount;
+    result->lastDesc = *desc;
+    result->lastSessionName = desc->lpszSessionNameA ? desc->lpszSessionNameA : "";
+    return TRUE;
+}
+} // namespace
+
+// plan.md Phase 8: "Add a test for EnumSessions finding zero sessions."
+void Test_EnumSessions_FindsZeroSessions() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    EnumSessionsResult result;
+    CHECK(dp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &result, 0) == DP_OK);
+    CHECK(result.callCount == 0);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// plan.md Phase 8 (docs/directplay-design.md Decision 18): "Add a test for EnumSessions finding
+// exactly one local (loopback-hosted) session, asserting the exact DPSESSIONDESC2 fields the
+// callback received."
+//
+// Note: plan.md's third Phase 8 test ("a callback returning FALSE after the first result must
+// prevent a second invocation even when two sessions exist") is not implemented - it cannot be,
+// under the current design: only one loopback-hosted session can exist per process at a time
+// (Decisions 11/12's fixed-port constraint), so there is no way to construct a real
+// two-simultaneous-sessions scenario to exercise the stop-on-FALSE behavior against.
+void Test_EnumSessions_FindsOneHostedSession() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication.Data1 = 0xABCD1234;
+    hostDesc.dwMaxPlayers = 4;
+    static char kSessionName[] = "Test Session";
+    hostDesc.lpszSessionNameA = kSessionName;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    EnumSessionsResult result;
+    CHECK(hostDp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &result, 0) == DP_OK);
+    CHECK(result.callCount == 1);
+    CHECK(std::memcmp(&result.lastDesc.guidApplication, &hostDesc.guidApplication, sizeof(GUID)) == 0);
+    CHECK(std::memcmp(&result.lastDesc.guidInstance, &hostDesc.guidInstance, sizeof(GUID)) == 0);
+    CHECK(result.lastDesc.dwMaxPlayers == 4);
+    CHECK(result.lastDesc.dwCurrentPlayers == 0);
+    CHECK(result.lastSessionName == "Test Session");
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// Real, call-site-backed behavior (docs/directplay-callsite-audit.md: free-eggbert's
+// CNetwork::EnumSessions() supplies a real guidApplication filter).
+void Test_EnumSessions_FiltersByApplicationGuid() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication.Data1 = 0x11111111;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPSESSIONDESC2 filterDesc{};
+    std::memset(&filterDesc, 0, sizeof(filterDesc));
+    filterDesc.dwSize = sizeof(DPSESSIONDESC2);
+    filterDesc.guidApplication.Data1 = 0x22222222; // does not match the hosted session
+
+    EnumSessionsResult mismatched;
+    CHECK(hostDp2->EnumSessions(&filterDesc, 0, CountingEnumSessionsCallback, &mismatched, 0) ==
+          DP_OK);
+    CHECK(mismatched.callCount == 0);
+
+    filterDesc.guidApplication.Data1 = 0x11111111; // matches
+    EnumSessionsResult matched;
+    CHECK(hostDp2->EnumSessions(&filterDesc, 0, CountingEnumSessionsCallback, &matched, 0) ==
+          DP_OK);
+    CHECK(matched.callCount == 1);
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// Real, call-site-backed behavior: free-eggbert's CNetwork::EnumSessions() passes
+// DPENUMSESSIONS_AVAILABLE, which excludes sessions that are already full.
+void Test_EnumSessions_AvailableFlagExcludesFullSessions() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.dwMaxPlayers = 1;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK); // fills the cap
+
+    EnumSessionsResult withFlag;
+    CHECK(hostDp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &withFlag,
+                                 DPENUMSESSIONS_AVAILABLE) == DP_OK);
+    CHECK(withFlag.callCount == 0);
+
+    EnumSessionsResult withoutFlag;
+    CHECK(hostDp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &withoutFlag, 0) ==
+          DP_OK);
+    CHECK(withoutFlag.callCount == 1);
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// plan.md Phase 6: "Add a test for closing a host session, asserting a subsequent EnumSessions
+// from another loopback peer no longer finds it." - the last remaining Phase 6 task, finally
+// unblocked by Phase 8's real EnumSessions().
+void Test_EnumSessions_NoLongerFindsSessionAfterClose() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    EnumSessionsResult before;
+    CHECK(hostDp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &before, 0) == DP_OK);
+    CHECK(before.callCount == 1);
+
+    CHECK(hostDp2->Close() == DP_OK);
+
+    EnumSessionsResult after;
+    CHECK(hostDp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &after, 0) == DP_OK);
+    CHECK(after.callCount == 0);
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 // plan.md Phase 4: "Add a unit test for Send to self over loopback, asserting DP_OK."
 void Test_LoopbackSendToSelf_ReturnsOk() {
     LPDIRECTPLAY dp = nullptr;
@@ -1119,6 +1276,11 @@ int main() {
     Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer();
     Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects();
     Test_RemotePlayerDisconnect_DecrementsCurrentPlayers();
+    Test_EnumSessions_FindsZeroSessions();
+    Test_EnumSessions_FindsOneHostedSession();
+    Test_EnumSessions_FiltersByApplicationGuid();
+    Test_EnumSessions_AvailableFlagExcludesFullSessions();
+    Test_EnumSessions_NoLongerFindsSessionAfterClose();
     Test_LoopbackSendToSelf_ReturnsOk();
     Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds();
     Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload();
