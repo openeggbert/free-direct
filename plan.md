@@ -3160,7 +3160,7 @@ Out of scope:
 Verified: `Test_IsLost_AlwaysReturnsNotLost` and `Test_Restore_ReturnsOkUnconditionally` added.
 
 ### TASK-24H-0046: Add Flip test documenting the simplified-present deviation
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Test
@@ -3180,8 +3180,15 @@ Acceptance criteria:
 Out of scope:
 - Do not implement a real multi-surface flip chain — no call site in either game needs it.
 
+Verified: `Test_Flip_PresentsPrimarySurface` reads back the actually-rendered pixel via
+`SDL_GetRenderer(window)` + `SDL_RenderReadPixels` (public SDL3 API, not a whitebox hack - see the
+test's own comment for why this is legitimate given `HWND == SDL_Window*` is already an
+established convention in this codebase), confirming `Flip()` genuinely presents the primary
+surface's content. Plus `Test_Flip_OnOffscreenSurface_ReturnsUnsupported` and
+`Test_Flip_WithoutCooperativeLevel_ReturnsUnsupported` for the two real `DDERR_UNSUPPORTED` paths.
+
 ### TASK-24H-0047: Add presentation dirty-flag/throttle test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -3204,6 +3211,22 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change the throttle/dirty-check implementation in this task — test only.
+
+Verified for the throttle half; the dirty-check half is genuinely not independently black-box-
+testable (see below), documented rather than faked. `Test_Presentation_ThrottlesSecondPresentWithinInterval`
+(`FREE_DIRECT_TARGET_FPS=1`, a 1-second window) proves a second `Flip()` issued microseconds after
+the first, with genuinely different fill content, is throttled — the renderer still shows the
+FIRST color, read back via `SDL_RenderReadPixels`. `Test_Presentation_PresentsAgainAfterThrottleIntervalElapses`
+(`FREE_DIRECT_TARGET_FPS=1000`, ~1ms window, plus a 50ms real sleep — a 50x safety margin against
+CI scheduling jitter) proves the second present goes through once the window elapses. The
+dirty-flag check specifically cannot be proven this way: every pixel-writing path (`Blt`/
+`BltFast`/`FillColor`/`BlitFrom`) unconditionally calls `MarkDirty()`, and `Lock()` exposes no
+writable pointer for the primary surface at all — so there is no way to change content without
+also marking dirty, meaning "skipped a present that would have shown different content" can never
+be constructed as an observable scenario through the public API alone.
+`Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable` covers the weaker, genuinely provable
+property instead (repeated `Flip()` with no content change is safe and stable), with a code
+comment explaining the gap honestly rather than claiming full coverage.
 
 ### TASK-24H-0048: Add a test asserting no unconditional hot-path log fires during BltFast by default
 Status: DONE
@@ -3265,7 +3288,7 @@ SDL3_mixer are now available in this environment, unlike the prior session's aud
 and full builds through both `../free-eggbert` and `../planetblupi`.
 
 ### TASK-24H-0050: Add CreateClipper/SetClipper/SetHWnd one-time-init test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Test
@@ -3283,6 +3306,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not test multi-clipper-region clip lists — not used by either game.
+
+Verified: `Test_ClipperSetup_CreateSetHWndSetClipper_ReturnsOk` replicates both games' exact
+one-time `Create()` sequence (`CreateClipper` → `SetHWnd` with a real `HWND` → `SetClipper` on the
+target surface), plus (bonus) `Test_CreateClipper_NullOutParam_ReturnsInvalidParams`.
 
 ### TASK-24H-0051: Create docs/directdraw-limitations.md
 Status: TODO

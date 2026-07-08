@@ -117,6 +117,45 @@ HWND CreateTestWindow() {
     return hwnd;
 }
 
+// Reads back a single presented pixel as packed 0xAABBGGRR (SDL_PIXELFORMAT_RGBA32 byte order:
+// byte0=R,1=G,2=B,3=A) via the real SDL renderer DirectDrawImpl::SetCooperativeLevel created for
+// this window. `SDL_GetRenderer(window)` is public SDL3 API - it works here (not a whitebox
+// hack) because CreateWindowExA/SetCooperativeLevel already establish HWND == SDL_Window* as a
+// real, confirmed convention in this codebase (see free-api's own CreateWindowExA implementation),
+// and SDL3 itself tracks one renderer per window, retrievable by anyone holding the window
+// pointer. This is the only way to observe the *rendered* (as opposed to CPU-buffer) output of
+// presentation-path behavior through this file's black-box-only testing approach.
+uint32_t ReadPresentedPixel(HWND hwnd, int x, int y) {
+    auto* window = reinterpret_cast<SDL_Window*>(hwnd);
+    SDL_Renderer* renderer = SDL_GetRenderer(window);
+    if (!renderer) return 0;
+    SDL_Rect rect{x, y, 1, 1};
+    SDL_Surface* raw = SDL_RenderReadPixels(renderer, &rect);
+    if (!raw) return 0;
+    SDL_Surface* converted = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(raw);
+    if (!converted) return 0;
+    auto* p = static_cast<uint8_t*>(converted->pixels);
+    const uint32_t pixel = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+                            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+    SDL_DestroySurface(converted);
+    return pixel;
+}
+
+// Fills the *entire* primary surface (NULL dest rect - whatever its actual size is, normally
+// 640x480 by default since no SetDisplayMode call is involved here) with a solid 0x00RRGGBB
+// color via Blt/DDBLT_COLORFILL. Filling the whole surface, not an arbitrary sub-rect, means any
+// physical pixel read back via ReadPresentedPixel must show this color regardless of the
+// letterbox scale/offset math SDL_SetRenderLogicalPresentation applies between the primary's
+// logical size and the test window's physical size.
+void FillPrimaryWithColor(LPDIRECTDRAWSURFACE primary, DWORD rgb) {
+    DDBLTFX fx{};
+    std::memset(&fx, 0, sizeof(fx));
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = rgb;
+    CHECK(primary->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+}
+
 } // namespace
 
 // ===== Group 2: creation/lifecycle =====
@@ -762,6 +801,173 @@ void Test_Blt_NullSourceWithoutColorFill_ReturnsUnsupported() {
     dd->Release();
 }
 
+// ===== Group 4b: Flip / presentation throttle+dirty-flag / clipper =====
+// 24-Hour Stabilization Backlog TASK-24H-0046/0047/0050 (plan.md).
+
+// Neither target game calls Flip() (both rely on Blt/BltFast auto-present, per
+// docs/audit-24h-free-direct.md §2.1), but it is real public API kept for API-shape
+// completeness (same reasoning as the ColorFill tests above) and deserves correctness coverage.
+void Test_Flip_PresentsPrimarySurface() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+
+    FillPrimaryWithColor(primary, 0x00335577);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 0x33);         // R
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 0x55);  // G
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 0x77); // B
+
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
+// Real code path: `if (type_ != SurfaceType::Primary || !owner_ || !owner_->renderer_) return
+// DDERR_UNSUPPORTED;` - covers both the non-primary-surface case and the no-renderer case.
+void Test_Flip_OnOffscreenSurface_ReturnsUnsupported() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 4, 4, 32);
+    CHECK(surface->Flip(nullptr, 0) == DDERR_UNSUPPORTED);
+    surface->Release();
+    dd->Release();
+}
+
+void Test_Flip_WithoutCooperativeLevel_ReturnsUnsupported() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow(); // SetCooperativeLevel deliberately never called
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+    CHECK(primary->Flip(nullptr, 0) == DDERR_UNSUPPORTED);
+    primary->Release();
+    dd->Release();
+}
+
+// Sets FREE_DIRECT_TARGET_FPS before DirectDrawCreate (read once in DirectDrawImpl's constructor)
+// so the throttle interval is deterministic for this test process's lifetime-scoped instance.
+LPDIRECTDRAW CreateDirectDrawWithTargetFps(const char* fps) {
+    SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_TARGET_FPS", fps, 1);
+    LPDIRECTDRAW dd = nullptr;
+    CHECK(DirectDrawCreate(nullptr, &dd, nullptr) == DD_OK);
+    SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_TARGET_FPS");
+    return dd;
+}
+
+// README's documented throttle behavior: "skips upload+present if called within the frame
+// interval." FREE_DIRECT_TARGET_FPS=1 gives a 1-second throttle window, making "two presents
+// issued microseconds apart" reliably fall inside it regardless of test/CI execution speed. The
+// first Flip() always presents unconditionally (lastPresentNs_ == 0 bypasses both the throttle
+// and dirty checks) - the SECOND Flip(), immediately after filling with a genuinely different
+// color, must be the one throttled, so the renderer should still show the FIRST color.
+void Test_Presentation_ThrottlesSecondPresentWithinInterval() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+
+    FillPrimaryWithColor(primary, 0x00AABBCC);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK); // first present: always goes through
+
+    FillPrimaryWithColor(primary, 0x00112233); // different color, marks dirty again
+    CHECK(primary->Flip(nullptr, 0) == DD_OK); // returns DD_OK either way - throttled or not
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 0xAA);         // still the FIRST color's R...
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 0xBB);  // ...G...
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 0xCC); // ...B - the second present was throttled
+
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
+// Same shape as above, but with a very short interval (FREE_DIRECT_TARGET_FPS=1000, ~1ms window)
+// and a generous real sleep (50ms, ~50x the window) between the two fills/presents - the second
+// present must now go through, since enough real time elapsed for the throttle window to close.
+void Test_Presentation_PresentsAgainAfterThrottleIntervalElapses() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1000");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+
+    FillPrimaryWithColor(primary, 0x00AABBCC);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    SDL_Delay(50);
+
+    FillPrimaryWithColor(primary, 0x00112233);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 0x11);         // the SECOND color's R...
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 0x22);  // ...G...
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 0x33); // ...B - this present went through
+
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
+// The dirty-flag check specifically (as opposed to the throttle check just above) is NOT
+// independently black-box-testable through the public API: every pixel-writing path (Blt/
+// BltFast/FillColor/BlitFrom) unconditionally calls MarkDirty() as a side effect of writing, and
+// Lock() does not expose a writable pointer for the primary surface at all (see this file's
+// header comment) - so there is no way to change the primary's content WITHOUT also marking it
+// dirty, which means "dirty=false skipped a present that would have shown different content" can
+// never be constructed as a scenario. This test instead verifies the only genuinely observable
+// property: calling Flip() repeatedly with no intervening content change is safe (no crash, no
+// error) and the output remains stable - which is consistent with, but does not prove, the dirty
+// check specifically firing rather than a present that happens to re-render identical content.
+void Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1000");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+
+    FillPrimaryWithColor(primary, 0x00445566);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+    SDL_Delay(5);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK); // no intervening Blt/BltFast - dirty_ stays false
+    SDL_Delay(5);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 0x44);
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 0x55);
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 0x66);
+
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
+// Both target games perform this exact one-time sequence in their Create() function:
+// CreateClipper -> SetHWnd -> SetClipper(on the back/primary surface) - see
+// docs/audit-24h-free-direct.md §2.1.
+void Test_ClipperSetup_CreateSetHWndSetClipper_ReturnsOk() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 8, 8, 32);
+
+    LPDIRECTDRAWCLIPPER clipper = nullptr;
+    CHECK(dd->CreateClipper(0, &clipper, nullptr) == DD_OK);
+    CHECK(clipper != nullptr);
+    CHECK(clipper->SetHWnd(0, hwnd) == DD_OK);
+    CHECK(surface->SetClipper(clipper) == DD_OK);
+
+    clipper->Release();
+    surface->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
+void Test_CreateClipper_NullOutParam_ReturnsInvalidParams() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    CHECK(dd->CreateClipper(0, nullptr, nullptr) == DDERR_INVALIDPARAMS);
+    dd->Release();
+}
+
 // ===== Group 5: color key =====
 
 // Range (not single-value) color key, matching README's documented "range compare" semantics
@@ -1076,6 +1282,16 @@ int main() {
     Test_Blt_PartialRectCopy_ClipsToDestBounds();
     Test_Blt_ScalingUpsamplesSourceToLargerDest();
     Test_Blt_NullSourceWithoutColorFill_ReturnsUnsupported();
+
+    // Group 4b: Flip / presentation throttle+dirty-flag / clipper
+    Test_Flip_PresentsPrimarySurface();
+    Test_Flip_OnOffscreenSurface_ReturnsUnsupported();
+    Test_Flip_WithoutCooperativeLevel_ReturnsUnsupported();
+    Test_Presentation_ThrottlesSecondPresentWithinInterval();
+    Test_Presentation_PresentsAgainAfterThrottleIntervalElapses();
+    Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable();
+    Test_ClipperSetup_CreateSetHWndSetClipper_ReturnsOk();
+    Test_CreateClipper_NullOutParam_ReturnsInvalidParams();
 
     // Group 5: color key
     Test_SetColorKey_RangeAppliedOnSubsequentBltFast();
