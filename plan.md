@@ -3856,7 +3856,7 @@ Out of scope:
 - None.
 
 ### TASK-24H-0083: Fix the stale file-level `@note Status: STUB` comment in include/dplay.h
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Docs
 Type: Documentation
@@ -3882,8 +3882,13 @@ Out of scope:
 - Do not claim more than is true — do not say "fully implemented" when `DirectPlayEnumerateA`/`W`
   and broadcast are still stub/missing.
 
+Verified: file-level comment updated to `@note Status: PARTIAL` with an accurate `@brief`;
+`DirectPlayCreate`'s own doc comment (previously also stale `STUB`) was corrected in the same pass
+since it's the same documentation-accuracy issue. `directplay_tests` rebuilt and rerun (46/46
+passing) after the change to confirm the comment-only edit didn't break anything.
+
 ### TASK-24H-0084: Fix stale per-method `@note Status: STUB` comments on IDirectPlay2A
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Docs
 Type: Documentation
@@ -3912,8 +3917,12 @@ Out of scope:
 - Do not mark `Send` fully `IMPLEMENTED` — broadcast genuinely does not work today (see
   TASK-24H-0092).
 
+Verified: all eight `IDirectPlay2A` method comments updated per the exact mapping above, including
+an explicit note on `Send`'s comment about the DPID-0 self-send/broadcast collision so a reader
+never mistakes it for working broadcast.
+
 ### TASK-24H-0085: Fix stale per-method `@note Status: STUB` comments on the minimal IDirectPlay class
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -3931,6 +3940,8 @@ Acceptance criteria:
 
 Out of scope:
 - None.
+
+Verified: all three `IDirectPlay` method comments updated to `IMPLEMENTED`.
 
 ### TASK-24H-0086: Reconcile plan.md Phase 6 checkbox state against merged Decisions 10/18
 Status: TODO

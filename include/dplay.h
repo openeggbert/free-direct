@@ -1,7 +1,15 @@
 /**
  * @file dplay.h
- * @brief Narrow DirectPlay subset reimplementation (Stubs).
- * @note Status: STUB
+ * @brief Narrow DirectPlay subset reimplementation over a real loopback (and, partially, ENet)
+ *        transport.
+ *
+ * Most of `IDirectPlay2A` is implemented against real session/player/message-queue state (see
+ * `src/directplay/DirectPlay.cpp` and `docs/directplay-design.md`'s Decisions 1-19), not
+ * unconditional dummy values. `DirectPlayEnumerateA`/`DirectPlayEnumerateW` remain genuine stubs
+ * (Decision 1: decided, not yet implemented). Broadcast delivery (`Send` with `idTo == 0`) does
+ * not work correctly yet - see `Send`'s own doc comment below and
+ * `docs/audit-24h-free-direct.md`.
+ * @note Status: PARTIAL
  */
 #ifndef FREE_DIRECT_DPLAY_H
 #define FREE_DIRECT_DPLAY_H
@@ -191,9 +199,11 @@ HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID l
 /**
  * @brief Creates a DirectPlay object.
  *
- * Current implementation only provides a minimal object to satisfy legacy
- * initialization and compile-time expectations.
- * @note Status: STUB
+ * Validates its parameters for real: a null `lplpDP` returns `DPERR_INVALIDPARAMS`, a non-null
+ * `pUnkOuter` returns `DPERR_NOAGGREGATION` (COM aggregation is not supported), and an allocation
+ * failure returns `DPERR_OUTOFMEMORY`. `lpGUID` is accepted but not validated against a real
+ * service-provider registry (matches this project's non-Microsoft-wire-compatible scope).
+ * @note Status: IMPLEMENTED
  */
 HRESULT WINAPI DirectPlayCreate(LPGUID lpGUID, LPDIRECTPLAY* lplpDP, IUnknown* pUnkOuter);
 
@@ -221,23 +231,23 @@ static const GUID IID_IDirectPlay2A = {0};
 
 class IDirectPlay2A {
 public:
-    /** @brief COM query method. @note Status: STUB */
+    /** @brief COM query method; real GUID comparison against IID_IDirectPlay/IID_IDirectPlay2A. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
-    /** @brief Increments object reference count. @note Status: STUB */
+    /** @brief Increments object reference count (atomic). @note Status: IMPLEMENTED */
     virtual ULONG WINAPI AddRef() = 0;
-    /** @brief Decrements object reference count. @note Status: STUB */
+    /** @brief Decrements object reference count; deletes and defensively tears down the transport on last release. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
-    /** @brief Enumerates sessions. @note Status: STUB */
+    /** @brief Enumerates sessions against a real, process-wide loopback-hosted-session registry. Does not see ENet-hosted sessions and has no LAN discovery. @note Status: PARTIAL */
     virtual HRESULT WINAPI EnumSessions(LPDPSESSIONDESC2 lpEnumSessionsDesc, DWORD dwTimeout, LPDPENUMSESSIONS_CALLBACK2 lpEnumSessionsCallback, LPVOID lpContext, DWORD dwFlags) = 0;
-    /** @brief Opens or creates a session. @note Status: STUB */
+    /** @brief Opens or creates a session. Real for loopback (both host and join roles) and ENet hosting; ENet joining never connects yet (no host-address resolution mechanism exists). @note Status: PARTIAL */
     virtual HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) = 0;
-    /** @brief Creates a player endpoint. @note Status: STUB */
+    /** @brief Creates a player endpoint with real dwMaxPlayers validation and sequential DPID allocation. Player name/data/event-handle fields are accepted but not stored. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI CreatePlayer(LPDPID lpidPlayer, LPDPNAME lpPlayerName, HANDLE hEvent, LPVOID lpData, DWORD dwDataSize, DWORD dwFlags) = 0;
-    /** @brief Sends a packet to another player. @note Status: STUB */
+    /** @brief Sends a packet. Real for self-send and host-to-one-assigned-remote-player unicast only - there is no broadcast and no host-side relay between non-host peers yet. idTo == 0 does not broadcast: it currently collides with self-send whenever the caller's own DPID is also 0 (see docs/audit-24h-free-direct.md; unresolved pending a DPID-0 semantics decision, plan.md TASK-24H-0131). @note Status: PARTIAL */
     virtual HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) = 0;
-    /** @brief Receives a packet from queue. @note Status: STUB */
+    /** @brief Receives a packet from the local message queue; also services the transport and drains connect/disconnect/join-handshake events first. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) = 0;
-    /** @brief Closes active DirectPlay session. @note Status: STUB */
+    /** @brief Closes the active DirectPlay session: unregisters from the EnumSessions registry, shuts down the transport, clears session/player/message state. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI Close() = 0;
 
 protected:
@@ -247,11 +257,11 @@ protected:
 // Minimal IDirectPlay for QueryInterface to IDirectPlay2A
 class IDirectPlay {
 public:
-    /** @brief COM query method. @note Status: STUB */
+    /** @brief COM query method. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) = 0;
-    /** @brief Increments object reference count. @note Status: STUB */
+    /** @brief Increments object reference count (atomic). @note Status: IMPLEMENTED */
     virtual ULONG WINAPI AddRef() = 0;
-    /** @brief Decrements object reference count. @note Status: STUB */
+    /** @brief Decrements object reference count. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
 
 protected:
