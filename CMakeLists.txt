@@ -146,3 +146,12 @@ target_link_libraries(FREE_DIRECT
         SDL3_image::SDL3_image
         SDL3_mixer::SDL3_mixer
 )
+
+# FreeDirect's own test executables (plan.md Phase 15 / 24-Hour Stabilization Backlog
+# TASK-24H-0001). OFF by default so target-game diamond builds (free-eggbert, planetblupi)
+# never gain new targets unless a developer explicitly opts in.
+option(FREE_DIRECT_BUILD_TESTS "Build FreeDirect's own test executables" OFF)
+if(FREE_DIRECT_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

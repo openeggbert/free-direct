@@ -1992,7 +1992,7 @@ with the next unblocked task.
 ## Build and CTest
 
 ### TASK-24H-0001: Add a FREE_DIRECT_BUILD_TESTS CMake option
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Build
 Type: Implementation
@@ -2015,8 +2015,11 @@ Acceptance criteria:
 Out of scope:
 - Do not build tests by default. Do not add any option besides this one build-test switch.
 
+Verified: option added to `CMakeLists.txt`, default OFF confirmed via a clean `free-eggbert`
+configure+build with no extra flags (no new targets appeared).
+
 ### TASK-24H-0002: Create tests/CMakeLists.txt and wire directplay_tests as a target
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Build
 Type: Implementation
@@ -2043,8 +2046,17 @@ Out of scope:
 - Do not modify `tests/directplay_tests.cpp` itself in this task. Do not add DirectDraw/DirectSound
   test files here — see their own tasks below.
 
+Verified: built and ran successfully via both `free-eggbert` and `planetblupi`
+`add_subdirectory(../free-direct)` builds with `-DFREE_DIRECT_BUILD_TESTS=ON`; the resulting
+`bin/directplay_tests` executable printed "OK: all DirectPlay tests passed." with exit code 0 in
+both cases. Bug found and fixed during verification: the initial `tests/CMakeLists.txt` used
+`CMAKE_SOURCE_DIR` for the `src/directplay` include path, which resolves to the *consuming*
+project's root (e.g. `free-eggbert`) when free-direct is pulled in via `add_subdirectory`, not
+free-direct's own root — fixed to `CMAKE_CURRENT_SOURCE_DIR` (relative to `tests/`), matching the
+pattern already used elsewhere in the root `CMakeLists.txt`.
+
 ### TASK-24H-0003: Register directplay_tests with CTest
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Build
 Type: Implementation
@@ -2068,8 +2080,19 @@ Out of scope:
 - Do not add a CI pipeline file (`.github/workflows/*`) in this task — that is a separate,
   lower-priority documentation/tooling task (TASK-24H-0012).
 
+Verified with a caveat: `ctest` run from *inside* the `FREE_DIRECT` build subdirectory
+(`cd <build>/FREE_DIRECT && ctest`) correctly discovers and passes `1/1 directplay_tests`. `ctest`
+run from the *top-level* build directory of either target game finds no tests at all
+("No tests were found!!!") — this is because CTest's discovery mechanism requires `enable_testing()`
+to have been called in the top-level `CMakeLists.txt` of whichever project owns that build tree,
+and neither `free-eggbert` nor `planetblupi`'s own top-level `CMakeLists.txt` calls it (confirmed by
+grep; only `free-api`'s, itself nested, does). This is a property of how the two target games
+structure their own top-level builds, not a defect in free-direct's CTest wiring — recorded here
+rather than silently claimed as fully working. Fixing it would require editing a target game's
+`CMakeLists.txt`, which is out of scope without asking first per CLAUDE.md.
+
 ### TASK-24H-0004: Add a CTest label "directplay" to the directplay_tests target
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Build
 Type: Implementation
@@ -2088,6 +2111,9 @@ Acceptance criteria:
 
 Out of scope:
 - Do not invent label names for subsystems that don't have a test executable yet.
+
+Verified: `ctest -L directplay` from inside the `FREE_DIRECT` build subdirectory runs exactly
+`directplay_tests` (see TASK-24H-0003's verification note for the top-level-discovery caveat).
 
 ### TASK-24H-0005: Document headless SDL video/audio driver usage for future DirectDraw/DirectSound tests
 Status: TODO
