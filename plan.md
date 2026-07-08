@@ -1972,3 +1972,3275 @@ works — not just that unit tests pass in isolation.
 **Acceptance criteria:** this phase is only marked complete when every sub-task above has a real,
 observed pass/fail result recorded in `NEXT.md` — "assumed to work" is not an acceptable status for
 any Phase 18 item.
+
+---
+
+# 24-Hour Autonomous Stabilization Backlog
+
+This section supplements, and does not replace, Phases 0-18 above. It was generated from a
+fresh, evidence-based re-audit recorded in `docs/audit-24h-free-direct.md` (2026-07-08). Every task
+below cites the audit section or file:line evidence it is based on. Existing DirectPlay task IDs
+and Decision numbers in `docs/directplay-design.md` are preserved and referenced, not duplicated —
+new DirectPlay tasks here fill gaps the reconciliation in `docs/audit-24h-free-direct.md`
+("DirectPlay Plan Reconciliation") found, they do not restart DirectPlay planning.
+
+Tasks whose `Status:` is `BLOCKED` depend on a design decision this project's policy (`CLAUDE.md`,
+`plan.md` Phase 7-10 task text, `docs/directplay-design.md` Decisions 3/15/17) explicitly reserves
+for the user. They must not be resolved unilaterally; implementation should skip them and continue
+with the next unblocked task.
+
+## Build and CTest
+
+### TASK-24H-0001: Add a FREE_DIRECT_BUILD_TESTS CMake option
+Status: TODO
+Priority: P0
+Area: Build
+Type: Implementation
+Evidence: docs/audit-24h-free-direct.md §7 ("no FREE_DIRECT_BUILD_TESTS option... exists")
+Depends on: None
+
+Problem:
+There is no way to opt a build into compiling FreeDirect's own test executables; `tests/` is
+completely invisible to CMake today.
+
+Required work:
+- Add `option(FREE_DIRECT_BUILD_TESTS "Build FreeDirect's own test executables" OFF)` to
+  `CMakeLists.txt`, default `OFF` so target-game diamond builds (`free-eggbert`, `planetblupi`) are
+  unaffected unless a developer opts in.
+
+Acceptance criteria:
+- `cmake -B build` with no extra flags configures identically to today (no new targets appear).
+- `cmake -B build -DFREE_DIRECT_BUILD_TESTS=ON` configures without error once TASK-24H-0002 lands.
+
+Out of scope:
+- Do not build tests by default. Do not add any option besides this one build-test switch.
+
+### TASK-24H-0002: Create tests/CMakeLists.txt and wire directplay_tests as a target
+Status: TODO
+Priority: P0
+Area: Build
+Type: Implementation
+Evidence: docs/audit-24h-free-direct.md §7 ("tests/directplay_tests.cpp... completely unwired")
+Depends on: TASK-24H-0001
+
+Problem:
+`tests/directplay_tests.cpp` (46 tests, all passing per manual `g++` compile/run this audit) has no
+CMake target at all.
+
+Required work:
+- Add `tests/CMakeLists.txt`, included from the root `CMakeLists.txt` only when
+  `FREE_DIRECT_BUILD_TESTS` is `ON`.
+- Add an `add_executable(directplay_tests tests/directplay_tests.cpp)` target linking `free-direct`
+  and `free-api`, matching the include paths the audit's manual compile command used
+  (`include/`, `src/directplay/`, free-api's public/compat headers).
+
+Acceptance criteria:
+- `cmake -B build -DFREE_DIRECT_BUILD_TESTS=ON && cmake --build build` produces a `directplay_tests`
+  executable that runs and reports "OK: all DirectPlay tests passed." with exit code 0.
+- Default (`FREE_DIRECT_BUILD_TESTS=OFF`) build is unaffected.
+
+Out of scope:
+- Do not modify `tests/directplay_tests.cpp` itself in this task. Do not add DirectDraw/DirectSound
+  test files here — see their own tasks below.
+
+### TASK-24H-0003: Register directplay_tests with CTest
+Status: TODO
+Priority: P0
+Area: Build
+Type: Implementation
+Evidence: docs/audit-24h-free-direct.md §7; plan.md Phase 15 (unstarted)
+Depends on: TASK-24H-0002
+
+Problem:
+Even once built, `directplay_tests` is not runnable via `ctest`.
+
+Required work:
+- Call `enable_testing()` and `add_test(NAME directplay_tests COMMAND directplay_tests)` in
+  `tests/CMakeLists.txt`, gated the same way as TASK-24H-0002.
+
+Acceptance criteria:
+- `ctest --test-dir build` (with `FREE_DIRECT_BUILD_TESTS=ON`) reports `1/1 tests passed`.
+- Non-zero exit from `directplay_tests` is reflected as a CTest failure (verify by temporarily
+  breaking one assertion locally, observing the failure, then reverting — do not commit a broken
+  test).
+
+Out of scope:
+- Do not add a CI pipeline file (`.github/workflows/*`) in this task — that is a separate,
+  lower-priority documentation/tooling task (TASK-24H-0012).
+
+### TASK-24H-0004: Add a CTest label "directplay" to the directplay_tests target
+Status: TODO
+Priority: P1
+Area: Build
+Type: Implementation
+Evidence: Original prompt's "Add CTest labels by subsystem" instruction
+Depends on: TASK-24H-0003
+
+Problem:
+Once more test executables exist (DirectDraw, DirectSound), there is no way to run just one
+subsystem's tests.
+
+Required work:
+- Set `set_tests_properties(directplay_tests PROPERTIES LABELS "directplay")`.
+
+Acceptance criteria:
+- `ctest --test-dir build -L directplay` runs exactly the DirectPlay test executable.
+
+Out of scope:
+- Do not invent label names for subsystems that don't have a test executable yet.
+
+### TASK-24H-0005: Document headless SDL video/audio driver usage for future DirectDraw/DirectSound tests
+Status: TODO
+Priority: P1
+Area: Build
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §7 ("No SDL_VIDEODRIVER/SDL_AUDIODRIVER env var reference anywhere")
+Depends on: None
+
+Problem:
+DirectDraw/DirectSound tests (added later in this backlog) will need a real SDL context; running
+headlessly requires `SDL_VIDEODRIVER=dummy`/`SDL_AUDIODRIVER=dummy`, which is undocumented today.
+
+Required work:
+- Add a short README/docs note: DirectDraw/DirectSound test executables should be run with
+  `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` for headless/CI execution, citing that the vendored
+  SDL3 build already includes both dummy drivers (confirmed in docs/audit-24h-free-direct.md §7).
+
+Acceptance criteria:
+- The note exists in a docs file and is accurate (does not claim CTest wiring that doesn't exist
+  yet).
+
+Out of scope:
+- Do not wire the env vars into CMake automatically in this task; that belongs with the DirectDraw
+  test executable task (TASK-24H-0026) once it exists.
+
+### TASK-24H-0006: Re-verify standalone free-direct configure still fails with an actionable error
+Status: TODO
+Priority: P2
+Area: Build
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §7
+Depends on: None
+
+Problem:
+Standalone configure is expected to fail by design (no vendored SDL3); a regression here would be a
+confusing, less-actionable error message.
+
+Required work:
+- Run `cmake -B <scratch> -DCMAKE_BUILD_TYPE=Debug` from a clean `free-direct` checkout and confirm
+  the failure message still names the three concrete remediation options (system SDL3, building as
+  a subdirectory of a target game, or providing SDL3 targets manually).
+
+Acceptance criteria:
+- The exact error text is unchanged or improved; if it regressed to a generic CMake error, file a
+  fix task.
+
+Out of scope:
+- Do not make free-direct vendor SDL3 itself. Do not change the three-tier acquisition strategy.
+
+### TASK-24H-0007: Re-verify free-eggbert build after every DirectDraw/DirectSound/DirectPlay change this session
+Status: TODO
+Priority: P0
+Area: Integration
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §7 (confirmed passing at audit time)
+Depends on: None (recurring — re-run after each implementation task in this backlog that touches src/ or include/)
+
+Problem:
+A regression in free-direct that breaks the diamond-dependency build would only be caught by
+accident without a recurring check.
+
+Required work:
+- After each implementation task that touches `include/` or `src/`, run
+  `cmake --build <fe-build-dir>` against `../free-eggbert` and confirm it still succeeds.
+
+Acceptance criteria:
+- Build succeeds with exit code 0 and zero new errors/warnings attributable to free-direct.
+
+Out of scope:
+- Do not modify `../free-eggbert` source to fix a build break — fix free-direct instead, or revert.
+
+### TASK-24H-0008: Re-verify planetblupi build after every DirectDraw/DirectSound/DirectPlay change this session
+Status: TODO
+Priority: P0
+Area: Integration
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §7 (confirmed passing at audit time)
+Depends on: None (recurring)
+
+Problem:
+Same rationale as TASK-24H-0007, for the other target game.
+
+Required work:
+- After each implementation task that touches `include/` or `src/`, run
+  `cmake --build <pb-build-dir>` against `../planetblupi` and confirm it still succeeds.
+
+Acceptance criteria:
+- Build succeeds with exit code 0 and zero new errors/warnings attributable to free-direct.
+
+Out of scope:
+- Do not modify `../planetblupi` source to fix a build break — fix free-direct instead, or revert.
+
+### TASK-24H-0009: Verify the ENet-enabled build still configures and compiles against the vendored submodule
+Status: TODO
+Priority: P1
+Area: Build
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §7 (submodule initialized, `v1.3.15-64-g5a9c537`)
+Depends on: None
+
+Problem:
+`FREE_DIRECT_ENABLE_ENET=ON` is a real, shipped configuration but is easy to silently break since
+the default build never exercises it.
+
+Required work:
+- Run `cmake -B <scratch> -DFREE_DIRECT_ENABLE_ENET=ON` (as a subdirectory of a target game, since
+  standalone configure fails by design) and build.
+
+Acceptance criteria:
+- Build succeeds; `FreeDirect::ENet` links `PRIVATE` (re-confirm via
+  `grep -n "FreeDirect::ENet" CMakeLists.txt`).
+
+Out of scope:
+- Do not attempt `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` unless a system `libenet` package is confirmed
+  installed — do not install system packages as part of this task.
+
+### TASK-24H-0010: Add optional FREE_DIRECT_ENABLE_ASAN/UBSAN CMake options
+Status: TODO
+Priority: P2
+Area: Build
+Type: Implementation
+Evidence: plan.md Phase 15 (unstarted, names ASAN/UBSAN options)
+Depends on: TASK-24H-0001
+
+Problem:
+There is no sanitizer-enabled build configuration, which would catch DirectPlay/DirectDraw memory
+bugs earlier.
+
+Required work:
+- Add `option(FREE_DIRECT_ENABLE_ASAN ...)` / `option(FREE_DIRECT_ENABLE_UBSAN ...)`, default OFF,
+  applying `-fsanitize=address`/`-fsanitize=undefined` to the `free-direct` target only when set.
+
+Acceptance criteria:
+- `cmake -B build -DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_BUILD_TESTS=ON` builds and
+  `ctest --test-dir build` passes clean (no sanitizer reports).
+
+Out of scope:
+- Do not enable sanitizers by default. Do not apply them to `free-api` or target-game targets.
+
+### TASK-24H-0011: Document exact standalone/free-eggbert/planetblupi/ENet build+test commands in README
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: Original prompt's "Update docs for build/test commands"
+Depends on: TASK-24H-0003
+
+Problem:
+There is no single place listing the exact commands to build and test FreeDirect in each supported
+configuration.
+
+Required work:
+- Add a "Building and testing" section to README.md listing the standalone-configure-fails-by-design
+  note, the `-DFREE_DIRECT_BUILD_TESTS=ON` + `ctest` command, and the ENet-enabled variant.
+
+Acceptance criteria:
+- Every command listed has actually been run successfully in this session and its real output
+  matches what's documented.
+
+Out of scope:
+- Do not document commands that were not actually verified this session.
+
+### TASK-24H-0012: Add a documented (non-blocking) CI matrix note
+Status: TODO
+Priority: P3
+Area: Docs
+Type: Documentation
+Evidence: Original prompt's "Add a CI matrix (conditional on no existing .github/workflows)"
+Depends on: TASK-24H-0003
+
+Problem:
+No `.github/workflows` exists; a future CI setup would need to know which configurations matter.
+
+Required work:
+- Add a short docs note (not an actual workflow file) listing the configurations worth testing in
+  CI: default (loopback only), `FREE_DIRECT_ENABLE_ENET=ON`, and headless (`SDL_VIDEODRIVER=dummy`).
+
+Acceptance criteria:
+- The note exists under `docs/` and does not claim CI is actually configured.
+
+Out of scope:
+- Do not add an actual `.github/workflows/*.yml` file in this task — that's a bigger, separate
+  ask-first decision (adding real CI infrastructure) outside this backlog's scope.
+
+### TASK-24H-0013: Verify diamond-dependency build after CTest wiring lands
+Status: TODO
+Priority: P1
+Area: Integration
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §7
+Depends on: TASK-24H-0003
+
+Problem:
+Adding `tests/CMakeLists.txt` and new options must not break either target game's build, which
+each pull in free-direct as a dependency, not the other way around.
+
+Required work:
+- Rebuild `../free-eggbert` and `../planetblupi` from scratch after TASK-24H-0003 lands.
+
+Acceptance criteria:
+- Both builds succeed unchanged; `FREE_DIRECT_BUILD_TESTS` defaults OFF so neither game's build
+  gains new targets or test executables unexpectedly.
+
+Out of scope:
+- Do not make `FREE_DIRECT_BUILD_TESTS` default ON for target-game consumers.
+
+### TASK-24H-0014: Re-run all 46 DirectPlay tests after each DirectPlay-area change and log the result
+Status: TODO
+Priority: P0
+Area: Tests
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §6 (46/46 passing, re-verified this audit)
+Depends on: None (recurring)
+
+Problem:
+Without a recurring check, a regression in `src/directplay/*` during this session's implementation
+work could go unnoticed until the final report.
+
+Required work:
+- After each DirectPlay-area implementation task in this backlog, rebuild and rerun
+  `directplay_tests` (via CTest once TASK-24H-0003 lands, or via the manual `g++` command before
+  then) and note the pass count in `NEXT.md`.
+
+Acceptance criteria:
+- Every DirectPlay-area task's commit message or `NEXT.md` entry states the test count and
+  pass/fail result observed immediately after that change.
+
+Out of scope:
+- Do not mark a DirectPlay task done if this recurring check was skipped or failed.
+
+### TASK-24H-0015: Re-verify the header-hygiene grep invariant after each change touching include/
+Status: TODO
+Priority: P0
+Area: Headers
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §7 (invariant holds as of this audit)
+Depends on: None (recurring)
+
+Problem:
+Any change to `include/*.h` risks accidentally leaking an SDL/ENet identifier into a public header.
+
+Required work:
+- After each task touching `include/`, run
+  `grep -rniE "sdl_|sdl3_net|enet" include/` and confirm zero real-symbol hits (Doxygen prose
+  mentioning "SDL_AudioStream" in English is acceptable; a real `#include`/type/identifier is not).
+
+Acceptance criteria:
+- Zero violations found, or a violation is fixed before the task is marked done.
+
+Out of scope:
+- Do not weaken this check to allow a real backend identifier under `include/` for convenience.
+
+## Header hygiene
+
+### TASK-24H-0016: Add a compile-only smoke test for include/ddraw.h
+Status: TODO
+Priority: P1
+Area: Headers
+Type: Test
+Evidence: Original prompt's "Add compile smoke tests for ddraw.h, dsound.h, dplay.h"
+Depends on: TASK-24H-0001
+
+Problem:
+Nothing currently verifies `include/ddraw.h` compiles standalone (as a consumer would include it)
+without pulling in the rest of `free-direct`.
+
+Required work:
+- Add `tests/header_smoke_ddraw.cpp` containing only `#include <ddraw.h>` plus a trivial
+  `int main(){return 0;}`, wired as its own CTest target gated by `FREE_DIRECT_BUILD_TESTS`.
+
+Acceptance criteria:
+- The file compiles with zero errors/warnings using the same flags as the main library
+  (`-Wall -Wextra -std=c++20`).
+
+Out of scope:
+- Do not add any assertions about DirectDraw behavior here — this is a compile-only check.
+
+### TASK-24H-0017: Add a compile-only smoke test for include/dsound.h
+Status: TODO
+Priority: P1
+Area: Headers
+Type: Test
+Evidence: Original prompt's "Add compile smoke tests for ddraw.h, dsound.h, dplay.h"
+Depends on: TASK-24H-0001
+
+Problem:
+Same rationale as TASK-24H-0016, for `dsound.h`.
+
+Required work:
+- Add `tests/header_smoke_dsound.cpp`, same pattern as TASK-24H-0016.
+
+Acceptance criteria:
+- Compiles with zero errors/warnings.
+
+Out of scope:
+- Do not add behavioral assertions.
+
+### TASK-24H-0018: Add a compile-only smoke test for include/dplay.h
+Status: TODO
+Priority: P1
+Area: Headers
+Type: Test
+Evidence: Original prompt's "Add compile smoke tests for ddraw.h, dsound.h, dplay.h"
+Depends on: TASK-24H-0001
+
+Problem:
+Same rationale as TASK-24H-0016, for `dplay.h`.
+
+Required work:
+- Add `tests/header_smoke_dplay.cpp`, same pattern.
+
+Acceptance criteria:
+- Compiles with zero errors/warnings (the pre-existing `-Wmissing-field-initializers` warning on
+  the two brace-initialized `GUID` constants, noted in docs/audit-24h-free-direct.md §7's build
+  audit, is acceptable and pre-existing — do not treat it as a new failure).
+
+Out of scope:
+- Do not add behavioral assertions.
+
+### TASK-24H-0019: Wire the three header smoke tests into CTest with a "headers" label
+Status: TODO
+Priority: P1
+Area: Build
+Type: Implementation
+Evidence: TASK-24H-0016/0017/0018
+Depends on: TASK-24H-0016, TASK-24H-0017, TASK-24H-0018, TASK-24H-0003
+
+Problem:
+Once the three smoke-test files exist, they need to actually run under `ctest`.
+
+Required work:
+- Add `add_executable`/`add_test` entries for each, labeled `"headers"`.
+
+Acceptance criteria:
+- `ctest --test-dir build -L headers` runs and passes all three.
+
+Out of scope:
+- Do not merge the three files into one — keep them separate per-header, matching the one-purpose-
+  per-file convention.
+
+### TASK-24H-0020: Add a static_assert that DPID is exactly 4 bytes
+Status: TODO
+Priority: P1
+Area: Headers
+Type: Test
+Evidence: include/dplay.h:103 comment citing free-eggbert's 32-byte pointer-arithmetic stride
+Depends on: None
+
+Problem:
+`free-eggbert`'s `NetPlayer` struct walk depends on `DPID` being exactly 4 bytes; nothing enforces
+this at compile time today beyond the `typedef` itself.
+
+Required work:
+- Add `static_assert(sizeof(DPID) == 4, "...");` near the `DPID` typedef in `include/dplay.h`.
+
+Acceptance criteria:
+- Builds unchanged today; would fail loudly if a future change widened `DPID`.
+
+Out of scope:
+- Do not add static_asserts for struct fields that have no cited game-side layout dependency.
+
+### TASK-24H-0021: Document the compile-only DirectDraw flag constants inline
+Status: TODO
+Priority: P2
+Area: Headers
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §3 (DDBLT_COLORFILL, DDBLT_KEYSRC, DDBLT_ROTATIONANGLE have no live call site)
+Depends on: None
+
+Problem:
+`DDBLT_COLORFILL`, `DDBLT_KEYSRC`, and `DDBLT_ROTATIONANGLE` are defined but have zero real call
+sites in either target game; a future reader might assume they're exercised.
+
+Required work:
+- Add a one-line comment next to each noting "no call site in free-eggbert/planetblupi as of the
+  2026-07-08 audit; kept for API-shape completeness of the DDBLT_* flag family already required."
+
+Acceptance criteria:
+- Comment added, no behavior change.
+
+Out of scope:
+- Do not remove these constants — `CLAUDE.md` allows unused-but-declared surface for link
+  compatibility with the flag family a real call site needs.
+
+### TASK-24H-0022: Document the compile-only DirectPlay flag constants inline
+Status: TODO
+Priority: P2
+Area: Headers
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §3 (DPSESSION_KEEPALIVE, DPSESSION_MIGRATEHOST, DPESC_TIMEDOUT unused)
+Depends on: None
+
+Problem:
+Same rationale as TASK-24H-0021, for `include/dplay.h`'s unused session/escape flags.
+
+Required work:
+- Add the same style of "no call site as of the 2026-07-08 audit" comment next to each.
+
+Acceptance criteria:
+- Comment added, no behavior change.
+
+Out of scope:
+- Do not remove these constants.
+
+### TASK-24H-0023: Document DSBCAPS_STATIC's real call site is in dead code only
+Status: TODO
+Priority: P2
+Area: Headers
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §2.2 (only referenced from unreachable wave.cpp in both games)
+Depends on: None
+
+Problem:
+`DSBCAPS_STATIC` looks like a live flag but its only real-source reference in either game is inside
+unreachable code (`wave.cpp`, never called).
+
+Required work:
+- Add a comment noting this in `include/dsound.h` next to the constant.
+
+Acceptance criteria:
+- Comment added, no behavior change.
+
+Out of scope:
+- Do not remove the constant; it costs nothing to keep and documents a real (if dead) call site.
+
+### TASK-24H-0024: Add a CTest-registered header-hygiene grep check
+Status: TODO
+Priority: P1
+Area: Headers
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §7; TASK-24H-0015
+Depends on: TASK-24H-0003
+
+Problem:
+TASK-24H-0015 is a manual recurring check for this session; it should also be an automated,
+permanent regression test so future changes can't silently reintroduce a leak.
+
+Required work:
+- Add a tiny test (a CMake `add_test` running a shell/grep command, or a small C++/Python script)
+  that fails if `grep -rniE "sdl_|sdl3_net|enet" include/` finds a real symbol (excluding Doxygen
+  prose already present, e.g. by anchoring the match to non-comment lines or maintaining a small
+  allowlist of the known-good prose lines).
+
+Acceptance criteria:
+- `ctest --test-dir build -R header_hygiene` passes today; would fail if a future PR added a real
+  SDL/ENet identifier under `include/`.
+
+Out of scope:
+- Do not implement a general-purpose static analysis tool — a targeted grep-based check is
+  sufficient and matches CLAUDE.md's own stated verification method.
+
+### TASK-24H-0025: Verify no new public declaration lacks a cited call site or test justification
+Status: TODO
+Priority: P3
+Area: Headers
+Type: Verification
+Evidence: CLAUDE.md Public Header Policy
+Depends on: None (recurring, run once near the end of this session's implementation work)
+
+Problem:
+This backlog itself must not become a vector for scope creep if an implementation task
+accidentally adds unjustified public surface.
+
+Required work:
+- Before closing out this session's implementation work, diff `include/*.h` against the version at
+  the start of the session and confirm every added symbol maps to a task in this backlog with a
+  cited call site or test need.
+
+Acceptance criteria:
+- Every new public symbol traces to a specific TASK-24H-XXXX with cited evidence.
+
+Out of scope:
+- Do not add speculative public surface "for completeness" during this pass.
+
+## DirectDraw tests and fixes
+
+### TASK-24H-0026: Create tests/directdraw_tests.cpp harness skeleton
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4/§7 (zero DirectDraw tests exist despite highest call frequency)
+Depends on: TASK-24H-0001
+
+Problem:
+DirectDraw is the most-called subsystem in both target games (per-frame `Blt`/`BltFast`) and has
+zero automated tests today.
+
+Required work:
+- Create `tests/directdraw_tests.cpp` following the same standalone-`main()`-plus-`Test_*`-function
+  convention as `tests/directplay_tests.cpp`, requiring `SDL_VIDEODRIVER=dummy` per TASK-24H-0005.
+- Add one placeholder test (`Test_DirectDrawCreate_ReturnsOk`, see TASK-24H-0027) so the harness is
+  provably wired end-to-end before further tests are added.
+
+Acceptance criteria:
+- File compiles and the one placeholder test passes.
+
+Out of scope:
+- Do not write every DirectDraw test in this single task — this task only stands up the harness.
+
+### TASK-24H-0027: Add DirectDrawCreate smoke test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §3 (DirectDrawCreate used once per game, untested)
+Depends on: TASK-24H-0026
+
+Problem:
+`DirectDrawCreate` has no test asserting it returns `DD_OK` and a usable object under the dummy
+video driver.
+
+Required work:
+- Add `Test_DirectDrawCreate_ReturnsOk`.
+
+Acceptance criteria:
+- Test passes under `SDL_VIDEODRIVER=dummy`.
+
+Out of scope:
+- Do not test GUID-selection behavior — neither game passes a meaningful GUID.
+
+### TASK-24H-0028: Add SetCooperativeLevel test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (one-time setup call in both games)
+Depends on: TASK-24H-0026
+
+Problem:
+No test exercises `SetCooperativeLevel` with the exact flag combinations both games use
+(`DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN` and `DDSCL_NORMAL`).
+
+Required work:
+- Add `Test_SetCooperativeLevel_NormalAndFullscreen_ReturnOk`.
+
+Acceptance criteria:
+- Test passes for both flag combinations under the dummy driver.
+
+Out of scope:
+- Do not test flag combinations neither game uses.
+
+### TASK-24H-0029: Add SetDisplayMode test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (one-time setup call in both games)
+Depends on: TASK-24H-0026
+
+Problem:
+No test exercises `SetDisplayMode` with a representative resolution.
+
+Required work:
+- Add `Test_SetDisplayMode_ReturnsOk`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test resolutions neither game requests.
+
+### TASK-24H-0030: Add CreateSurface primary-surface test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (primary surface creation, one-time setup, both games)
+Depends on: TASK-24H-0026
+
+Problem:
+No test verifies `CreateSurface(DDSCAPS_PRIMARYSURFACE, ...)` succeeds and yields a usable surface.
+
+Required work:
+- Add `Test_CreateSurface_Primary_ReturnsOk`.
+
+Acceptance criteria:
+- Test passes and the returned surface responds to `GetSurfaceDesc` with `DDSCAPS_PRIMARYSURFACE`
+  set.
+
+Out of scope:
+- Do not test multi-buffer flip-chain primary creation — neither game requests it.
+
+### TASK-24H-0031: Add CreateSurface offscreen (SYSTEMMEMORY) test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.1 (both games actually use DDSCAPS_SYSTEMMEMORY, not OFFSCREENPLAIN)
+Depends on: TASK-24H-0026
+
+Problem:
+No test verifies the exact flag combination (`DDSCAPS_SYSTEMMEMORY`) both games actually pass for
+back-buffer/mouse-cursor surfaces, as opposed to the commented-out `DDSCAPS_OFFSCREENPLAIN`.
+
+Required work:
+- Add `Test_CreateSurface_SystemMemoryOffscreen_ReturnsOk`, using exactly the flag combination found
+  in `pixmap.cpp` (`DDSCAPS_SYSTEMMEMORY`, no `DDSCAPS_OFFSCREENPLAIN`).
+
+Acceptance criteria:
+- Test passes and asserts the created surface is treated as offscreen (not primary).
+
+Out of scope:
+- Do not add a separate test for `DDSCAPS_OFFSCREENPLAIN` alone unless a call site is found using
+  it without `SYSTEMMEMORY`.
+
+### TASK-24H-0032: Add 8-bit surface creation + palette round-trip test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (palette behavior used at asset-load time in both games)
+Depends on: TASK-24H-0026
+
+Problem:
+No test verifies an 8-bit paletted surface can be created, given a palette via `SetPalette`, and
+read back consistently.
+
+Required work:
+- Add `Test_8BitSurface_CreatePaletteSetPalette_RoundTrips`.
+
+Acceptance criteria:
+- Test passes, confirming palette entries set via `CreatePalette`/`SetEntries` are retrievable via
+  `GetEntries` unchanged.
+
+Out of scope:
+- Do not test palette animation or per-frame palette swapping — not observed in either game.
+
+### TASK-24H-0033: Add 32-bit surface creation test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (implementation supports RGB and palettized 8-bit layouts)
+Depends on: TASK-24H-0026
+
+Problem:
+No test verifies 32-bit RGB surface creation and `GetSurfaceDesc` pixel-format readback.
+
+Required work:
+- Add `Test_32BitSurface_CreateAndDescribe_ReturnsCorrectFormat`.
+
+Acceptance criteria:
+- Test passes, asserting `dwRGBBitCount == 32` on readback.
+
+Out of scope:
+- Do not test alpha-channel or YUV pixel formats — neither game uses them.
+
+### TASK-24H-0034: Add GetSurfaceDesc test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (used on the asset-load path, DDCopyBitmap, in both games)
+Depends on: TASK-24H-0030
+
+Problem:
+No dedicated test verifies `GetSurfaceDesc` reports width/height/pitch consistent with the
+`CreateSurface` request.
+
+Required work:
+- Add `Test_GetSurfaceDesc_MatchesCreatedDimensions`.
+
+Acceptance criteria:
+- Test passes for both a primary and an offscreen surface.
+
+Out of scope:
+- Do not test dimensions or pixel formats outside what either game requests.
+
+### TASK-24H-0035: Add Lock/Unlock pitch-correctness test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (used on the asset-load color-matching path in both games; pitch correctness never independently verified)
+Depends on: TASK-24H-0030
+
+Problem:
+`Lock`/`Unlock` are implemented but no test has ever independently verified the reported pitch
+matches the actual row stride of the returned buffer.
+
+Required work:
+- Add `Test_LockUnlock_PitchMatchesRowStride`, writing a known pattern via the locked pointer using
+  the reported pitch and reading it back via `GetDC`-independent means (direct buffer re-lock) to
+  confirm no row-stride miscalculation.
+
+Acceptance criteria:
+- Test passes for at least one 8-bit and one 32-bit surface.
+
+Out of scope:
+- Do not test multi-region locks — neither game locks partial rectangles at any DirectDraw call
+  site (per docs/audit-24h-free-direct.md §2.1, both games lock the full surface only).
+
+### TASK-24H-0036: Add BltFast 1:1 copy test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.1 (BltFast is the heaviest-called DirectDraw method in both games — 6/5 call sites, all live)
+Depends on: TASK-24H-0030, TASK-24H-0031
+
+Problem:
+`BltFast`, the single most-called DirectDraw method in real gameplay, has zero test coverage.
+
+Required work:
+- Add `Test_BltFast_OpaqueCopy_PixelsMatchSource`, blitting a small known-pattern source surface
+  onto a destination at a given (x,y) with `DDBLTFAST_NOCOLORKEY` and verifying exact pixel match.
+
+Acceptance criteria:
+- Test passes for both an 8-bit and a 32-bit surface pair.
+
+Out of scope:
+- Do not test scaling — `BltFast` is positional-only (no dest-rect scaling) in real DirectDraw and
+  neither game uses it that way.
+
+### TASK-24H-0037: Add BltFast clipping test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.1 (BltFast called at destination coordinates near surface edges during real gameplay, e.g. UI icon placement)
+Depends on: TASK-24H-0036
+
+Problem:
+No test verifies `BltFast` behaves correctly (does not overrun the destination buffer) when the
+blit target is partially or fully outside the destination surface bounds.
+
+Required work:
+- Add `Test_BltFast_PartiallyOffscreenDest_ClipsWithoutOverrun`, blitting at a destination position
+  that would overrun the buffer if unclipped, then verifying no crash/corruption and that in-bounds
+  pixels are correct.
+
+Acceptance criteria:
+- Test passes (ideally under a sanitizer build, see TASK-24H-0010, to catch any out-of-bounds
+  write).
+
+Out of scope:
+- Do not test negative source-rect coordinates — not used by either game.
+
+### TASK-24H-0038: Add BltFast source color key test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.1 (DDBLTFAST_SRCCOLORKEY used on all live BltFast call sites in both games)
+Depends on: TASK-24H-0036
+
+Problem:
+`DDBLTFAST_SRCCOLORKEY` is used on every live `BltFast` call site in both games but has no test
+coverage.
+
+Required work:
+- Add `Test_BltFast_SrcColorKey_SkipsKeyedPixels`, using a source surface with a known color-keyed
+  region and confirming those pixels are not copied while others are.
+
+Acceptance criteria:
+- Test passes for both 8-bit (palette-index comparison) and 32-bit (packed pixel comparison)
+  surfaces, per the two comparison modes documented in README.
+
+Out of scope:
+- Do not test color-key ranges wider than what `SetColorKey` supports today.
+
+### TASK-24H-0039: Add Blt color-fill test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (ColorFill path implemented but has zero real call sites — still needs its own test since it's public API)
+Depends on: TASK-24H-0030
+
+Problem:
+`Blt`'s `DDBLT_COLORFILL` path is implemented but untested; since it's public API kept for
+API-shape completeness, it should still be verified correct even though neither game calls it.
+
+Required work:
+- Add `Test_Blt_ColorFill_FillsDestRectWithColor`.
+
+Acceptance criteria:
+- Test passes, confirming the fill color (interpreted per the documented simplified `0x00RRGGBB`
+  format) is written to every pixel in the dest rect.
+
+Out of scope:
+- Do not expand `DDBLTFX` interpretation beyond the documented simplified format.
+
+### TASK-24H-0040: Add Blt surface-to-surface present-path test
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §1/§2.1 (Blt via CPixmap::Display() is the once-per-frame present call in BOTH games — corrects the prior "rare path" assumption)
+Depends on: TASK-24H-0030, TASK-24H-0031
+
+Problem:
+This is the single highest-risk untested DirectDraw path found in this audit: `Blt` with
+`DDBLT_WAIT` and full-surface src/dest rects is the once-per-frame back-buffer-to-primary present
+call in both target games, and has zero test coverage.
+
+Required work:
+- Add `Test_Blt_FullSurfaceCopy_MatchesSource`, replicating the exact call pattern
+  (`DDBLT_WAIT`, full-surface `lpDestRect`/`lpSrcRect`, zero-initialized `DDBLTFX`) both games use
+  in `CPixmap::Display()`.
+
+Acceptance criteria:
+- Test passes, confirming pixel-exact copy from back buffer to primary.
+
+Out of scope:
+- Do not test `DDBLT_KEYSRC` on `Blt()` — confirmed zero call sites in either game (only `BltFast`
+  uses color-keying in practice).
+
+### TASK-24H-0041: Add SetColorKey range test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (used at asset-load time in both games, affects every later blit)
+Depends on: TASK-24H-0030
+
+Problem:
+No test verifies `SetColorKey(DDCKEY_SRCBLT, ...)` correctly stores and later applies a low/high
+color range.
+
+Required work:
+- Add `Test_SetColorKey_RangeAppliedOnSubsequentBltFast`.
+
+Acceptance criteria:
+- Test passes for a color-key range spanning more than one value (not just a single exact color),
+  matching the "range" semantics documented in README.
+
+Out of scope:
+- Do not test destination color keys (`ddckCKDestBlt`) — not used by either game.
+
+### TASK-24H-0042: Add CreatePalette/SetEntries/GetEntries round-trip test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4
+Depends on: None
+
+Problem:
+No test verifies palette entries survive a `SetEntries`→`GetEntries` round trip unchanged.
+
+Required work:
+- Add `Test_Palette_SetEntriesGetEntries_RoundTrips`.
+
+Acceptance criteria:
+- Test passes for a full 256-entry palette.
+
+Out of scope:
+- Do not test partial palette updates beyond what `dwBase`/`dwNumEntries` already support.
+
+### TASK-24H-0043: Add SetPalette-on-surface test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (used in Cache() in both games, affects primary surface colors)
+Depends on: TASK-24H-0030, TASK-24H-0042
+
+Problem:
+No test verifies attaching a palette to a surface via `SetPalette` actually affects how that
+surface's 8-bit pixels are interpreted on present.
+
+Required work:
+- Add `Test_SetPalette_AffectsPresentedColors`.
+
+Acceptance criteria:
+- Test passes, confirming a palette-index pixel value maps to the expected RGB after present.
+
+Out of scope:
+- Do not test palette sharing/reference-counting semantics beyond what either game relies on.
+
+### TASK-24H-0044: Add GetDC/ReleaseDC test harness
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4/§6 (STUB status; planetblupi's IsIconPixel is a LIVE gameplay hit-test path depending on it)
+Depends on: TASK-24H-0030
+
+Problem:
+`GetDC`/`ReleaseDC` are currently `STUB` per the header's own Doxygen tag, yet `planetblupi` calls
+them from a live per-click gameplay path (`IsIconPixel`, `pixmap.cpp:729-731`). This is the single
+highest-risk untested/under-implemented DirectDraw method pair found in this audit.
+
+Required work:
+- Add `Test_GetDCReleaseDC_ReturnsUsableDCForPixelRead`, verifying a `GetDC` call returns an `HDC`
+  usable enough for a `GetPixel`-equivalent read that matches the surface's actual pixel content,
+  then that `ReleaseDC` cleans up without error.
+
+Acceptance criteria:
+- Test passes; if it reveals `GetDC`/`ReleaseDC` cannot actually support a pixel read today, file a
+  follow-up `fix` task (do not silently downgrade the test to a no-op assertion).
+
+Out of scope:
+- Do not implement full GDI DC emulation — only enough for the pixel-read pattern
+  `IsIconPixel`/`DDColorMatch`/`DDCopyBitmap` actually need, per the call-site audit in §2.1.
+
+### TASK-24H-0045: Add IsLost/Restore behavior test documenting current inert-stub semantics
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 (IsLost always returns DD_OK; Restore()'s conditional body inside RestoreAll() never fires)
+Depends on: TASK-24H-0030
+
+Problem:
+`IsLost`/`Restore` are reachable from ~8-9 call sites per game but their current behavior (always
+"not lost") has never been locked in by a test.
+
+Required work:
+- Add `Test_IsLost_AlwaysReturnsNotLost` and `Test_Restore_ReturnsOkUnconditionally`, explicitly
+  documenting today's honestly-stubbed behavior rather than a real lost-surface simulation.
+
+Acceptance criteria:
+- Both tests pass and their names/comments make clear this locks in current (not aspirational)
+  behavior.
+
+Out of scope:
+- Do not implement real lost-surface simulation in this task — no call site in either game has
+  been shown to need it (alt-tab/device-loss scenarios are not exercised by the games' own logic
+  paths beyond the unconditional `Restore()` call already covered).
+
+### TASK-24H-0046: Add Flip test documenting the simplified-present deviation
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.1 (Flip implemented but called by neither game)
+Depends on: TASK-24H-0030
+
+Problem:
+`Flip` is implemented as a "Simplified Present" but has never been tested, and is unexercised by
+either target game.
+
+Required work:
+- Add `Test_Flip_SwapsBackBufferToPrimary`, covering the implemented behavior only.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not implement a real multi-surface flip chain — no call site in either game needs it.
+
+### TASK-24H-0047: Add presentation dirty-flag/throttle test
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Test
+Evidence: README.md presentation model section (throttle + dirty-check documented, never tested)
+Depends on: TASK-24H-0040
+
+Problem:
+The documented throttle (frame-interval skip) and dirty-check (skip when primary unchanged)
+behavior in the presentation path has never been verified by a test.
+
+Required work:
+- Add `Test_Presentation_SkipsUploadWhenNotDirty` and
+  `Test_Presentation_SkipsUploadWithinThrottleInterval`, using `FREE_DIRECT_TARGET_FPS`/dirty-state
+  hooks already exposed for diagnostics if available, or by observing upload/present counters under
+  `FREE_DIRECT_DEBUG_PERF`.
+
+Acceptance criteria:
+- Both tests pass deterministically (no reliance on wall-clock timing races beyond what the
+  existing throttle mechanism already uses).
+
+Out of scope:
+- Do not change the throttle/dirty-check implementation in this task — test only.
+
+### TASK-24H-0048: Add a test asserting no unconditional hot-path log fires during BltFast by default
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §4 ("no unconditional hot-path logs" requirement); CLAUDE.md logging policy
+Depends on: TASK-24H-0036
+
+Problem:
+`BltFast` is called many times per frame; an accidental unconditional log statement here would be a
+severe, easy-to-miss performance regression.
+
+Required work:
+- Add a test that calls `BltFast` many times with all `FREE_DIRECT_DEBUG_*` env vars unset and
+  captures stdout/stderr, asserting zero output lines attributable to the DirectDraw backend.
+
+Acceptance criteria:
+- Test passes today; would fail if a future change added an unconditional log to `BltFast`.
+
+Out of scope:
+- Do not assert on log content when debug flags ARE set — only the default (unset) case.
+
+### TASK-24H-0049: Wire tests/directdraw_tests.cpp into CMake/CTest
+Status: TODO
+Priority: P0
+Area: Build
+Type: Implementation
+Evidence: TASK-24H-0026 through TASK-24H-0048
+Depends on: TASK-24H-0026, TASK-24H-0003
+
+Problem:
+Once the DirectDraw test file has real tests, it needs a CMake target and CTest registration, same
+as `directplay_tests`.
+
+Required work:
+- Add an `add_executable(directdraw_tests ...)` + `add_test(...)` pair in `tests/CMakeLists.txt`,
+  labeled `"directdraw"`, requiring `SDL_VIDEODRIVER=dummy` to be set for the test run (document in
+  the test's own CTest `ENVIRONMENT` property rather than relying on the invoker to set it).
+
+Acceptance criteria:
+- `ctest --test-dir build -L directdraw` runs and passes all DirectDraw tests headlessly.
+
+Out of scope:
+- Do not require a real display/GPU for this test target.
+
+### TASK-24H-0050: Add CreateClipper/SetClipper/SetHWnd one-time-init test
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.1 (one-time init in both games)
+Depends on: TASK-24H-0030
+
+Problem:
+No test exercises the clipper setup sequence both games perform once at startup.
+
+Required work:
+- Add `Test_ClipperSetup_CreateSetHWndSetClipper_ReturnsOk`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test multi-clipper-region clip lists — not used by either game.
+
+### TASK-24H-0051: Create docs/directdraw-limitations.md
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: plan.md Phase 16 (deliverable not yet created); CLAUDE.md DirectDraw Policy
+Depends on: None
+
+Problem:
+`plan.md` Phase 16 and `CLAUDE.md`'s DirectDraw Policy both call for a limitations doc that does
+not exist yet.
+
+Required work:
+- Create `docs/directdraw-limitations.md` documenting: the simplified flip chain, the simplified
+  `DDBLTFX.dwFillColor` interpretation, `GetDC`/`ReleaseDC`'s current STUB status and its
+  planetblupi live-path risk (§4 of the audit), and `IsLost`/`Restore`'s inert-stub behavior.
+
+Acceptance criteria:
+- File exists, is in English, and does not overclaim compatibility beyond what's actually
+  implemented (per CLAUDE.md's Documentation Policy).
+
+Out of scope:
+- Do not use this doc to describe DirectSound or DirectPlay limitations — DirectDraw only.
+
+### TASK-24H-0052: Correct the Blt-vs-BltFast call-site risk framing in existing docs
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §2.1 (corrects CLAUDE.md's prior "18 vs 1"/"17 vs 0" figures; Blt is the present-path call, not a rare path)
+Depends on: TASK-24H-0051
+
+Problem:
+`CLAUDE.md`'s DirectDraw Policy section currently frames `Blt` as a minor/rare path relative to
+`BltFast` based on stale call-site counts; this audit found `Blt` is the once-per-frame present
+call in both games.
+
+Required work:
+- Note the corrected framing in `docs/directdraw-limitations.md` (do not edit `CLAUDE.md` itself —
+  it is project charter, not a status doc; a correction note in the limitations doc plus this
+  backlog item is sufficient without editing policy).
+
+Acceptance criteria:
+- The corrected call-site counts and present-path significance are recorded in
+  `docs/directdraw-limitations.md`, cross-referenced to `docs/audit-24h-free-direct.md`.
+
+Out of scope:
+- Do not edit `CLAUDE.md` as part of this task — flag the discrepancy to the user instead if a
+  charter update seems warranted.
+
+### TASK-24H-0053: Audit primary-surface/resolution behavior against real target-game resolutions
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Audit
+Evidence: plan.md Phase 14 (unstarted hardening backlog item)
+Depends on: None
+
+Problem:
+Phase 14's primary-surface/resolution audit has never been performed against the actual
+resolutions `free-eggbert`/`planetblupi` request via `SetDisplayMode`.
+
+Required work:
+- Grep both games' `SetDisplayMode` call sites for the exact width/height/bpp arguments passed and
+  confirm free-direct's implementation handles those specific values correctly.
+
+Acceptance criteria:
+- A short finding recorded in `docs/directdraw-limitations.md` (or a note that no issue was found).
+
+Out of scope:
+- Do not add support for arbitrary resolutions beyond what's actually requested.
+
+### TASK-24H-0054: Audit 8-bit palette conversion correctness against real asset colors
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Audit
+Evidence: plan.md Phase 14 (unstarted hardening backlog item)
+Depends on: None
+
+Problem:
+The 8-bit-to-RGBA32 palette conversion on present has never been checked against real bitmap
+assets from either game for visible color drift.
+
+Required work:
+- Load a representative 8-bit asset from each game (via the existing demo or a scratch test) and
+  visually/numerically compare presented colors against the palette's stored RGB values.
+
+Acceptance criteria:
+- A short finding recorded in `docs/directdraw-limitations.md`.
+
+Out of scope:
+- Do not implement dithering or color-correction beyond exact palette-value mapping.
+
+### TASK-24H-0055: Audit color-key range handling for planetblupi's 2 call sites
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Audit
+Evidence: plan.md Phase 14 (unstarted hardening backlog item); docs/audit-24h-free-direct.md §2.1
+Depends on: None
+
+Problem:
+`planetblupi`'s two `SetColorKey`-related call sites (`DDSetColorKey`/`DDSetColorKey2` in
+`ddutil.cpp`) have never been individually checked against free-direct's range-comparison logic
+for edge-case correctness (e.g. a color-key range that spans a palette boundary).
+
+Required work:
+- Trace both call sites' actual argument values and confirm free-direct's `SetColorKey` handles
+  them without an off-by-one or boundary error.
+
+Acceptance criteria:
+- A short finding recorded in `docs/directdraw-limitations.md`.
+
+Out of scope:
+- Do not change color-key comparison semantics without evidence of an actual bug.
+
+## DirectSound tests and fixes
+
+### TASK-24H-0056: Create tests/directsound_tests.cpp harness skeleton
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §5/§7 (zero DirectSound tests exist)
+Depends on: TASK-24H-0001
+
+Problem:
+DirectSound has zero automated tests despite being used by both games for every sound effect.
+
+Required work:
+- Create `tests/directsound_tests.cpp` following the same standalone convention, requiring
+  `SDL_AUDIODRIVER=dummy`.
+- Add one placeholder test (`Test_DirectSoundCreate_ReturnsOkOrGracefulNoDriver`, see
+  TASK-24H-0057).
+
+Acceptance criteria:
+- File compiles and the placeholder test passes under `SDL_AUDIODRIVER=dummy`.
+
+Out of scope:
+- Do not write every DirectSound test in this task — harness only.
+
+### TASK-24H-0057: Add DirectSoundCreate smoke test incl. graceful no-driver path
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §5 (graceful DSERR_NODRIVER fallback documented, never tested)
+Depends on: TASK-24H-0056
+
+Problem:
+The documented graceful `DSERR_NODRIVER` fallback when no audio device is available has never been
+tested.
+
+Required work:
+- Add `Test_DirectSoundCreate_ReturnsOkOrGracefulNoDriver`, asserting the call either succeeds
+  under `SDL_AUDIODRIVER=dummy` or fails with exactly `DSERR_NODRIVER` (never a crash) under a
+  deliberately-invalid driver name.
+
+Acceptance criteria:
+- Test passes in both scenarios.
+
+Out of scope:
+- Do not test real hardware audio device enumeration.
+
+### TASK-24H-0058: Add SetCooperativeLevel test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.2 (DSSCL_NORMAL, one call site per game)
+Depends on: TASK-24H-0057
+
+Problem:
+No test exercises `SetCooperativeLevel(DSSCL_NORMAL)`, the only value either game passes.
+
+Required work:
+- Add `Test_SetCooperativeLevel_Normal_ReturnsOk`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test other cooperative-level values — not used by either game.
+
+### TASK-24H-0059: Add CreateSoundBuffer test
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.2
+Depends on: TASK-24H-0057
+
+Problem:
+No test verifies `CreateSoundBuffer` with a representative `DSBUFFERDESC`/`PCMWAVEFORMAT`
+(8-bit/16-bit, mono/stereo, the three sample rates both games use) succeeds.
+
+Required work:
+- Add `Test_CreateSoundBuffer_SupportedFormats_ReturnsOk`, parameterized over the format table in
+  README.md ("Supported PCM formats").
+
+Acceptance criteria:
+- Test passes for every format combination listed in README.
+
+Out of scope:
+- Do not test formats outside the documented supported table.
+
+### TASK-24H-0060: Add Lock test
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §5
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies `Lock` returns a writable pointer of the requested size with
+`DSBLOCK_FROMWRITECURSOR`.
+
+Required work:
+- Add `Test_Lock_FromWriteCursor_ReturnsFullBuffer`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test lock flags other than `DSBLOCK_FROMWRITECURSOR` — the only one either game uses.
+
+### TASK-24H-0061: Add Unlock test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §5
+Depends on: TASK-24H-0060
+
+Problem:
+No test verifies data written during a `Lock`ed region is what actually plays back after `Unlock`
++ `Play`.
+
+Required work:
+- Add `Test_Unlock_ThenPlay_UsesWrittenData` (may require inspecting internal buffer state via a
+  test-only accessor, or verifying via `GetStatus`/duration heuristics if no direct accessor
+  exists).
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not add new public API surface just to make this test easier — use existing accessors or
+  duration/status-based verification.
+
+### TASK-24H-0062: Add wraparound two-region lock test
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: README.md ("Wrap-around two-region locks are supported")
+Depends on: TASK-24H-0060
+
+Problem:
+The documented wrap-around two-region lock behavior has never been tested.
+
+Required work:
+- Add `Test_Lock_WraparoundRegion_ReturnsTwoValidPointers`.
+
+Acceptance criteria:
+- Test passes, confirming both returned pointer/size pairs are valid and non-overlapping.
+
+Out of scope:
+- Do not test more than two wraparound regions — DirectSound's own contract only ever returns two.
+
+### TASK-24H-0063: Add Play test asserting DSBSTATUS_PLAYING
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: Original prompt's explicit test list ("Play -> DSBSTATUS_PLAYING")
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies `GetStatus` reports `DSBSTATUS_PLAYING` immediately after a successful `Play()`.
+
+Required work:
+- Add `Test_Play_SetsPlayingStatus`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test looping status bits — looping is not implemented (correctly, per §5).
+
+### TASK-24H-0064: Add Stop test
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: Original prompt's explicit test list
+Depends on: TASK-24H-0063
+
+Problem:
+No test verifies `Stop()` clears `DSBSTATUS_PLAYING` and silences the stream immediately.
+
+Required work:
+- Add `Test_Stop_ClearsPlayingStatus`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None beyond documented Stop behavior.
+
+### TASK-24H-0065: Add fresh-buffer GetStatus test
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: Original prompt's explicit test list ("fresh-buffer GetStatus")
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies a newly-created, never-played buffer reports a non-playing status.
+
+Required work:
+- Add `Test_GetStatus_FreshBuffer_NotPlaying`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None.
+
+### TASK-24H-0066: Add SetCurrentPosition(0) rewind test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.2 (both games only ever call this with 0)
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies `SetCurrentPosition(0)` behaves as a rewind-to-start before the next `Play()`.
+
+Required work:
+- Add `Test_SetCurrentPosition_Zero_RewindsBeforeNextPlay`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test non-zero seek positions — not used by either game, and the underlying SDL stream is
+  documented as not seekable to arbitrary positions.
+
+### TASK-24H-0067: Add SetVolume clamping test
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: Original prompt's explicit test list ("volume clamping to [DSBVOLUME_MIN, DSBVOLUME_MAX]")
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies out-of-range volume values are clamped to `[DSBVOLUME_MIN, DSBVOLUME_MAX]` rather
+than producing undefined gain.
+
+Required work:
+- Add `Test_SetVolume_OutOfRangeValues_AreClamped`. Note: `DSBVOLUME_MIN`/`MAX` are not currently
+  defined in `include/dsound.h` (confirmed absent, §2.2) since neither game references them by
+  name — use the numeric literals `-10000`/`0` from README's documented range instead of adding
+  unused named constants.
+
+Acceptance criteria:
+- Test passes for values below `-10000` and above `0`.
+
+Out of scope:
+- Do not add `DSBVOLUME_MIN`/`MAX` named constants to `include/dsound.h` — no call site needs them
+  by name.
+
+### TASK-24H-0068: Add SetPan mono-behavior test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §2.2 (mono-only pan, matches actual game usage)
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies `SetPan` never crashes on any input and applies constant-power pan for mono
+sources as documented.
+
+Required work:
+- Add `Test_SetPan_MonoSource_NeverCrashesAcrossFullRange`.
+
+Acceptance criteria:
+- Test passes for `DSBPAN_LEFT`/`DSBPAN_RIGHT`/0 and a few intermediate values.
+
+Out of scope:
+- Do not implement accurate stereo panning in this task — no call site needs it (§2.2).
+
+### TASK-24H-0069: Add unsupported-format fallback test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: README.md ("unsupported formats fall back to a safe 16-bit mono 22050 Hz default")
+Depends on: TASK-24H-0059
+
+Problem:
+The documented fallback-to-default behavior for an unsupported PCM format has never been tested.
+
+Required work:
+- Add `Test_CreateSoundBuffer_UnsupportedFormat_FallsBackToDefault`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not add support for additional formats — the fallback behavior itself is what's being tested.
+
+### TASK-24H-0070: Add zero-sized buffer descriptor test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: Original prompt's explicit test list ("zero-sized and invalid buffer descriptors")
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies `CreateSoundBuffer` handles a zero-byte `dwBufferBytes` request without crashing.
+
+Required work:
+- Add `Test_CreateSoundBuffer_ZeroSized_ReturnsErrorOrEmptyBuffer`.
+
+Acceptance criteria:
+- Test passes, documenting whichever well-defined behavior (error return vs. empty buffer) the
+  implementation actually exhibits.
+
+Out of scope:
+- Do not change current behavior unless it currently crashes or corrupts memory.
+
+### TASK-24H-0071: Add invalid/malformed DSBUFFERDESC test
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: Original prompt's explicit test list
+Depends on: TASK-24H-0059
+
+Problem:
+No test verifies a malformed `DSBUFFERDESC` (e.g. wrong `dwSize`, null `lpwfxFormat`) is rejected
+cleanly.
+
+Required work:
+- Add `Test_CreateSoundBuffer_MalformedDesc_ReturnsInvalidParam`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not add validation stricter than what real DirectSound would reasonably reject.
+
+### TASK-24H-0072: Wire tests/directsound_tests.cpp into CMake/CTest
+Status: TODO
+Priority: P1
+Area: Build
+Type: Implementation
+Evidence: TASK-24H-0056 through TASK-24H-0071
+Depends on: TASK-24H-0056, TASK-24H-0003
+
+Problem:
+Once real tests exist, the DirectSound test executable needs CMake/CTest wiring, same as
+`directplay_tests`.
+
+Required work:
+- Add `add_executable(directsound_tests ...)` + `add_test(...)`, labeled `"directsound"`, with
+  `SDL_AUDIODRIVER=dummy` set via the test's `ENVIRONMENT` property.
+
+Acceptance criteria:
+- `ctest --test-dir build -L directsound` runs and passes headlessly.
+
+Out of scope:
+- Do not require real audio hardware for this test target.
+
+### TASK-24H-0073: Verify no unconditional noisy logs fire during Play/Lock/Unlock by default
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Test
+Evidence: Original prompt's "no unconditional noisy logs" requirement
+Depends on: TASK-24H-0060, TASK-24H-0063
+
+Problem:
+Same rationale as TASK-24H-0048, for DirectSound's per-call paths.
+
+Required work:
+- Add a test capturing stdout/stderr across repeated `Play`/`Lock`/`Unlock` calls with all
+  `FREE_DIRECT_DEBUG_*` env vars unset, asserting zero DirectSound-attributable output.
+
+Acceptance criteria:
+- Test passes today; would fail if a future change added an unconditional log.
+
+Out of scope:
+- Do not assert on log content when debug flags are set.
+
+### TASK-24H-0074: Create docs/directsound-limitations.md
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: plan.md Phase 16; docs/audit-24h-free-direct.md §5
+Depends on: None
+
+Problem:
+`plan.md` Phase 16 calls for a DirectSound limitations doc that does not exist yet.
+
+Required work:
+- Create `docs/directsound-limitations.md` documenting: the `PCMWAVEFORMAT`-vs-`WAVEFORMATEX`
+  padding-safety fix (`DirectSound.cpp:11-14`), mono-only `SetPan`, non-seekable
+  `SetCurrentPosition`, the no-looping policy (re-confirmed this audit), and the one-stream-per-
+  buffer restart-on-replay behavior already noted in README.
+
+Acceptance criteria:
+- File exists, is in English, does not overclaim.
+
+Out of scope:
+- DirectDraw/DirectPlay content belongs in their own limitations docs.
+
+### TASK-24H-0075: Note dead-code DirectSound paths (soundbass.cpp, wave.cpp) in the limitations doc
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §2.2 (new findings: soundbass.cpp and wave.cpp are dead code in both games)
+Depends on: TASK-24H-0074
+
+Problem:
+This audit found that `free-eggbert`'s `soundbass.cpp` and both games' `wave.cpp` are compiled but
+unreachable DirectSound call sites; this is useful context for anyone auditing DirectSound scope in
+the future but isn't recorded anywhere yet.
+
+Required work:
+- Add a short "Dead-code call sites" note to `docs/directsound-limitations.md` citing the finding
+  and its evidence.
+
+Acceptance criteria:
+- Note added; no functional change.
+
+Out of scope:
+- Do not treat dead-code call sites as requiring free-direct feature support — they cannot execute.
+
+## DirectPlay tests and safe fixes
+
+### TASK-24H-0076: Wire tests/directplay_tests.cpp into CMake/CTest
+Status: TODO
+Priority: P0
+Area: DirectPlay
+Type: Implementation
+Evidence: docs/audit-24h-free-direct.md §6/§7; plan.md Phase 15 (unstarted); DirectPlay Plan Reconciliation §7.2
+Depends on: TASK-24H-0002, TASK-24H-0003
+
+Problem:
+This is the single largest mechanical gap in the whole DirectPlay subsystem: 46 tests already
+exist and pass, but nothing runs them automatically.
+
+Required work:
+- (Same underlying work as TASK-24H-0002/0003, DirectPlay-specific tracking entry — satisfied by
+  those tasks; kept as its own ID since the original prompt explicitly calls this out as the first
+  DirectPlay priority.)
+
+Acceptance criteria:
+- `ctest --test-dir build -L directplay` passes 46/46.
+
+Out of scope:
+- Do not modify test logic while wiring — wiring only.
+
+### TASK-24H-0077: Add DirectPlayCreate failure-path tests
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: DirectPlay Plan Reconciliation §7.3 ("verified historically only via uncommitted scratch harnesses")
+Depends on: TASK-24H-0076
+
+Problem:
+`DirectPlayCreate`'s failure paths (null `lplpDP`, non-null `pUnkOuter` → `DPERR_NOAGGREGATION`)
+were previously verified only via uncommitted scratch harnesses per Phase 1/2 notes — a regression
+here would go uncaught today.
+
+Required work:
+- Add `Test_DirectPlayCreate_NullOutParam_ReturnsInvalidParams` and
+  `Test_DirectPlayCreate_NonNullOuter_ReturnsNoAggregation` to `tests/directplay_tests.cpp`.
+
+Acceptance criteria:
+- Both tests pass; total test count increases from 46 to 48 and all pass.
+
+Out of scope:
+- Do not test COM aggregation support itself — `DPERR_NOAGGREGATION` rejection is the only
+  aggregation-related behavior in scope.
+
+### TASK-24H-0078: Add QueryInterface unknown-GUID test
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: DirectPlay Plan Reconciliation §7.3
+Depends on: TASK-24H-0076
+
+Problem:
+`QueryInterface`'s rejection path (an unrecognized GUID) has only ever been exercised with the
+correct `IID_IDirectPlay2A` value across the existing 46 tests.
+
+Required work:
+- Add `Test_QueryInterface_UnknownGuid_ReturnsNoInterfaceAndNullsOutParam`.
+
+Acceptance criteria:
+- Test passes, confirming `E_NOINTERFACE` and `*ppvObject == nullptr`.
+
+Out of scope:
+- Do not test `IID_IDirectPlay` acceptance here — already covered by existing tests.
+
+### TASK-24H-0079: Add QueryInterface null-ppvObject test
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: DirectPlay Plan Reconciliation §7.3
+Depends on: TASK-24H-0076
+
+Problem:
+No existing test passes a null `ppvObject` to `QueryInterface`.
+
+Required work:
+- Add `Test_QueryInterface_NullOutParam_ReturnsInvalidParams`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None.
+
+### TASK-24H-0080: Add Receive() buffer-size-query test
+Status: TODO
+Priority: P0
+Area: DirectPlay
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §6 (explicitly named gap: implemented in TryReceive(), zero committed tests)
+Depends on: TASK-24H-0076
+
+Problem:
+`Receive()`'s buffer-size-query contract (`lpData == nullptr && *lpdwDataSize == 0` should report
+the required size without consuming the message) is implemented in
+`DirectPlayMessageQueue::TryReceive()` but has zero test coverage — a named gap in this audit.
+
+Required work:
+- Add `Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming`.
+
+Acceptance criteria:
+- Test passes, confirming a subsequent real `Receive()` call still retrieves the same message.
+
+Out of scope:
+- Do not change the buffer-size-query contract — test existing behavior only.
+
+### TASK-24H-0081: Add Release()-without-Close() cleanup test
+Status: TODO
+Priority: P0
+Area: DirectPlay
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §6 (explicitly named gap: implemented defensively, zero committed tests)
+Depends on: TASK-24H-0076
+
+Problem:
+`Release()`'s defensive registry-unregister/transport-shutdown path (for a caller that never called
+`Close()`) is implemented but untested — a named gap in this audit.
+
+Required work:
+- Add `Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry`, verifying (for a hosted
+  loopback session) that a subsequent `EnumSessions` from another instance no longer finds the
+  released session.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not change `Release()`'s behavior — test existing behavior only.
+
+### TASK-24H-0082: Add CreatePlayer malformed DPNAME.dwSize test
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: DirectPlay Plan Reconciliation §7.3
+Depends on: TASK-24H-0076
+
+Problem:
+`CreatePlayer` validates `DPNAME.dwSize` when a non-null name is given, but no test exercises the
+rejection path with a deliberately wrong `dwSize`.
+
+Required work:
+- Add `Test_CreatePlayer_MalformedDpNameSize_ReturnsInvalidParams`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None.
+
+### TASK-24H-0083: Fix the stale file-level `@note Status: STUB` comment in include/dplay.h
+Status: TODO
+Priority: P0
+Area: Docs
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §3/§6 (file-level comment says STUB; nearly every method's real implementation is far past stub)
+Depends on: None
+
+Problem:
+`include/dplay.h`'s file-level Doxygen comment (line 4, `@note Status: STUB`) and its `@brief`
+("Narrow DirectPlay subset reimplementation (Stubs).") materially misrepresent current
+implementation depth, violating CLAUDE.md's Documentation Policy ("keep the Status: tag accurate as
+implementation progresses").
+
+Required work:
+- Update the file-level comment to `@note Status: PARTIAL` (matching `ddraw.h`/`dsound.h`'s own
+  convention) and rewrite the `@brief` to reflect that most of `IDirectPlay2A` is implemented over a
+  real loopback backend, with `DirectPlayEnumerateA`/`W` as the one remaining genuine stub.
+
+Acceptance criteria:
+- Comment updated; no behavior change; `docs/audit-24h-free-direct.md` §3's "stale comment" findings
+  for this file are resolved.
+
+Out of scope:
+- Do not claim more than is true — do not say "fully implemented" when `DirectPlayEnumerateA`/`W`
+  and broadcast are still stub/missing.
+
+### TASK-24H-0084: Fix stale per-method `@note Status: STUB` comments on IDirectPlay2A
+Status: TODO
+Priority: P0
+Area: Docs
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §3 (per-method table: EnumSessions/Open/CreatePlayer/Send/Receive/Close/AddRef/Release all say STUB in the header but are real in DirectPlay.cpp)
+Depends on: TASK-24H-0083
+
+Problem:
+Every `IDirectPlay2A` method's Doxygen comment in `include/dplay.h` still says `STUB`, even though
+`src/directplay/DirectPlay.cpp` implements real, validated, tested behavior for all of them except
+`DirectPlayEnumerateA`/`W` (a free function, not a method).
+
+Required work:
+- Update each method's comment: `EnumSessions` → PARTIAL (loopback-only, real registry, cite
+  Decision 18); `Open` → PARTIAL (real for loopback both roles and ENet hosting, ENet joining not
+  wired, cite Decision 11); `CreatePlayer` → IMPLEMENTED (cite Decision 3/17); `Send` → PARTIAL
+  (self-send and host-to-one-remote unicast only, no broadcast/relay, cite the DPID-0 collision
+  finding); `Receive` → IMPLEMENTED; `Close` → IMPLEMENTED; `QueryInterface` → IMPLEMENTED (real
+  GUID comparison, distinct from the "COM query method" wording which should stay but drop "STUB");
+  `AddRef`/`Release` → IMPLEMENTED.
+
+Acceptance criteria:
+- Every tag matches the real behavior documented in `docs/audit-24h-free-direct.md` §6; a reviewer
+  reading only the header now gets an accurate picture without reading the `.cpp`.
+
+Out of scope:
+- Do not mark `Send` fully `IMPLEMENTED` — broadcast genuinely does not work today (see
+  TASK-24H-0092).
+
+### TASK-24H-0085: Fix stale per-method `@note Status: STUB` comments on the minimal IDirectPlay class
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: docs/audit-24h-free-direct.md §3
+Depends on: TASK-24H-0083
+
+Problem:
+Same rationale as TASK-24H-0084, for the minimal `IDirectPlay` base class's three methods.
+
+Required work:
+- Update `QueryInterface`/`AddRef`/`Release` comments on `IDirectPlay` to `IMPLEMENTED`.
+
+Acceptance criteria:
+- Tags accurate.
+
+Out of scope:
+- None.
+
+### TASK-24H-0086: Reconcile plan.md Phase 6 checkbox state against merged Decisions 10/18
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Cleanup
+Evidence: DirectPlay Plan Reconciliation §6 ("plan.md checkbox drift... under-, not over-claiming")
+Depends on: None
+
+Problem:
+Phase 6's checkbox state undercounts real progress — Decisions 10 (loopback multi-instance
+lifecycle) and 18 (real EnumSessions) are merged, tested, and working, but the corresponding
+`plan.md` boxes were never revisited.
+
+Required work:
+- Re-read Phase 6's task list against current code/tests and check any box whose work is
+  demonstrably complete and tested (do not check a box on assumption — verify against the actual
+  test suite first, per CLAUDE.md's "never mark done speculatively" rule).
+
+Acceptance criteria:
+- Every newly-checked box cites the test(s) or code that satisfy it.
+
+Out of scope:
+- Do not check the still-genuinely-blocked join-rejection-addressing box (structurally blocked per
+  Phase 6's own text) — that one stays unchecked.
+
+### TASK-24H-0087: Reconcile plan.md Phase 7 checkbox state against merged Decisions 11/13/16
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Cleanup
+Evidence: DirectPlay Plan Reconciliation §6
+Depends on: None
+
+Problem:
+Same rationale as TASK-24H-0086, for Phase 7's loopback-join-related boxes.
+
+Required work:
+- Check any Phase 7 box whose loopback-side work is demonstrably complete and tested; leave the
+  ENet-side boxes (host-address resolution, join timeout) unchecked since they remain genuinely
+  unresolved per §5(b) of the reconciliation.
+
+Acceptance criteria:
+- Every newly-checked box cites the test(s) or code that satisfy it.
+
+Out of scope:
+- Do not check any ENet-joining-related box — that work does not exist yet.
+
+### TASK-24H-0088: Reconcile plan.md Phase 9's DPID-allocation-strategy checkbox
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Cleanup
+Evidence: DirectPlay Plan Reconciliation §6/§7 ("nextPlayerId sequential allocator... looks functionally equivalent")
+Depends on: None
+
+Problem:
+Phase 9's "implement stable DPID allocation... host-assigned sequential small integers in join
+order" task is unchecked despite `DirectPlaySession::nextPlayerId` already implementing exactly
+this, merged since Decision 3.
+
+Required work:
+- Verify the task's exact wording is satisfied by `nextPlayerId`'s behavior (re-read both), then
+  check the box.
+
+Acceptance criteria:
+- Box checked with a citation to `DirectPlaySession.hpp`'s `nextPlayerId` field and Decision 3.
+
+Out of scope:
+- Do not check any other Phase 9 box in this task — see TASK-24H-0136/0137 for the
+  still-blocked ones.
+
+### TASK-24H-0089: Annotate Phase 7's join-timeout tasks to reflect the chosen asynchronous join model
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: DirectPlay Plan Reconciliation §6 (task text describes an un-chosen blocking model; Decision 16 chose async)
+Depends on: None
+
+Problem:
+Phase 7's task text ("handle a join timeout: fail `Open` if no join-accepted/join-rejected packet
+arrives within a configured timeout") describes a blocking `Open()` contract that Decision 16
+deliberately did not choose (join is asynchronous; the outcome is discovered via subsequent
+`Receive()` polling).
+
+Required work:
+- Add a short annotation next to the relevant Phase 7 task noting the actual chosen model and
+  citing Decision 16, per CLAUDE.md's "strike through with a reason, don't delete" policy — do not
+  delete or silently reword the original task text.
+
+Acceptance criteria:
+- Annotation present; original text preserved (struck through or noted, not removed).
+
+Out of scope:
+- Do not re-litigate the async-vs-blocking design choice — it's already decided (Decision 16).
+
+### TASK-24H-0090: Annotate Phase 9's "reserve invalid DPID value 0" task with its actual resolution
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: DirectPlay Plan Reconciliation §6 (task resolved in the opposite direction from its own title)
+Depends on: None
+
+Problem:
+Phase 9's "reserve an invalid DPID value (0)" task is checked done, but Decision 3 resolved it in
+the *opposite* direction (DPID 0 is assigned to a real player, not reserved as invalid) —
+`plan.md` already self-annotates this contradiction per the reconciliation, but confirm the
+annotation is clear and cites Decision 3 explicitly.
+
+Required work:
+- Verify/tighten the existing annotation so a future reader isn't confused by the mismatch between
+  the task's title and its actual resolution.
+
+Acceptance criteria:
+- Annotation clearly cites Decision 3 and explains the direction of resolution.
+
+Out of scope:
+- Do not change the DPID-0 semantics — documentation clarity only.
+
+### TASK-24H-0091: Add DPID_ALLPLAYERS and DPID_SYSMSG constants to include/dplay.h
+Status: BLOCKED
+Priority: P1
+Area: DirectPlay
+Type: Implementation
+Evidence: docs/audit-24h-free-direct.md §3 (constants absent; needed before broadcast can be implemented correctly); Decision 3/15
+Depends on: TASK-24H-0131 (blocked on DPID-0 broadcast-semantics decision)
+
+Problem:
+Real DirectPlay reserves specific `DPID` values for `DPID_ALLPLAYERS`/`DPID_SYSMSG` broadcast/system
+addressing; FreeDirect's `dplay.h` defines neither, and Decision 3's choice to assign DPID 0 to the
+host's own player makes the natural value for `DPID_ALLPLAYERS` (0 in real DirectPlay) ambiguous
+with a real player ID today.
+
+Required work:
+- Do not add these constants until TASK-24H-0131 resolves what DPID `0`/`DPID_ALLPLAYERS` actually
+  means under FreeDirect's semantics — adding the constant first would silently prejudge that
+  decision.
+
+Acceptance criteria:
+- N/A until unblocked.
+
+Out of scope:
+- Do not implement broadcast delivery using an assumed value for these constants before the design
+  question is resolved.
+
+### TASK-24H-0092: Add a characterization test for the host DPID-0 self-send/broadcast collision
+Status: TODO
+Priority: P0
+Area: DirectPlay
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §1/§6 (new finding this audit: host's Send(0,0,...) hits self-send, never reaches remote clients)
+Depends on: TASK-24H-0076
+
+Problem:
+This audit found that a hosting process calling `Send(m_dpid, 0, ...)` — `free-eggbert`'s only
+real, reachable `Send()` pattern — hits the self-send branch (since the host's own DPID is also 0)
+and never reaches any remote client. This is a real, present-tense behavior gap, but resolving it
+requires a design decision (TASK-24H-0131) this audit is not authorized to make.
+
+Required work:
+- Add `Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf`, a **characterization test** that documents
+  today's exact behavior (host sends to DPID 0, only the host's own queue receives it, no remote
+  client receives anything) without asserting this is correct or changing it.
+
+Acceptance criteria:
+- Test passes today, locking in current behavior so any future change to broadcast semantics is a
+  deliberate, visible diff to this test rather than a silent behavior change.
+
+Out of scope:
+- Do not implement real broadcast delivery in this task. Do not change what `idTo == 0` means.
+
+### TASK-24H-0093: Add tests for DirectPlayEnumerateA/W's current stub behavior
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §6 (Decision 1: decided, not yet implemented; zero test coverage today)
+Depends on: TASK-24H-0076
+
+Problem:
+`DirectPlayEnumerateA`/`W` are genuinely still stubs (return `DP_OK`, invoke the callback zero
+times), but this documented behavior has no test locking it in.
+
+Required work:
+- Add `Test_DirectPlayEnumerateA_InvokesCallbackZeroTimes` and the `W` equivalent.
+
+Acceptance criteria:
+- Both tests pass, and are named/commented to make clear they document current stub behavior
+  pending Decision 1's real implementation, not a permanent design choice.
+
+Out of scope:
+- Do not implement real provider enumeration in this task — that's a separate, larger task
+  (TASK-24H-0100) requiring `CNetwork::CreateProvider`'s bound-check semantics to be matched
+  exactly.
+
+### TASK-24H-0094: Create docs/directplay-limitations.md
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: plan.md Phase 16; docs/directplay-design.md's 19 Decisions
+Depends on: None
+
+Problem:
+`plan.md` Phase 16 calls for a DirectPlay limitations/deviations doc that does not exist yet, even
+though `docs/directplay-design.md` already contains 19 numbered Decisions that are effectively a
+deviation log.
+
+Required work:
+- Create `docs/directplay-limitations.md` summarizing, in deviation-table form, every place
+  FreeDirect's DirectPlay behavior differs from real Microsoft DirectPlay: DPID width/allocation
+  (Decision 3), no wire compatibility, loopback-only `EnumSessions` (Decision 18), asynchronous join
+  (Decision 16), no broadcast/no host-routing, `DirectPlayEnumerateA`/`W` stub status, and the
+  DPID-0 broadcast-collision finding from this audit (flagged as open, not resolved).
+
+Acceptance criteria:
+- File exists, in English, cites `docs/directplay-design.md`'s Decision numbers rather than
+  duplicating their full rationale.
+
+Out of scope:
+- Do not resolve any open design question while writing this doc — document them as open.
+
+### TASK-24H-0095: Create docs/directplay-protocol.md
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: plan.md Phase 5 (deferred "Add protocol documentation" task); DirectPlayWireProtocol.hpp
+Depends on: None
+
+Problem:
+The wire header layout (`DirectPlayWirePacketHeader`: magic/version/type/2 GUIDs/idFrom/idTo/
+payloadLength) is genuinely used in production but has never been written up in its own doc, as
+Phase 5 originally planned.
+
+Required work:
+- Create `docs/directplay-protocol.md` documenting the header layout, each `DirectPlayWirePacketType`
+  value (including the currently-unused `Discovery`/`DiscoveryResponse` types, noted as reserved for
+  a future ENet discovery mechanism), and the `Join`/`JoinAccept`/`Data` packet flows actually used
+  today.
+
+Acceptance criteria:
+- File exists, in English, matches the real struct layout in `DirectPlayWireProtocol.hpp` exactly.
+
+Out of scope:
+- Do not document a Microsoft-wire-compatible format — this is FreeDirect's own internal protocol.
+
+### TASK-24H-0096: Create docs/networking-backends.md
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: plan.md Phase 12 (SDL3_net optional backend, doc-only deliverable)
+Depends on: None
+
+Problem:
+The ENet-first/SDL3_net-optional backend decision (CLAUDE.md's "Networking Backend Decision"
+section) has never been written up as its own doc, as Phase 12 calls for.
+
+Required work:
+- Create `docs/networking-backends.md` summarizing the `IDirectPlayTransport` abstraction, why ENet
+  was chosen first, and the two SDL3_net paths (UDP datagrams vs. TCP streams) and their tradeoffs,
+  largely restating CLAUDE.md's existing policy in doc form rather than inventing new content.
+
+Acceptance criteria:
+- File exists, in English, does not commit to implementing SDL3_net.
+
+Out of scope:
+- Do not implement `SdlNetDirectPlayTransport` in this task — documentation only, and only once
+  ENet is stable per policy (it already exists and works for hosting; joining/discovery are still
+  open, so SDL3_net implementation remains correctly not-started).
+
+### TASK-24H-0097: Add an ENet reliable-delivery smoke test gated behind FREE_DIRECT_ENABLE_ENET
+Status: TODO
+Priority: P1
+Area: ENet
+Type: Test
+Evidence: docs/audit-24h-free-direct.md §6/§7 (ENet transport-level Send/Receive verified only via uncommitted ad-hoc smoke tests to date); Original prompt's explicit allowance for this
+Depends on: None
+
+Problem:
+`EnetDirectPlayTransport`'s real socket-level `Send`/`Receive`/`Service` behavior (including
+Decision 19's receive-side buffering) has only ever been verified via uncommitted, ad-hoc
+two-socket smoke tests per `NEXT.md`'s own prior session notes — never a committed, repeatable
+test.
+
+Required work:
+- Add a transport-level (not `DirectPlay2A`-level) test instantiating two `EnetDirectPlayTransport`
+  instances over `127.0.0.1` with explicitly-known, hardcoded ports (avoiding the unresolved
+  "how does a joining call discover a host address" question entirely, since this test hardcodes
+  both addresses rather than needing a real discovery mechanism), sending a guaranteed-reliable
+  message host→client and asserting receipt.
+
+Acceptance criteria:
+- Test passes when built with `-DFREE_DIRECT_ENABLE_ENET=ON`; is not compiled/run at all when that
+  option is off.
+
+Out of scope:
+- Do not test through `IDirectPlay2A::Open`/`Send`/`Receive` for the ENet joining role — that path
+  doesn't exist yet (see TASK-24H-0132, blocked). Test the transport class directly.
+
+### TASK-24H-0098: Gate the ENet test out of the default CTest run
+Status: TODO
+Priority: P0
+Area: Build
+Type: Implementation
+Evidence: CLAUDE.md Testing Policy ("real-socket ENet integration tests are opt-in... never run by default")
+Depends on: TASK-24H-0097
+
+Problem:
+An ENet test that touches real sockets must never run in a default CI/sandboxed invocation, per
+explicit project policy.
+
+Required work:
+- Ensure the test target from TASK-24H-0097 is only added to the build (and hence only registered
+  with CTest) when `FREE_DIRECT_ENABLE_ENET=ON`; verify a default `-DFREE_DIRECT_BUILD_TESTS=ON`
+  build (ENet off) does not attempt to compile or run it.
+
+Acceptance criteria:
+- `ctest --test-dir build` (ENet off) shows no ENet test in its list at all (not "skipped" — simply
+  absent, since it's not even compiled).
+
+Out of scope:
+- Do not make the ENet test conditionally-skip at runtime instead of at compile/registration time —
+  match the existing `FREE_DIRECT_ENABLE_ENET`-gated compilation pattern used for
+  `EnetDirectPlayTransport.cpp` itself.
+
+### TASK-24H-0099: Add an EnumSessions callback-stop test, or document why it's not constructible
+Status: TODO
+Priority: P2
+Area: DirectPlay
+Type: Test
+Evidence: plan.md Phase 8 (task never completed: "only one loopback-hosted session can exist per process at a time")
+Depends on: TASK-24H-0076
+
+Problem:
+Phase 8's callback-stop test (verifying a callback returning `FALSE` after the first result
+prevents a second invocation when two sessions exist) was never completed because the current
+single-session-per-process design can't construct two simultaneous sessions to enumerate.
+
+Required work:
+- Attempt to construct the scenario using two separate process-simulated instances (if the loopback
+  registry supports more than one hosted session across different `DirectPlay2AImpl` instances in
+  the same test binary); if genuinely not constructible, add a comment in
+  `tests/directplay_tests.cpp` explaining why, citing this task ID, rather than leaving it silently
+  absent.
+
+Acceptance criteria:
+- Either a passing test exists, or a clear comment explains the constructibility limitation.
+
+Out of scope:
+- Do not redesign the loopback registry to support multiple simultaneous sessions per process just
+  to make this test possible — that's a larger architectural change outside this task's scope.
+
+### TASK-24H-0100: Implement real DirectPlayEnumerateA/W provider enumeration
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Implementation
+Evidence: docs/directplay-design.md Decision 1 (decided, not yet implemented); docs/audit-24h-free-direct.md §6
+Depends on: TASK-24H-0093
+
+Problem:
+`free-eggbert`'s `CNetwork::EnumProviders`/`CreateProvider` requires at least one enumerated
+provider before it will ever call `DirectPlayCreate` — meaning the game's provider-selection UI
+path can't be exercised end-to-end while this remains a stub, even though Decision 1 already
+decided FreeDirect should report exactly one fake service provider.
+
+Required work:
+- Implement `DirectPlayEnumerateA`/`W` to invoke the callback exactly once with a FreeDirect-internal
+  placeholder GUID/name (not a real Microsoft service-provider GUID), matching Decision 1's already-
+  decided shape.
+
+Acceptance criteria:
+- New test (extending TASK-24H-0093) confirms the callback fires exactly once with a valid,
+  distinguishable provider GUID; existing 46+ tests still pass.
+
+Out of scope:
+- Do not enumerate more than one provider. Do not implement real Windows service-provider discovery.
+
+### TASK-24H-0101: Add a test asserting Close() is idempotent
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: DirectPlay Plan Reconciliation §7 (gap not previously tested)
+Depends on: TASK-24H-0076
+
+Problem:
+No test verifies calling `Close()` twice in a row is safe (doesn't crash or double-free).
+
+Required work:
+- Add `Test_Close_CalledTwice_SecondCallIsSafe`.
+
+Acceptance criteria:
+- Test passes, documenting whichever well-defined return value (`DP_OK` or `DPERR_NOCONNECTION`)
+  the second call actually produces.
+
+Out of scope:
+- Do not change `Close()`'s behavior unless the test reveals a crash or corruption.
+
+### TASK-24H-0102: Add a test asserting Send() to an invalid DPID returns DPERR_INVALIDPLAYER
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: plan.md Phase 11 ("Confirm Send returns DPERR_INVALIDPLAYER for an invalid sender/recipient DPID")
+Depends on: TASK-24H-0076
+
+Problem:
+Phase 11's confirmation task for this behavior has never been promoted to a committed test.
+
+Required work:
+- Add `Test_Send_InvalidRecipientDpid_ReturnsInvalidPlayer` and
+  `Test_Send_InvalidSenderDpid_ReturnsInvalidPlayer`.
+
+Acceptance criteria:
+- Both tests pass.
+
+Out of scope:
+- Do not test the DPID-0 broadcast ambiguity here — that's TASK-24H-0092's characterization test.
+
+### TASK-24H-0103: Add a test asserting oversized-payload rejection is consistent across self-send and unicast
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: plan.md Phase 11 ("Confirm Send returns DPERR_SENDTOOBIG for oversized payloads")
+Depends on: TASK-24H-0076
+
+Problem:
+An existing test covers oversized-payload rejection for the remote-unicast path; no test confirms
+the same limit applies to the self-send path.
+
+Required work:
+- Add `Test_SelfSend_OversizedPayload_ReturnsSendTooBig`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not change the payload size limit (4096 bytes) without evidence a real call site needs more —
+  `free-eggbert`'s fixed 500-byte receive buffer means this limit has ample headroom already.
+
+### TASK-24H-0104: Add a test asserting Receive() on an empty queue returns DPERR_NOMESSAGES for the host role too
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: plan.md Phase 11 ("Confirm Receive returns DPERR_NOMESSAGES when the queue is empty")
+Depends on: TASK-24H-0076
+
+Problem:
+Existing coverage of this behavior may be joining-role-only; confirm the host role behaves
+identically.
+
+Required work:
+- Add `Test_HostReceive_EmptyQueue_ReturnsNoMessages` if not already covered by an existing test
+  (check `tests/directplay_tests.cpp` first to avoid duplicating coverage).
+
+Acceptance criteria:
+- Test passes (or existing coverage is confirmed sufficient and this task is closed as
+  no-change-needed with a citation to the existing test).
+
+Out of scope:
+- None.
+
+### TASK-24H-0105: Add a test asserting Send/Receive return DPERR_NOCONNECTION after Close()
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: plan.md Phase 11 ("Return DPERR_NOCONNECTION from Send/Receive when called on a session that is not open")
+Depends on: TASK-24H-0076
+
+Problem:
+Existing tests cover `Close()` clearing connection state, but confirm dedicated coverage exists for
+both `Send()` and `Receive()` specifically returning `DPERR_NOCONNECTION` afterward (check first —
+`Test_LoopbackClose_SendAndReceiveReportNoConnection` may already satisfy this).
+
+Required work:
+- Confirm existing coverage or add the missing half if only one of `Send`/`Receive` is currently
+  tested post-`Close()`.
+
+Acceptance criteria:
+- Both `Send()` and `Receive()` after `Close()` are demonstrably tested.
+
+Out of scope:
+- None.
+
+### TASK-24H-0106: Sweep IDirectPlay2A methods for missing null-pointer checks
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Audit
+Evidence: plan.md Phase 11 ("Sweep every method... for missing null-pointer checks")
+Depends on: None
+
+Problem:
+Phase 11's null-pointer sweep has never been performed against current code.
+
+Required work:
+- Read every `IDirectPlay2A` method in `DirectPlay.cpp` and check each pointer parameter
+  (`lpEnumSessionsDesc`, `lpSessionDesc`, `lpPlayerName`, `lpData`, `lpidFrom`, `lpidTo`,
+  `lpdwDataSize`) for a null-check consistent with its documented contract (e.g. `lpData` with
+  non-zero `dwDataSize` should be rejected if null; `lpEnumSessionsDesc` may legitimately be null
+  per real DirectPlay's "enumerate all" contract — verify against `free-eggbert`'s actual usage).
+
+Acceptance criteria:
+- A finding recorded (which methods have gaps, which don't) in `docs/directplay-limitations.md`
+  or a follow-up fix task filed per gap found.
+
+Out of scope:
+- Do not add null checks for parameters no real call site or test exercises with null, without
+  first confirming real DirectPlay's contract actually requires rejecting null there.
+
+### TASK-24H-0107: Add tests for any null-pointer gap found in TASK-24H-0106
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Test
+Evidence: TASK-24H-0106
+Depends on: TASK-24H-0106
+
+Problem:
+Any gap found by the null-pointer sweep needs both a fix and a regression test.
+
+Required work:
+- For each gap found, add a `DPERR_INVALIDPARAMS`-returning check plus a test proving it.
+
+Acceptance criteria:
+- Each fix has a passing test; total test count increases accordingly.
+
+Out of scope:
+- Do not fix gaps unrelated to null-pointer handling while doing this sweep — file separate tasks.
+
+### TASK-24H-0108: Add EnetDirectPlayTransport-level Send/Receive unit test with hardcoded ports
+Status: TODO
+Priority: P1
+Area: ENet
+Type: Test
+Evidence: Original prompt ("transport-level reliable delivery smoke test only if it does not require unresolved host-address design")
+Depends on: None
+
+Problem:
+Beyond the single reliable-delivery smoke test in TASK-24H-0097, transport-level `Send`/`Receive`
+correctness (e.g. unreliable-vs-reliable flag mapping, multiple messages, disconnect handling)
+deserves more than one test, since this is the class doing the real socket work.
+
+Required work:
+- Add 2-3 additional `EnetDirectPlayTransport`-level tests: unreliable send doesn't crash if
+  dropped, multiple queued messages arrive in order, and `Shutdown()` cleanly closes both ends —
+  all using hardcoded `127.0.0.1` ports, no discovery mechanism required.
+
+Acceptance criteria:
+- Tests pass under `-DFREE_DIRECT_ENABLE_ENET=ON`; absent otherwise (same gating as TASK-24H-0098).
+
+Out of scope:
+- Do not test through the `IDirectPlay2A` API surface — transport-level only, same reasoning as
+  TASK-24H-0097.
+
+### TASK-24H-0109: Add a regression test that DirectPlaySession's transport is null after Shutdown/Close
+Status: TODO
+Priority: P2
+Area: DirectPlay
+Type: Test
+Evidence: DirectPlay Plan Reconciliation (defensive cleanup paths in Close()/Release() lightly tested)
+Depends on: TASK-24H-0076
+
+Problem:
+No test directly verifies the internal invariant that a closed/released session's transport
+pointer is genuinely torn down (as opposed to merely behaving as if it were).
+
+Required work:
+- If a test-only accessor already exists (or can be added narrowly, `#ifdef`-gated to test builds
+  only, not part of the public API) to observe this, add
+  `Test_Close_TransportIsShutDown`; otherwise, document why this can't be observed without new
+  public API surface and skip.
+
+Acceptance criteria:
+- Either a passing test exists, or a documented reason it's not currently observable.
+
+Out of scope:
+- Do not add new public API surface to make this internal state observable — internal/whitebox
+  testing only, and only if it doesn't require touching `include/dplay.h`.
+
+### TASK-24H-0110: Re-verify the "46 tests" count is accurate after all DirectPlay test additions in this backlog
+Status: TODO
+Priority: P1
+Area: Tests
+Type: Verification
+Evidence: This backlog adds ~15 new DirectPlay tests across TASK-24H-0077 through 0109
+Depends on: TASK-24H-0077, TASK-24H-0078, TASK-24H-0079, TASK-24H-0080, TASK-24H-0081, TASK-24H-0082, TASK-24H-0092, TASK-24H-0093, TASK-24H-0101, TASK-24H-0102, TASK-24H-0103, TASK-24H-0104, TASK-24H-0105
+
+Problem:
+`NEXT.md` and `README.md` should always state an accurate current test count, not a stale "46."
+
+Required work:
+- After the tasks above land, recount `Test_*` functions in `tests/directplay_tests.cpp` and update
+  `NEXT.md`.
+
+Acceptance criteria:
+- `NEXT.md`'s stated count matches `grep -c "^void Test_" tests/directplay_tests.cpp` (or the
+  equivalent pattern the file actually uses) exactly.
+
+Out of scope:
+- Do not round or approximate the count.
+
+## Diagnostics/logging
+
+### TASK-24H-0111: Audit FREE_DIRECT_DEBUG_DDRAW coverage for gaps
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Audit
+Evidence: README.md (documents the flag exists); docs/audit-24h-free-direct.md §4
+Depends on: None
+
+Problem:
+It's not yet confirmed that every DirectDraw diagnostic log statement is actually gated by
+`FREE_DIRECT_DEBUG_DDRAW` rather than some being unconditional.
+
+Required work:
+- Grep `src/directdraw/DirectDraw.cpp` for every log/print statement and confirm each is inside an
+  `FREE_DIRECT_DEBUG_DDRAW`-gated (or a more specific `_PRESENTATION`/`_COLORKEY`/`_PERF`/
+  `_PRIMARY_CLEAR`-gated) branch.
+
+Acceptance criteria:
+- A finding recorded: either "all gated" or a list of ungated statements with a follow-up fix task
+  filed per finding.
+
+Out of scope:
+- Do not remove genuinely useful gated diagnostics — audit for missing gates only.
+
+### TASK-24H-0112: Audit FREE_DIRECT_DEBUG_PRESENTATION coverage for gaps
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Audit
+Evidence: README.md
+Depends on: None
+
+Problem:
+Same rationale as TASK-24H-0111, for the presentation-path-specific flag.
+
+Required work:
+- Grep the presentation/present-path code (`PresentPrimary` and related functions) for ungated
+  logging.
+
+Acceptance criteria:
+- Finding recorded.
+
+Out of scope:
+- None beyond the audit itself.
+
+### TASK-24H-0113: Audit FREE_DIRECT_DEBUG_COLORKEY coverage for gaps
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Audit
+Evidence: README.md
+Depends on: None
+
+Problem:
+Same rationale, for color-key diagnostics.
+
+Required work:
+- Grep color-key-handling code paths for ungated logging.
+
+Acceptance criteria:
+- Finding recorded.
+
+Out of scope:
+- None beyond the audit itself.
+
+### TASK-24H-0114: Audit FREE_DIRECT_DEBUG_DSOUND coverage for gaps
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Audit
+Evidence: README.md
+Depends on: None
+
+Problem:
+Same rationale, for `src/directsound/DirectSound.cpp`.
+
+Required work:
+- Grep for ungated logging in DirectSound code.
+
+Acceptance criteria:
+- Finding recorded.
+
+Out of scope:
+- None beyond the audit itself.
+
+### TASK-24H-0115: Add FREE_DIRECT_DEBUG_DPLAY gate for any ungated DirectPlay diagnostic logs
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Implementation
+Evidence: CLAUDE.md's stated Diagnostics.hpp pattern; no DirectPlay-specific debug flag confirmed to exist yet
+Depends on: None
+
+Problem:
+Unlike DirectDraw/DirectSound, it's not confirmed whether `src/directplay/*.cpp` has any debug
+logging, gated or not.
+
+Required work:
+- Grep `src/directplay/` for log/print statements; if any unconditional ones exist, gate them
+  behind a new `FREE_DIRECT_DEBUG_DPLAY` env-var check following the existing pattern in
+  `DirectDraw.cpp`/`DirectSound.cpp`.
+
+Acceptance criteria:
+- Either no ungated logs are found (documented as such), or all found ones are now gated.
+
+Out of scope:
+- Do not add verbose new logging that didn't exist before — gate what's already there.
+
+### TASK-24H-0116: Add FREE_DIRECT_DEBUG_ENET gate for any ungated ENet diagnostic logs
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Implementation
+Evidence: Same rationale as TASK-24H-0115, for EnetDirectPlayTransport.cpp
+Depends on: None
+
+Problem:
+Same rationale as TASK-24H-0115, for the ENet transport.
+
+Required work:
+- Grep `src/directplay/EnetDirectPlayTransport.cpp` for log/print statements; gate any unconditional
+  ones behind `FREE_DIRECT_DEBUG_ENET`.
+
+Acceptance criteria:
+- Either no ungated logs found, or all gated.
+
+Out of scope:
+- Do not add new logging.
+
+### TASK-24H-0117: Fix any ungated per-blit log found in Blt/BltFast hot paths
+Status: TODO
+Priority: P0
+Area: Diagnostics
+Type: Bugfix
+Evidence: docs/audit-24h-free-direct.md §4 ("no unconditional hot-path logs" requirement); depends on TASK-24H-0111 finding
+Depends on: TASK-24H-0111
+
+Problem:
+If TASK-24H-0111 finds an ungated log in `Blt`/`BltFast`, it is a real per-frame performance bug
+given both methods' call frequency (§2.1).
+
+Required work:
+- Gate any such statement behind the appropriate `FREE_DIRECT_DEBUG_*` flag.
+
+Acceptance criteria:
+- TASK-24H-0048's log-capture test passes after the fix.
+
+Out of scope:
+- Only act if TASK-24H-0111 actually found a gap — do not speculatively change working code.
+
+### TASK-24H-0118: Fix any ungated per-call log found in DirectSound Play/Lock/Unlock
+Status: TODO
+Priority: P1
+Area: Diagnostics
+Type: Bugfix
+Evidence: depends on TASK-24H-0114 finding
+Depends on: TASK-24H-0114
+
+Problem:
+Same rationale as TASK-24H-0117, for DirectSound's per-call paths.
+
+Required work:
+- Gate any ungated statement found by TASK-24H-0114.
+
+Acceptance criteria:
+- TASK-24H-0073's log-capture test passes after the fix.
+
+Out of scope:
+- Only act if TASK-24H-0114 found a gap.
+
+### TASK-24H-0119: Add CMake compile-definition overrides for FREE_DIRECT_DEBUG_* flags
+Status: TODO
+Priority: P2
+Area: Diagnostics
+Type: Implementation
+Evidence: docs/audit-24h-free-direct.md §7 (flags are env-var-only today, no CMake option path)
+Depends on: None
+
+Problem:
+A developer wanting to force-enable a debug flag at compile time (e.g. for a CI diagnostic build)
+currently has no CMake-level way to do so short of manually passing `-D` flags outside the normal
+option mechanism.
+
+Required work:
+- Add optional CMake cache variables (e.g. `FREE_DIRECT_FORCE_DEBUG_DDRAW`) that, when set, add the
+  corresponding `target_compile_definitions`. Keep the existing env-var runtime check as the
+  primary/default mechanism — this is additive, not a replacement.
+
+Acceptance criteria:
+- Default builds are unaffected; setting the new CMake variable measurably changes compiled
+  behavior (e.g. logs appear even with the env var unset).
+
+Out of scope:
+- Do not remove the env-var-based runtime toggle — it remains the primary mechanism per existing
+  design.
+
+### TASK-24H-0120: Consolidate FREE_DIRECT_DEBUG_* documentation in one place
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: README.md already lists several flags; verify completeness against actual source
+Depends on: None
+
+Problem:
+README.md lists several `FREE_DIRECT_DEBUG_*`/`FREE_DIRECT_TARGET_FPS`/`FREE_DIRECT_ENABLE_VSYNC`
+flags, but it's not confirmed this list is exhaustive against what's actually in source.
+
+Required work:
+- Grep all of `src/` for `FREE_DIRECT_DEBUG_`/`FREE_DIRECT_` env-var reads and cross-check against
+  README's documented list; add any missing entries.
+
+Acceptance criteria:
+- README's flag list matches source exactly.
+
+Out of scope:
+- Do not invent new flags — documentation-completeness only.
+
+## Documentation
+
+### TASK-24H-0121: Update README.md Project Status to reflect current DirectPlay depth
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: README.md currently says "DirectPlay: Currently stubbed (dummy implementations)" — docs/audit-24h-free-direct.md §6 shows this is materially stale
+Depends on: None
+
+Problem:
+README.md's top-level feature summary still describes DirectPlay as pure dummy stubs, which this
+audit found to be materially inaccurate (only `DirectPlayEnumerateA`/`W` remain genuine stubs).
+
+Required work:
+- Update the "DirectPlay" bullet in README's Overview/Features sections to describe the real
+  loopback-backed implementation, its ENet transport's current join/discovery limitations, and
+  continue to clearly state (per Documentation Policy) that this is FreeDirect-to-FreeDirect only,
+  never Microsoft-wire-compatible.
+
+Acceptance criteria:
+- Updated text is accurate as of this audit and does not overclaim (e.g. does not say "full
+  multiplayer support" when broadcast doesn't work yet).
+
+Out of scope:
+- Do not remove the existing honest caveats about DirectDraw/DirectSound limitations while editing
+  this section.
+
+### TASK-24H-0122: Add a compatibility status table to README.md
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: plan.md Phase 16 ("a compatibility status table in README.md")
+Depends on: TASK-24H-0121
+
+Problem:
+There is no single at-a-glance table summarizing per-method DirectDraw/DirectSound/DirectPlay
+status; a reader has to cross-reference three headers and several docs.
+
+Required work:
+- Add a compact status table (method/flag → STUB/PARTIAL/IMPLEMENTED) to README, sourced from the
+  now-corrected tags in `include/*.h` (post TASK-24H-0083/0084/0085) and
+  `docs/audit-24h-free-direct.md`.
+
+Acceptance criteria:
+- Table matches header Doxygen tags exactly at time of writing.
+
+Out of scope:
+- Do not let this table drift from the headers going forward — that's a documentation-maintenance
+  norm, not a one-time task, but only the initial creation is in scope here.
+
+### TASK-24H-0123: Update NEXT.md with this session's audit, plan, and implementation log
+Status: TODO
+Priority: P0
+Area: Docs
+Type: Documentation
+Evidence: CLAUDE.md's NEXT.md Policy ("updated after each completed implementation batch")
+Depends on: None (ongoing throughout Phase 3 implementation)
+
+Problem:
+`NEXT.md` must reflect this session's real work, not the prior session's snapshot, once
+implementation begins.
+
+Required work:
+- After each implementation batch in this session, append a dated entry to `NEXT.md`: what was
+  audited, what was added to `plan.md`, what was implemented, test/build results actually observed.
+
+Acceptance criteria:
+- `NEXT.md` never claims a task is done that wasn't actually built/tested this session (per
+  CLAUDE.md's "never write fake or aspirational progress" rule).
+
+Out of scope:
+- Do not delete prior session's NEXT.md content — append/update per the existing living-document
+  convention.
+
+### TASK-24H-0124: Update docs build/test command documentation once CTest wiring lands
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: TASK-24H-0011 (duplicate consolidation)
+Depends on: TASK-24H-0003, TASK-24H-0011
+
+Problem:
+(Tracking entry — see TASK-24H-0011 for the actual work; kept as a separate ID since the original
+prompt explicitly names this as a documentation backlog theme.)
+
+Required work:
+- Confirmed satisfied by TASK-24H-0011 once TASK-24H-0003 lands.
+
+Acceptance criteria:
+- Same as TASK-24H-0011.
+
+Out of scope:
+- Same as TASK-24H-0011.
+
+### TASK-24H-0125: Review docs for any accidental "full DirectX 3 compatibility" claim
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Verification
+Evidence: CLAUDE.md Documentation Policy
+Depends on: None
+
+Problem:
+CLAUDE.md requires never claiming full DirectX 3 compatibility anywhere; this has not been
+explicitly re-verified against current doc content in this session.
+
+Required work:
+- Grep `README.md`, `TODO.md`, `docs/*.md`, `NEXT.md` for phrases implying full compatibility
+  ("full DirectX", "complete DirectX", "fully compatible") and fix any found.
+
+Acceptance criteria:
+- Zero such claims found, or each found instance is corrected.
+
+Out of scope:
+- Do not weaken accurate, narrower claims (e.g. "narrow subset") while doing this sweep.
+
+### TASK-24H-0126: Review docs for any accidental Microsoft DirectPlay wire-compatibility claim
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Verification
+Evidence: CLAUDE.md Documentation Policy
+Depends on: None
+
+Problem:
+Same rationale as TASK-24H-0125, specifically for DirectPlay wire/packet compatibility claims.
+
+Required work:
+- Grep the same doc set for phrases implying wire/packet compatibility with real Microsoft
+  DirectPlay and fix any found.
+
+Acceptance criteria:
+- Zero such claims found, or each found instance is corrected.
+
+Out of scope:
+- None.
+
+### TASK-24H-0127: Verify README states FreeDirect multiplayer only works between two FreeDirect-linked programs
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Verification
+Evidence: CLAUDE.md Documentation Policy ("Always state that FreeDirect multiplayer only works between programs both built against this FreeDirect DirectPlay implementation")
+Depends on: TASK-24H-0121
+
+Problem:
+This explicit required statement should be re-verified present and accurate after
+TASK-24H-0121's README update.
+
+Required work:
+- Confirm the statement is present, clear, and not contradicted elsewhere in README.
+
+Acceptance criteria:
+- Statement present and accurate.
+
+Out of scope:
+- None.
+
+### TASK-24H-0128: Cross-link docs/audit-24h-free-direct.md from README's status section
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: New doc created this session
+Depends on: TASK-24H-0121
+
+Problem:
+The new audit doc isn't discoverable from README today.
+
+Required work:
+- Add a one-line link/reference to `docs/audit-24h-free-direct.md` in README's Project Status
+  section.
+
+Acceptance criteria:
+- Link present and correct.
+
+Out of scope:
+- None.
+
+### TASK-24H-0129: Add a "known blocked design questions" section to NEXT.md
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: DirectPlay Plan Reconciliation §5 (five explicitly unresolved questions)
+Depends on: None
+
+Problem:
+The five (now seven, per CLAUDE.md's own enumeration) blocked DirectPlay design questions are
+scattered across `docs/directplay-design.md`, `plan.md`, and this session's audit; `NEXT.md` should
+summarize them in one place for the next person picking up this project.
+
+Required work:
+- Add a short section to `NEXT.md` listing each blocked question, one line each, with a pointer to
+  where it's discussed in full (Decision number or `plan.md` phase).
+
+Acceptance criteria:
+- All seven questions from CLAUDE.md's "Blocked DirectPlay design questions" list are present.
+
+Out of scope:
+- Do not answer any of the questions in this task.
+
+### TASK-24H-0130: Mark plan.md Phase 16 tasks already satisfied ahead of schedule
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Cleanup
+Evidence: DirectPlay Plan Reconciliation §6 ("docs/directplay-design.md and docs/directplay-callsite-audit.md already exist")
+Depends on: None
+
+Problem:
+Phase 16 shows 0 done, but two of its deliverables (`docs/directplay-design.md`,
+`docs/directplay-callsite-audit.md`) already exist, created early in Phases 0/1.
+
+Required work:
+- Check the corresponding Phase 16 boxes, citing that they were satisfied ahead of schedule.
+
+Acceptance criteria:
+- Boxes checked with citation.
+
+Out of scope:
+- Do not check boxes for docs created in THIS session (directdraw-limitations.md,
+  directsound-limitations.md, directplay-limitations.md, directplay-protocol.md,
+  networking-backends.md) until they actually exist via their own tasks above.
+
+## Blocked DirectPlay design questions
+
+These map directly to CLAUDE.md's seven named blocked questions. None are resolved here. Each is
+recorded so implementation can skip it and move to the next safe task, per this backlog's stated
+policy.
+
+### TASK-24H-0131: DECISION NEEDED — Is DPID 0 broadcast, host player, or invalid?
+Status: BLOCKED
+Priority: P0
+Area: DirectPlay
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §1/§6 (concrete collision found: host's real broadcast call currently self-sends instead); docs/directplay-design.md Decisions 3 and 15
+Depends on: None
+
+Problem:
+Decision 3 assigned DPID 0 to the host's own first local player. `free-eggbert`'s only reachable
+`Send()` pattern is `Send(m_dpid, 0, ...)`, a broadcast. Today, when the host calls this, it
+collides with the self-send branch and the message never reaches any remote client. This is the
+single highest-priority unresolved question in the whole project per this audit.
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user: should DPID 0 be reinterpreted as
+  `DPID_ALLPLAYERS` (breaking the current "host's player is DPID 0" simplicity), should the host's
+  own player be reassigned a non-zero DPID so 0 is free to mean broadcast, or should
+  `free-eggbert`'s call be special-cased at the FreeDirect layer some other way?
+
+Acceptance criteria:
+- A decision is recorded as a new Decision entry in `docs/directplay-design.md` once made by the
+  user; only then should broadcast implementation (and TASK-24H-0091's constants) proceed.
+
+Out of scope:
+- Do not implement any broadcast delivery logic before this is decided.
+
+### TASK-24H-0132: DECISION NEEDED — How does Open(...JOIN...) discover a host address for ENet?
+Status: BLOCKED
+Priority: P1
+Area: DirectPlay
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §6; DPSESSIONDESC2 has no address-like field (include/dplay.h:128-151)
+Depends on: None
+
+Problem:
+Loopback solved this with a fixed in-process port constant; ENet has no equivalent because it
+requires a real IP/hostname the joining process doesn't have any current way to learn.
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user: should FreeDirect extend `DPSESSIONDESC2`
+  usage with an application-supplied address (e.g. via `dwUser1-4` or a documented convention), add
+  a new (ask-first) API for specifying a target address, or take some other approach?
+
+Acceptance criteria:
+- A decision recorded in `docs/directplay-design.md`; only then should ENet-joining implementation
+  proceed.
+
+Out of scope:
+- Do not implement ENet joining before this is decided. Do not add LAN broadcast discovery as an
+  implicit answer to this question (see TASK-24H-0133 — that's a separate question).
+
+### TASK-24H-0133: DECISION NEEDED — Should FreeDirect implement LAN broadcast discovery?
+Status: BLOCKED
+Priority: P2
+Area: DirectPlay
+Type: Verification
+Evidence: plan.md Phase 8 ("ask the user before starting this task, per the two-game scope rule")
+Depends on: None
+
+Problem:
+`plan.md` already gates this behind an explicit ask; it has not been asked yet.
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user whether a concrete need exists (e.g. driven by
+  a specific `free-eggbert` UX goal) before starting this task at all.
+
+Acceptance criteria:
+- A yes/no decision recorded; if yes, a new Phase 8 task is added with real acceptance criteria.
+
+Out of scope:
+- Do not implement any UDP broadcast/multicast code before this is decided.
+
+### TASK-24H-0134: DECISION NEEDED — Should the host route messages between non-host peers?
+Status: BLOCKED
+Priority: P1
+Area: DirectPlay
+Type: Verification
+Evidence: docs/audit-24h-free-direct.md §6; plan.md Phase 10 (star-topology relay, not started)
+Depends on: None
+
+Problem:
+Today, a joining peer can only reach the host — not other joining peers. Whether this needs to
+change depends on whether `free-eggbert`'s actual multiplayer design requires peer-to-peer
+messaging or only ever needs host-mediated communication.
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user whether host-side routing/relay is needed, given
+  that the one reachable `Send()` call pattern found in this audit is a broadcast, not a
+  peer-targeted send — which may mean this question is lower-urgency than it first appears, but
+  should still be confirmed rather than assumed.
+
+Acceptance criteria:
+- A decision recorded; if yes, a new Phase 10 task is added.
+
+Out of scope:
+- Do not implement relay/forwarding logic before this is decided.
+
+### TASK-24H-0135: DECISION NEEDED — Should player names be stored and exposed?
+Status: BLOCKED
+Priority: P2
+Area: DirectPlay
+Type: Verification
+Evidence: docs/directplay-design.md Decision 17; docs/audit-24h-free-direct.md §6 (real need confirmed — free-eggbert always supplies a short name — but storage deferred pending observability design)
+Depends on: None
+
+Problem:
+`free-eggbert` always supplies a real short player name to `CreatePlayer`, so there is a genuine
+need, but storing it today would be permanently unobservable dead state without new public API
+surface (e.g. a `GetPlayerName`-style method), which itself requires an ask-first decision per
+CLAUDE.md's Public Header Policy.
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user whether adding a new observability method to
+  `IDirectPlay2A` is acceptable (it would be new public surface beyond the two games' currently-
+  observed call sites), or whether name storage should wait until a concrete consumer need is
+  identified.
+
+Acceptance criteria:
+- A decision recorded in `docs/directplay-design.md`.
+
+Out of scope:
+- Do not add a new public method to `include/dplay.h` before this is decided.
+
+### TASK-24H-0136: DECISION NEEDED — What defines a "duplicate" player for CreatePlayer validation?
+Status: BLOCKED
+Priority: P2
+Area: DirectPlay
+Type: Verification
+Evidence: plan.md Phase 9 ("Needs a concrete definition of 'duplicate' from the user before any code could target it")
+Depends on: None
+
+Problem:
+Phase 9 investigated this and found no concrete definition to implement against (same name? same
+connection? something else?).
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user for a concrete definition before writing any
+  validation code.
+
+Acceptance criteria:
+- A decision recorded.
+
+Out of scope:
+- Do not guess at a definition and implement speculative validation.
+
+### TASK-24H-0137: DECISION NEEDED — Is a distinct "player-lost" state needed, separate from clean removal?
+Status: BLOCKED
+Priority: P2
+Area: DirectPlay
+Type: Verification
+Evidence: plan.md Phase 9 (investigated only, same observability wall as player names)
+Depends on: None
+
+Problem:
+Real DirectPlay distinguishes an abrupt player-lost disconnect from a clean removal; FreeDirect
+does not today, and it's unclear whether `free-eggbert` needs the distinction since nothing in its
+reachable code path currently observes it.
+
+Required work:
+- **Do not decide this unilaterally.** Ask the user whether this distinction matters for
+  `free-eggbert`'s actual (currently mostly-unreachable) session-lifecycle UI, or whether it can
+  remain undifferentiated until a concrete need surfaces.
+
+Acceptance criteria:
+- A decision recorded.
+
+Out of scope:
+- Do not implement a new state enum value before this is decided.
+
+## Integration
+
+### TASK-24H-0138: Final integration re-verification: free-eggbert, end of session
+Status: TODO
+Priority: P0
+Area: Integration
+Type: Verification
+Evidence: Consolidates TASK-24H-0007's recurring checks into one final gate
+Depends on: None (run once, at the end of this session's implementation work)
+
+Problem:
+Before closing out this session, a single final confirmation that free-eggbert still builds clean
+against everything changed is needed, independent of the per-task recurring checks.
+
+Required work:
+- Full clean rebuild of `../free-eggbert` against the final state of `free-direct` from this
+  session.
+
+Acceptance criteria:
+- Build succeeds, zero new errors/warnings; result recorded in `NEXT.md` per TASK-24H-0123.
+
+Out of scope:
+- None.
+
+### TASK-24H-0139: Final integration re-verification: planetblupi, end of session
+Status: TODO
+Priority: P0
+Area: Integration
+Type: Verification
+Evidence: Consolidates TASK-24H-0008's recurring checks into one final gate
+Depends on: None (run once, at the end of this session's implementation work)
+
+Problem:
+Same rationale as TASK-24H-0138, for planetblupi.
+
+Required work:
+- Full clean rebuild of `../planetblupi` against the final state of `free-direct` from this session.
+
+Acceptance criteria:
+- Build succeeds, zero new errors/warnings; result recorded in `NEXT.md`.
+
+Out of scope:
+- None.
+
+### TASK-24H-0140: Final DirectPlay test re-run: end of session
+Status: TODO
+Priority: P0
+Area: Tests
+Type: Verification
+Evidence: Consolidates TASK-24H-0014's recurring checks
+Depends on: None (run once, at the end of this session's implementation work)
+
+Problem:
+A final, single source-of-truth test run should be recorded before the session's final report.
+
+Required work:
+- Run `ctest --test-dir build` (or the manual `g++` command if CTest wiring didn't land) and record
+  the exact pass/fail count.
+
+Acceptance criteria:
+- Result recorded in `NEXT.md` and the final report, with the exact count (not "all tests" —
+  the number).
+
+Out of scope:
+- None.
+
+### TASK-24H-0141: Final header-hygiene re-verification: end of session
+Status: TODO
+Priority: P0
+Area: Headers
+Type: Verification
+Evidence: Consolidates TASK-24H-0015's recurring checks
+Depends on: None (run once, at the end of this session's implementation work)
+
+Problem:
+Same rationale as TASK-24H-0140, for the SDL/ENet header-leak invariant.
+
+Required work:
+- Run the grep check from TASK-24H-0015 one final time against the session's final state.
+
+Acceptance criteria:
+- Zero violations; result recorded in `NEXT.md`.
+
+Out of scope:
+- None.
+
+## Priority summary
+
+- **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,
+  recurring verification gates): TASK-24H-0001, 0002, 0003, 0007, 0008, 0014, 0015, 0026, 0030,
+  0031, 0035, 0036, 0037, 0038, 0040, 0044, 0049, 0076, 0080, 0081, 0083, 0084, 0092, 0098, 0117,
+  0123, 0131, 0138, 0139, 0140, 0141.
+- **P1**: the majority of test-coverage, documentation-accuracy, and safe-DirectPlay tasks listed
+  above (0004-0006, 0009, 0011, 0013, 0016-0020, 0024, 0027-0029, 0032-0034, 0039, 0041-0043,
+  0045, 0047-0048, 0050-0052, 0056-0057, 0059-0060, 0062-0065, 0067, 0072-0074, 0077-0079, 0082,
+  0085-0090, 0093-0097, 0100-0108, 0110-0116, 0118, 0121, 0124-0127, 0129, 0132, 0134).
+- **P2**: cleanup, header-hygiene documentation, optional hardening, lower-frequency call paths
+  (0010, 0012, 0021-0023, 0025, 0046, 0053-0055, 0058, 0061, 0066, 0068-0071, 0075, 0090, 0091 (once
+  unblocked), 0099, 0109, 0119-0120, 0122, 0128, 0130, 0133, 0135-0137).
+- **P3**: pure documentation/history cleanup (0012 already listed under P2 by nature but tracked
+  once; historical-plan cleanup items are folded into the Phase reconciliation tasks 0086-0090
+  rather than kept as separate P3 entries, per the "atomic, don't duplicate" rule).
+
+Total: 141 atomic tasks (TASK-24H-0001 through TASK-24H-0141), 7 of which are explicitly `BLOCKED`
+pending a user decision (0091, 0131-0137 — note 0091 depends on 0131, both counted).
