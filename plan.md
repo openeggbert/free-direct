@@ -2304,7 +2304,7 @@ under `src/directplay/`, not `include/`, but re-run anyway per the established p
 All scratch build directories removed after verification.
 
 ### TASK-24H-0011: Document exact standalone/free-eggbert/planetblupi/ENet build+test commands in README
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
@@ -2326,8 +2326,26 @@ Acceptance criteria:
 Out of scope:
 - Do not document commands that were not actually verified this session.
 
+Verified: The existing "Build Instructions" section was itself stale and rewritten, not just
+extended - its first example (`cmake -B build` with zero flags, no sibling game, right after `git
+clone`) is exactly the case that fails, and its documented system-SDL flag
+(`-DFREE_USE_SYSTEM_SDL`) is not a real `free-direct`/`free-api` option (confirmed: that name
+belongs only to a target game's own vendoring script comment - `docs/audit-24h-free-direct.md`
+already flagged this same fact). Rewrote the section with 5 real, freshly-run-this-session
+configurations: (1) standalone with `-DFREE_API_USE_SYSTEM_SDL3=ON` - configure/build exit 0,
+`ctest` 7/7; (2) bare standalone with no flags - confirmed it fails with the exact CMake error
+message now quoted in the doc; (3) building through `../free-eggbert` and `../planetblupi` with no
+extra flags - both configure/build exit 0 out-of-tree in `/tmp` scratch dirs (touching neither
+sibling repo), producing `SPEEDY_BLUPI_WINDOWS`/`PLANET_BLUPI_WINDOWS` respectively, including their
+`wave.cpp`/`network.cpp` compiling cleanly; (4) `-DFREE_DIRECT_ENABLE_ENET=ON` - `ctest -L enet`
+passes 1/1, and separately confirmed (and documented) that the *unfiltered* `ctest` against this
+same build fails `directplay_tests` (1/8) by design, not a regression; (5)
+`-DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON` - `ctest` 7/7 clean, also re-verified
+combined with ENet (8/8 with the same `-L enet` caveat). All scratch build directories removed
+after verification.
+
 ### TASK-24H-0012: Add a documented (non-blocking) CI matrix note
-Status: TODO
+Status: DONE
 Priority: P3
 Area: Docs
 Type: Documentation
@@ -2347,6 +2365,13 @@ Acceptance criteria:
 Out of scope:
 - Do not add an actual `.github/workflows/*.yml` file in this task — that's a bigger, separate
   ask-first decision (adding real CI infrastructure) outside this backlog's scope.
+
+Verified: Created `docs/ci-matrix.md`. Confirmed `.github/workflows/` still does not exist before
+writing it. States plainly at the top that no workflow file exists and this note doesn't create
+one. Documents 6 matrix rows (default, ENet-enabled with the `-L enet` scoping caveat, sanitizer,
+header-hygiene-as-a-fail-fast-gate, and build-through-each-target-game as integration checks) with
+the exact commands verified in TASK-24H-0011's work just above, plus an explicit "not in scope"
+list (real workflow YAML, system-libenet as its own row, non-Linux runners).
 
 ### TASK-24H-0013: Verify diamond-dependency build after CTest wiring lands
 Status: TODO

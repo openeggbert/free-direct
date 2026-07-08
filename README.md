@@ -73,23 +73,40 @@ DirectX 3 (subset)
 ## Build Instructions
 
 FreeDirect depends on `../free-api` (a sibling checkout) and, through it, on SDL3/SDL3_image/
-SDL3_mixer. By default the build expects SDL to be vendored as git submodules under
-`third_party/` in whichever sibling game project (`free-eggbert` or `planetblupi`) provides them.
+SDL3_mixer. `free-api` has no SDL-vendoring logic of its own: it either finds an `SDL3::SDL3`
+target already provided by a parent build (a target game), or resolves system-installed SDL3 when
+asked to. There is no scenario where a bare `git clone` + `cmake -B build` with zero flags and no
+sibling game succeeds - see "Standalone" below for the exact error.
 
 ```bash
 git clone https://github.com/openeggbert/free-direct.git
 cd free-direct
-
-cmake -B build
-cmake --build build
 ```
 
-If SDL3/SDL3_image/SDL3_mixer are already installed system-wide (e.g. via their own CMake
-install), configure with `-DFREE_USE_SYSTEM_SDL=ON` instead of vendoring anything:
+### Standalone (system-installed SDL3)
+
+Every command below was actually run and verified in this environment (all exit 0 / all tests
+passing, unless noted). If SDL3/SDL3_image/SDL3_mixer development packages are installed
+system-wide, configure with `-DFREE_API_USE_SYSTEM_SDL3=ON` (**not** `-DFREE_USE_SYSTEM_SDL`,
+which is not a `free-direct`/`free-api` option - that name belongs only to a target game's own
+`cmake/ThirdPartySDL.cmake` vendoring script, for a different scenario, see below):
 
 ```bash
-cmake -B build -DFREE_USE_SYSTEM_SDL=ON
-cmake --build build
+cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON
+cmake --build build -j8
+ctest --test-dir build
+```
+
+Without `-DFREE_API_USE_SYSTEM_SDL3=ON` (and without a parent game providing SDL3), configure
+fails fast with a clear error rather than a confusing downstream failure:
+
+```
+CMake Error at .../free-api/CMakeLists.txt:38 (message):
+  free-api requires SDL3::SDL3, SDL3_image::SDL3_image and SDL3_mixer::SDL3_mixer
+  targets, none of which were found. Either:
+    - configure with -DFREE_API_USE_SYSTEM_SDL3=ON (requires SDL3/SDL3_image/SDL3_mixer dev packages), or
+    - build free-api as a subdirectory of ../free-eggbert or ../planetblupi (either already provides SDL3), or
+    - define the SDL3::SDL3 / SDL3_image::SDL3_image / SDL3_mixer::SDL3_mixer targets yourself before add_subdirectory(free-api).
 ```
 
 Run example:
@@ -97,6 +114,51 @@ Run example:
 ```bash
 ./build/FREE_DIRECT
 ```
+
+### Through a target game (vendored SDL3, no extra flags)
+
+Both target games vendor their own SDL3 via their own `cmake/ThirdPartySDL.cmake` and pull in
+`free-direct` via `add_subdirectory(../free-direct)`, so no `-DFREE_API_USE_SYSTEM_SDL3` flag is
+needed (or recognized) when building through either of them - this is the configuration these two
+games actually ship with:
+
+```bash
+cmake -B build -S ../free-eggbert    # or -S ../planetblupi
+cmake --build build -j8
+```
+
+Verified: both configure and build exit 0 for `../free-eggbert` (produces the `SPEEDY_BLUPI_WINDOWS`
+executable) and `../planetblupi` (produces `PLANET_BLUPI_WINDOWS`), including their own
+`wave.cpp`/`network.cpp` - those files compile without error in both games; see the
+`DSBCAPS_STATIC`/`DPESC_TIMEDOUT`/`DPSESSION_KEEPALIVE` notes above for why some of the code in
+them is never actually reachable at runtime.
+
+### ENet-enabled transport tests (opt-in)
+
+```bash
+cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON -DFREE_DIRECT_ENABLE_ENET=ON
+cmake --build build -j8
+ctest --test-dir build -L enet
+```
+
+Verified: 100% pass (1/1, `enet_directplay_tests`). The `-L enet` label filter is deliberate, not
+optional: running the *full* default `ctest` (no `-L` filter) against an ENet-enabled build fails
+`directplay_tests` (verified: 1/8 tests fail that way). This is expected, not a regression -
+`directplay_tests.cpp` is scoped to `LoopbackDirectPlayTransport`'s synchronous semantics by design
+(see that file's own header comment), which do not hold once `EnetDirectPlayTransport`'s real
+asynchronous network model is linked into the same binary instead.
+
+### Sanitizer builds (opt-in, ASan/UBSan)
+
+```bash
+cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON -DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON
+cmake --build build -j8
+ctest --test-dir build
+```
+
+Verified: `ctest` passes 7/7 clean (no sanitizer diagnostics printed by any test binary) - also
+verified combined with `-DFREE_DIRECT_ENABLE_ENET=ON` (8/8, with the same `-L enet` scoping caveat
+as above still applying to the ENet+sanitizer combination).
 
 ---
 
