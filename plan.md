@@ -4634,7 +4634,7 @@ Verified: both tests added, using a callback that increments a counter and retur
 future change ever did invoke it, the test would fail loudly rather than silently passing).
 
 ### TASK-24H-0094: Create docs/directplay-limitations.md
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -4660,8 +4660,22 @@ Acceptance criteria:
 Out of scope:
 - Do not resolve any open design question while writing this doc — document them as open.
 
+Verified: Read all 19 Decisions in `docs/directplay-design.md` in full (previously only
+individual Decisions had been read for specific tasks this session). Created
+`docs/directplay-limitations.md` with a 19-row deviation table citing Decision numbers (DPID
+width/allocation - Decision 3; loopback-only `EnumSessions` - Decision 18; asynchronous join -
+Decision 16; no broadcast/no host-routing - Decision 15; `DirectPlayEnumerateA`/`W` stub status -
+Decision 1; the DPID-0 broadcast-collision finding - Decisions 3/15, explicitly marked open) plus
+a dedicated "Standing BLOCKED design questions" section listing all 7 questions from CLAUDE.md by
+name with citations, so a future reader sees them together rather than scattered across the table.
+Also folded in this session's own TASK-24H-0022 findings (`DPESC_TIMEDOUT` unreachable from
+FreeDirect's side; `DPSESSION_KEEPALIVE`/`MIGRATEHOST` silently ignored by `Open()`) as two
+additional table rows, explicitly marked "not yet a numbered Decision" since they were discovered
+via header-comment work, not a Decision-log entry. No open design question was resolved while
+writing this - every BLOCKED row is marked open, not answered.
+
 ### TASK-24H-0095: Create docs/directplay-protocol.md
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -4685,8 +4699,23 @@ Acceptance criteria:
 Out of scope:
 - Do not document a Microsoft-wire-compatible format — this is FreeDirect's own internal protocol.
 
+Verified: Created `docs/directplay-protocol.md` with the full header field/offset/size table and
+all 6 `DirectPlayWirePacketType` values with real usage status. **Caught a real error before
+publishing**: initially hand-derived the header size as 56 bytes assuming `sizeof(GUID) == 16`
+(the real Win32 LLP64 value) - compiled a standalone verification program directly against
+`DirectPlayWireProtocol.hpp` instead of trusting the arithmetic, and found `sizeof(GUID) == 24` on
+this Linux/LP64 build (`unsigned long` is 8 bytes here, not 4) and `kDirectPlayWireHeaderSize ==
+72`, not 56. Rewrote the entire offset table with the compiler-verified numbers (every field's
+offset independently printed and cross-checked against `kDirectPlayWireHeaderSize` in the same
+program) and added a new "Known gaps" entry specifically documenting that the wire header size is
+platform/ABI-dependent (not previously written down anywhere, though `DirectPlayWireProtocol.hpp`'s
+own file comment already flagged the identical issue for `DPID` specifically). Also documented the
+pre-existing `magic`/`version`-not-validated-on-receive and no-GUID-mismatch-validation gaps. No
+Microsoft-wire-compatible format is implied anywhere in the doc. Scratch verification files removed
+after use.
+
 ### TASK-24H-0096: Create docs/networking-backends.md
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
@@ -4709,6 +4738,15 @@ Out of scope:
 - Do not implement `SdlNetDirectPlayTransport` in this task — documentation only, and only once
   ENet is stable per policy (it already exists and works for hosting; joining/discovery are still
   open, so SDL3_net implementation remains correctly not-started).
+
+Verified: Created `docs/networking-backends.md`, listing `IDirectPlayTransport`'s current 13
+methods (verified against the real `src/directplay/DirectPlayTransport.hpp` via grep, not
+recalled from memory) grouped by purpose, then one section per backend: `LoopbackDirectPlayTransport`
+(always available, default), `EnetDirectPlayTransport` (opt-in, what works/doesn't today, cross-
+referencing `docs/directplay-limitations.md`), and `SdlNetDirectPlayTransport` (documented, not
+implemented, both UDP-datagram and TCP-stream paths with their tradeoffs per `CLAUDE.md`).
+Explicitly states it does not commit to implementing SDL3_net, closing with `CLAUDE.md`'s own
+"ENet first and by default; SDL3_net stays a documented option" rule of thumb verbatim.
 
 ### TASK-24H-0097: Add an ENet reliable-delivery smoke test gated behind FREE_DIRECT_ENABLE_ENET
 Status: DONE
