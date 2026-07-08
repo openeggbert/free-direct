@@ -5,6 +5,7 @@
  */
 #include <ddraw.h>
 
+#include <free_api_bridge.h>
 #include <SDL3/SDL.h>
 #include "../diagnostics/Diagnostics.hpp"
 
@@ -16,10 +17,6 @@
 #include <memory>
 #include <new>
 #include <vector>
-
-extern "C" HDC FreeApiCreateSurfaceDC(void* pixels, int width, int height, int pitch, int bitsPerPixel);
-extern "C" BOOL FreeApiDestroySurfaceDC(HDC hdc);
-extern "C" void FreeApiSetWindowFullscreen(HWND hwnd, bool fullscreen);
 
 namespace {
     bool IsEnvFlagEnabled(const char* envName)
