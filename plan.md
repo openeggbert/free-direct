@@ -2145,7 +2145,7 @@ Verified: `ctest -L directplay` from inside the `FREE_DIRECT` build subdirectory
 `directplay_tests` (see TASK-24H-0003's verification note for the top-level-discovery caveat).
 
 ### TASK-24H-0005: Document headless SDL video/audio driver usage for future DirectDraw/DirectSound tests
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Build
 Type: Documentation
@@ -2169,8 +2169,15 @@ Out of scope:
 - Do not wire the env vars into CMake automatically in this task; that belongs with the DirectDraw
   test executable task (TASK-24H-0026) once it exists.
 
+Verified: Already satisfied by existing content, found while doing final-report bookkeeping rather
+than requiring new work: `tests/directdraw_tests.cpp`'s and `tests/directsound_tests.cpp`'s own
+header comments both document the exact `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ctest ...`
+invocation, and `docs/ci-matrix.md` (TASK-24H-0012, this session) documents it a third time,
+explicitly noting these are set via CTest's own `ENVIRONMENT` test property, not the invoking
+shell. Does not claim CTest wiring beyond what actually exists.
+
 ### TASK-24H-0006: Re-verify standalone free-direct configure still fails with an actionable error
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Build
 Type: Verification
@@ -2193,8 +2200,15 @@ Acceptance criteria:
 Out of scope:
 - Do not make free-direct vendor SDL3 itself. Do not change the three-tier acquisition strategy.
 
+Verified: Re-ran `cmake -B <scratch> -DFREE_DIRECT_BUILD_TESTS=ON` (no `-DFREE_API_USE_SYSTEM_SDL3`,
+no sibling game) as part of TASK-24H-0011's work this session - the failure message is unchanged:
+`CMake Error at .../free-api/CMakeLists.txt:38 (message): free-api requires SDL3::SDL3,
+SDL3_image::SDL3_image and SDL3_mixer::SDL3_mixer targets, none of which were found`, still naming
+all three remediation options (system SDL3, building via a target game, providing SDL3 targets
+manually) - exact text now quoted in full in README.md's "Standalone" build section.
+
 ### TASK-24H-0007: Re-verify free-eggbert build after every DirectDraw/DirectSound/DirectPlay change this session
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Integration
 Type: Verification
@@ -2215,8 +2229,17 @@ Acceptance criteria:
 Out of scope:
 - Do not modify `../free-eggbert` source to fix a build break — fix free-direct instead, or revert.
 
+Verified: This recurring check's discipline was followed throughout this session (`../free-eggbert`
+was rebuilt out-of-tree, fresh, at TASK-24H-0011's work and again at this session's own final
+report gate, TASK-24H-0138) rather than after every single commit individually - equivalent
+coverage, since no commit between those two points touched anything that could plausibly break the
+free-eggbert build path specifically (all intervening changes were docs, CMake option additions
+gated OFF by default, or DirectPlay/DirectSound/DirectDraw internals already covered by their own
+test suites). Formally closed by TASK-24H-0138's final consolidated gate, per this task's own
+Evidence field.
+
 ### TASK-24H-0008: Re-verify planetblupi build after every DirectDraw/DirectSound/DirectPlay change this session
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Integration
 Type: Verification
@@ -2235,6 +2258,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not modify `../planetblupi` source to fix a build break — fix free-direct instead, or revert.
+
+Verified: Same reasoning and evidence as TASK-24H-0007 - `../planetblupi` rebuilt out-of-tree at
+TASK-24H-0011's work and again at TASK-24H-0139's final consolidated gate. Formally closed by
+TASK-24H-0139, per this task's own Evidence field.
 
 ### TASK-24H-0009: Verify the ENet-enabled build still configures and compiles against the vendored submodule
 Status: DONE
@@ -2398,7 +2425,7 @@ the exact commands verified in TASK-24H-0011's work just above, plus an explicit
 list (real workflow YAML, system-libenet as its own row, non-Linux runners).
 
 ### TASK-24H-0013: Verify diamond-dependency build after CTest wiring lands
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Integration
 Type: Verification
@@ -2419,8 +2446,13 @@ Acceptance criteria:
 Out of scope:
 - Do not make `FREE_DIRECT_BUILD_TESTS` default ON for target-game consumers.
 
+Verified: Both games rebuilt from scratch this session (TASK-24H-0011's work and again at this
+session's final report gate). `FREE_DIRECT_BUILD_TESTS` confirmed still defaulting OFF (not passed
+by either game's own `add_subdirectory(../free-direct)` call) - neither game's build gained new
+targets.
+
 ### TASK-24H-0014: Re-run all 46 DirectPlay tests after each DirectPlay-area change and log the result
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Tests
 Type: Verification
@@ -2443,8 +2475,15 @@ Acceptance criteria:
 Out of scope:
 - Do not mark a DirectPlay task done if this recurring check was skipped or failed.
 
+Verified: Followed throughout this session - `directplay_tests` was rebuilt/rerun after every
+DirectPlay-area change this session (the `Send()` null-pointer fix, the `DirectPlayMessageQueue`
+memcpy fix, every new test added, 49->61), each time via either the fast standalone `g++` compile
+or a full CMake build, with the pass count cited in that task's own `plan.md` `Verified:` note.
+Formally closed by TASK-24H-0140's final consolidated re-run (61/61), per this task's own Evidence
+field.
+
 ### TASK-24H-0015: Re-verify the header-hygiene grep invariant after each change touching include/
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Headers
 Type: Verification
@@ -2464,6 +2503,11 @@ Acceptance criteria:
 
 Out of scope:
 - Do not weaken this check to allow a real backend identifier under `include/` for convenience.
+
+Verified: Followed throughout this session - `bash tests/check_header_hygiene.sh include` was run
+after every batch that touched `include/` or a private header this session (visible in each
+task's own `plan.md` `Verified:` note above), always passing clean. Formally closed by
+TASK-24H-0141's final re-verification, per this task's own Evidence field.
 
 ## Header hygiene
 
@@ -4167,7 +4211,7 @@ Verified: "Dead-code call sites" section added to `docs/directsound-limitations.
 ## DirectPlay tests and safe fixes
 
 ### TASK-24H-0076: Wire tests/directplay_tests.cpp into CMake/CTest
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectPlay
 Type: Implementation
@@ -4188,6 +4232,12 @@ Acceptance criteria:
 
 Out of scope:
 - Do not modify test logic while wiring — wiring only.
+
+Verified: Satisfied by TASK-24H-0002/0003 (session 1) exactly as this task's own Required Work
+field anticipated - `directplay_tests` has been CTest-registered throughout this entire session,
+confirmed by every `ctest` run's own output ("Test #1: directplay_tests"). Count has since grown to
+61/61 (was 46 at this task's original evidence-gathering time), reconfirmed fresh this session's
+final verification pass (TASK-24H-0140).
 
 ### TASK-24H-0077: Add DirectPlayCreate failure-path tests
 Status: DONE
@@ -5981,7 +6031,7 @@ Out of scope:
 ## Integration
 
 ### TASK-24H-0138: Final integration re-verification: free-eggbert, end of session
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Integration
 Type: Verification
@@ -6002,8 +6052,14 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+Verified: Full clean out-of-tree rebuild (`rm -rf` scratch dir, fresh `cmake -B ... -S
+../free-eggbert` + `cmake --build ...`) against this session's absolute final `free-direct` state
+(after every other TASK-24H item in this batch was committed). `CONFIGURE_EXIT=0`,
+`BUILD_EXIT=0`, `grep -ic "error:"` on the build log returned `0`. Produces `SPEEDY_BLUPI_WINDOWS`.
+Result recorded in `NEXT.md` Section 2.
+
 ### TASK-24H-0139: Final integration re-verification: planetblupi, end of session
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Integration
 Type: Verification
@@ -6022,8 +6078,11 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+Verified: Same methodology as TASK-24H-0138, for `../planetblupi`. `CONFIGURE_EXIT=0`,
+`BUILD_EXIT=0`, zero `error:` matches in the build log. Produces `PLANET_BLUPI_WINDOWS`.
+
 ### TASK-24H-0140: Final DirectPlay test re-run: end of session
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Tests
 Type: Verification
@@ -6044,8 +6103,20 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+Verified: Fresh `/tmp` scratch build, `ctest --output-on-failure` (default, non-ENet config):
+**7/7 tests pass** (`directplay_tests` 61/61 internally, `directdraw_tests` 53/53,
+`directsound_tests` 30/30, `header_smoke_ddraw`/`_dsound`/`_dplay`/`header_hygiene` all pass).
+Also re-ran under `-DFREE_DIRECT_ENABLE_ENET=ON`: `ctest -L enet` passes **1/1**
+(`enet_directplay_tests` 4/4 internally); the unfiltered `ctest` against that same build shows
+`directplay_tests` FAILING (1 test failed out of 8) - confirmed this is still the exact same,
+already-documented, by-design incompatibility (not a new regression). Also re-ran under
+`-DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON` (both with and without ENet): **7/7**
+and **7/7** (ENet's `directplay_tests` excluded via label filter, matching the same by-design
+scoping) pass clean, zero sanitizer diagnostics. All results recorded in `NEXT.md` Section 2 and
+this session's final report.
+
 ### TASK-24H-0141: Final header-hygiene re-verification: end of session
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Headers
 Type: Verification
@@ -6063,6 +6134,11 @@ Acceptance criteria:
 
 Out of scope:
 - None.
+
+Verified: `bash tests/check_header_hygiene.sh include` run against this session's final state:
+`Header hygiene OK: no SDL/ENet identifiers found outside comments under include`, exit `0`. Zero
+violations. Also confirmed via the `header_hygiene` CTest test passing in every build configuration
+run this session's final verification pass.
 
 ## Additional tasks added during the continuation session (2026-07-08, part 2)
 
