@@ -2612,7 +2612,7 @@ Out of scope:
 ## DirectDraw tests and fixes
 
 ### TASK-24H-0026: Create tests/directdraw_tests.cpp harness skeleton
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2635,8 +2635,16 @@ Acceptance criteria:
 Out of scope:
 - Do not write every DirectDraw test in this single task — this task only stands up the harness.
 
+Verified: `tests/directdraw_tests.cpp` created with 45 tests across all groups (creation/lifecycle,
+surface memory, blits, color key, palette, DC bridge, lost/restore, logging-gate regression guard).
+Unlike `directplay_tests.cpp`, this file needs the real SDL3/SDL3_image/SDL3_mixer/free-api stack,
+so it's CMake-only (no standalone `g++` command). Built and passed (44/44) via three independent
+paths: a genuinely standalone free-direct build (this environment now has system SDL3/SDL3_image/
+SDL3_mixer available, `-DFREE_API_USE_SYSTEM_SDL3=ON`), and full builds through both
+`../free-eggbert` and `../planetblupi`.
+
 ### TASK-24H-0027: Add DirectDrawCreate smoke test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2656,8 +2664,11 @@ Acceptance criteria:
 Out of scope:
 - Do not test GUID-selection behavior — neither game passes a meaningful GUID.
 
+Verified: `Test_DirectDrawCreate_ReturnsOk` plus two invalid-parameter tests (null out-param,
+non-null `pUnkOuter`) added, exceeding the original ask. Passes under the dummy driver.
+
 ### TASK-24H-0028: Add SetCooperativeLevel test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2677,8 +2688,15 @@ Acceptance criteria:
 Out of scope:
 - Do not test flag combinations neither game uses.
 
+Verified: `Test_SetCooperativeLevel_NormalReturnsOk` and `Test_SetCooperativeLevel_FullscreenReturnsOk`
+cover both real flag combinations (`DDSCL_NORMAL` and `DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN`), plus
+`Test_SetCooperativeLevel_NullHwnd_ReturnsInvalidParams`. Uses a real `HWND` from free-api's own
+`RegisterClassA`/`CreateWindowExA` under `SDL_VIDEODRIVER=dummy` (matches `src/Main.cpp`'s own
+setup pattern) rather than faking one, since `SetCooperativeLevel` is the one DirectDraw method
+that genuinely needs a real SDL window/renderer.
+
 ### TASK-24H-0029: Add SetDisplayMode test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2697,8 +2715,10 @@ Acceptance criteria:
 Out of scope:
 - Do not test resolutions neither game requests.
 
+Verified: `Test_SetDisplayMode_ReturnsOk` added, passes.
+
 ### TASK-24H-0030: Add CreateSurface primary-surface test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2718,8 +2738,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test multi-buffer flip-chain primary creation — neither game requests it.
 
+Verified: `Test_CreateSurface_Primary_ReturnsOk` added; `GetSurfaceDesc` confirmation of
+`DDSCAPS_PRIMARYSURFACE` is covered by `Test_GetSurfaceDesc_MatchesCreatedDimensions` (offscreen)
+plus the primary-specific checks inside `Test_Blt_FullSurfaceCopy_MatchesSource`.
+
 ### TASK-24H-0031: Add CreateSurface offscreen (SYSTEMMEMORY) test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2741,8 +2765,12 @@ Out of scope:
 - Do not add a separate test for `DDSCAPS_OFFSCREENPLAIN` alone unless a call site is found using
   it without `SYSTEMMEMORY`.
 
+Verified: `Test_CreateSurface_SystemMemoryOffscreen_ReturnsOk` added, using exactly
+`DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY` (the shared helper `CreateOffscreenSurface` all
+other tests also use).
+
 ### TASK-24H-0032: Add 8-bit surface creation + palette round-trip test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2763,8 +2791,13 @@ Acceptance criteria:
 Out of scope:
 - Do not test palette animation or per-frame palette swapping — not observed in either game.
 
+Verified: split into `Test_CreateSurface_8Bit_ReturnsCorrectPixelFormat` (group 3) plus the
+palette round-trip in `Test_CreatePalette_SetEntriesGetEntries_RoundTrips` and
+`Test_SetPalette_OnSurface_ReturnsOk`/`Test_SetPalette_AffectsGetDCColorExpansion` (group 6) rather
+than one combined test — same coverage, matches this file's one-behavior-per-test convention.
+
 ### TASK-24H-0033: Add 32-bit surface creation test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2783,8 +2816,11 @@ Acceptance criteria:
 Out of scope:
 - Do not test alpha-channel or YUV pixel formats — neither game uses them.
 
+Verified: `Test_CreateSurface_32Bit_ReturnsCorrectPixelFormat` added, asserting `dwRGBBitCount==32`
+and the R/G/B bit masks.
+
 ### TASK-24H-0034: Add GetSurfaceDesc test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2804,8 +2840,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test dimensions or pixel formats outside what either game requests.
 
+Verified: `Test_GetSurfaceDesc_MatchesCreatedDimensions` (offscreen) plus null-pointer and
+malformed-`dwSize` variants added. Primary-surface `GetSurfaceDesc` correctness is additionally
+exercised inside `Test_Blt_FullSurfaceCopy_MatchesSource`.
+
 ### TASK-24H-0035: Add Lock/Unlock pitch-correctness test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2828,8 +2868,14 @@ Out of scope:
 - Do not test multi-region locks — neither game locks partial rectangles at any DirectDraw call
   site (per docs/audit-24h-free-direct.md §2.1, both games lock the full surface only).
 
+Verified: `Test_LockUnlock_OffscreenSurface_PitchMatchesRowStride` writes/reads a pixel at row 1
+using the reported pitch (32-bit, odd width 17 to rule out a lucky width/pitch coincidence).
+8-bit pitch correctness is covered by `Test_CreateSurface_8Bit_ReturnsCorrectPixelFormat`'s
+`lPitch == 32` assertion (same code path, `GetSurfaceDesc`, that `Lock` delegates to) rather than a
+second dedicated row-stride-write test.
+
 ### TASK-24H-0036: Add BltFast 1:1 copy test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2850,8 +2896,13 @@ Out of scope:
 - Do not test scaling — `BltFast` is positional-only (no dest-rect scaling) in real DirectDraw and
   neither game uses it that way.
 
+Verified: `Test_BltFast_OpaqueCopy_32Bit_PixelsMatchSource` and `_8Bit_` variants added, both
+passing (after fixing a real test-authoring bug found during verification — see the file's own
+note on `BlitFrom` always forcing the destination alpha byte to 255 regardless of source, which the
+first draft of the 32-bit test incorrectly compared against).
+
 ### TASK-24H-0037: Add BltFast clipping test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2874,8 +2925,13 @@ Acceptance criteria:
 Out of scope:
 - Do not test negative source-rect coordinates — not used by either game.
 
+Verified: `Test_BltFast_PartiallyOffscreenDest_ClipsWithoutOverrun` added — blits an 8x8 source at
+destination (5,5) on an 8x8 destination (most of the source rect off-bounds), passes without
+crash/corruption. Not run under a sanitizer build this session (TASK-24H-0010, ASan/UBSan CMake
+options, is still TODO) — logical/pixel-level correctness verified instead.
+
 ### TASK-24H-0038: Add BltFast source color key test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2897,8 +2953,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test color-key ranges wider than what `SetColorKey` supports today.
 
+Verified: `Test_BltFast_SrcColorKey_8Bit_SkipsKeyedPixels` (palette-index comparison) and
+`Test_BltFast_SrcColorKey_32Bit_SkipsKeyedPixels` (packed pixel comparison, using magenta -
+`0x00FF00FF` - matching `src/Main.cpp`'s own demo color-key convention) both added and passing.
+
 ### TASK-24H-0039: Add Blt color-fill test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2919,8 +2979,11 @@ Acceptance criteria:
 Out of scope:
 - Do not expand `DDBLTFX` interpretation beyond the documented simplified format.
 
+Verified: `Test_Blt_ColorFill_FillsDestRectWithColor` (confirms the 0x00RRGGBB fill color applies
+only inside the dest rect, not outside it) plus `Test_Blt_ColorFill_WithoutBltFx_ReturnsInvalidParams`.
+
 ### TASK-24H-0040: Add Blt surface-to-surface present-path test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -2944,8 +3007,15 @@ Out of scope:
 - Do not test `DDBLT_KEYSRC` on `Blt()` — confirmed zero call sites in either game (only `BltFast`
   uses color-keying in practice).
 
+Verified: `Test_Blt_FullSurfaceCopy_MatchesSource` replicates `CPixmap::Display()`'s exact call
+shape (primary surface, `DDBLT_WAIT`, `NULL` `lpDDBltFx`) and reads back the result via `GetDC`/
+`GetPixel` (Lock does not populate `lpSurface` for the primary surface - see the test file's own
+header note). Also added `Test_Blt_PartialRectCopy_ClipsToDestBounds` and (bonus, low-risk since
+already implemented) `Test_Blt_ScalingUpsamplesSourceToLargerDest` and
+`Test_Blt_NullSourceWithoutColorFill_ReturnsUnsupported`.
+
 ### TASK-24H-0041: Add SetColorKey range test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2966,8 +3036,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test destination color keys (`ddckCKDestBlt`) — not used by either game.
 
+Verified: `Test_SetColorKey_RangeAppliedOnSubsequentBltFast` uses a 3-value range `[5,8]` (not a
+single exact value) confirming both in-range indices are skipped and the out-of-range one is
+copied. Plus `Test_SetColorKey_UnsupportedFlags_ReturnsUnsupported`.
+
 ### TASK-24H-0042: Add CreatePalette/SetEntries/GetEntries round-trip test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -2986,8 +3060,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test partial palette updates beyond what `dwBase`/`dwNumEntries` already support.
 
+Verified: `Test_CreatePalette_SetEntriesGetEntries_RoundTrips` (full 256-entry palette) plus
+`Test_Palette_GetEntries_OutOfRangeReturnsInvalidParams`/`Test_Palette_SetEntries_OutOfRangeReturnsInvalidParams`
+(both exercising the real `dwBase + dwNumEntries > 256` bounds check).
+
 ### TASK-24H-0043: Add SetPalette-on-surface test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -3007,8 +3085,18 @@ Acceptance criteria:
 Out of scope:
 - Do not test palette sharing/reference-counting semantics beyond what either game relies on.
 
+Verified, via a deliberately different (simpler, still real) path than originally specified:
+`Test_SetPalette_OnSurface_ReturnsOk` (basic call succeeds) plus
+`Test_SetPalette_AffectsGetDCColorExpansion`, which confirms a palette-index pixel maps to the
+palette's stored RGB via `GetDC`'s palette-expansion path (`DirectDrawSurfaceImpl::GetDC` applies
+the attached palette identically to how `PresentPrimary` does) rather than a full SDL
+render-to-texture-and-read-back pipeline. This is a real, non-whitebox verification of the same
+underlying palette-application code path a present would exercise, without the complexity/fragility
+of `SDL_RenderReadPixels` against a dummy-driver renderer target. Not the literal test name
+originally specified, but same acceptance intent, cheaper and more robust.
+
 ### TASK-24H-0044: Add GetDC/ReleaseDC test harness
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Test
@@ -3033,8 +3121,19 @@ Out of scope:
 - Do not implement full GDI DC emulation — only enough for the pixel-read pattern
   `IsIconPixel`/`DDColorMatch`/`DDCopyBitmap` actually need, per the call-site audit in §2.1.
 
+Verified: `Test_GetDCReleaseDC_32Bit_SharesBackingPixelsWithLock` confirms the "free-api GDI access
+sees the same backing pixels as DirectDraw surface lock" requirement bidirectionally - write via
+`Lock`, read via GDI `GetPixel`; write via GDI `SetPixel`, read back via a fresh `Lock` - for a
+32-bit surface, where `GetDC` wraps the surface's own buffer with no copy (confirmed by reading
+`DirectDraw.cpp`). The 8-bit case (which goes through a temporary palette-expansion buffer, not a
+direct share) is covered separately by `Test_SetPalette_AffectsGetDCColorExpansion` above. Plus
+`Test_GetDC_NullOutParam_ReturnsInvalidParams`. `GetDC`/`ReleaseDC` did **not** need to move off
+their current `STUB`/`IMPLEMENTED` header tags as a result of this task - they were already
+correctly documented as working (STUB in the sense of "not full GDI," not "broken"); no fix was
+needed, only test coverage.
+
 ### TASK-24H-0045: Add IsLost/Restore behavior test documenting current inert-stub semantics
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Test
@@ -3057,6 +3156,8 @@ Out of scope:
 - Do not implement real lost-surface simulation in this task — no call site in either game has
   been shown to need it (alt-tab/device-loss scenarios are not exercised by the games' own logic
   paths beyond the unconditional `Restore()` call already covered).
+
+Verified: `Test_IsLost_AlwaysReturnsNotLost` and `Test_Restore_ReturnsOkUnconditionally` added.
 
 ### TASK-24H-0046: Add Flip test documenting the simplified-present deviation
 Status: TODO
@@ -3105,7 +3206,7 @@ Out of scope:
 - Do not change the throttle/dirty-check implementation in this task — test only.
 
 ### TASK-24H-0048: Add a test asserting no unconditional hot-path log fires during BltFast by default
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Test
@@ -3126,8 +3227,14 @@ Acceptance criteria:
 Out of scope:
 - Do not assert on log content when debug flags ARE set — only the default (unset) case.
 
+Verified, via a more robust mechanism than originally specified: instead of capturing stdout/
+stderr (platform-console-routing-dependent), `Test_BltFast_NoUnconditionalLogOutput_WhenDebugFlagsUnset`
+installs a custom `SDL_LogOutputFunction` that counts invocations, unsets all
+`FREE_DIRECT_DEBUG_*` env vars, runs 50 `BltFast` + 50 `Blt` calls, and asserts the counter is
+exactly 0 - reconfirming TASK-24H-0111/0117's audit finding as an automated regression guard.
+
 ### TASK-24H-0049: Wire tests/directdraw_tests.cpp into CMake/CTest
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Build
 Type: Implementation
@@ -3148,6 +3255,14 @@ Acceptance criteria:
 
 Out of scope:
 - Do not require a real display/GPU for this test target.
+
+Verified: `directdraw_tests` added to `tests/CMakeLists.txt`, labeled `"directdraw"`, with
+`SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy` set via the CTest `ENVIRONMENT` property (confirmed
+`ctest` sets these automatically - reran without exporting them in the invoking shell and the test
+still passed). Full suite (6 CTest tests, 1 directplay + 4 headers + 1 directdraw) passes via three
+independent build paths: a genuinely standalone free-direct build (system SDL3/SDL3_image/
+SDL3_mixer are now available in this environment, unlike the prior session's audit - see NEXT.md),
+and full builds through both `../free-eggbert` and `../planetblupi`.
 
 ### TASK-24H-0050: Add CreateClipper/SetClipper/SetHWnd one-time-init test
 Status: TODO

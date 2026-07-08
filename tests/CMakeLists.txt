@@ -42,3 +42,21 @@ add_test(
         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/check_header_hygiene.sh ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 set_tests_properties(header_hygiene PROPERTIES LABELS "headers")
+
+# DirectDraw tests: needs the real free-direct library (SDL3/SDL3_image/SDL3_mixer/free-api),
+# unlike directplay_tests. Runs headlessly via the dummy SDL video/audio drivers (set as a CTest
+# ENVIRONMENT property so `ctest` runs it correctly without relying on the invoker's shell state).
+# 24-Hour Stabilization Backlog TASK-24H-0026 through TASK-24H-0049 (plan.md).
+add_executable(directdraw_tests directdraw_tests.cpp)
+target_link_libraries(directdraw_tests
+        PRIVATE
+        free-direct
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_mixer::SDL3_mixer
+)
+add_test(NAME directdraw_tests COMMAND directdraw_tests)
+set_tests_properties(directdraw_tests PROPERTIES
+        LABELS "directdraw"
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+)
