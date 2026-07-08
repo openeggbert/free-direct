@@ -4589,7 +4589,7 @@ Out of scope:
 ## Diagnostics/logging
 
 ### TASK-24H-0111: Audit FREE_DIRECT_DEBUG_DDRAW coverage for gaps
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Audit
@@ -4612,8 +4612,21 @@ Acceptance criteria:
 Out of scope:
 - Do not remove genuinely useful gated diagnostics — audit for missing gates only.
 
+Finding: **all gated, no violation.** Every `SDL_Log(...)` call site in `DirectDraw.cpp` (65 call
+sites, including all `Blt`/`BltFast`/`GetDC`/`ReleaseDC`/`Lock`/`Unlock` ones) routes through the
+file's own `#define SDL_Log DirectDrawLog` macro (line 98), and `DirectDrawLog` (line 50) checks
+`IsDirectDrawDebugEnabled()` first and returns immediately when `FREE_DIRECT_DEBUG_DDRAW` is unset
+— no log output reaches stdout/stderr by default. Minor non-blocking note (not a gap, not
+actioned): `IsDirectDrawDebugEnabled()`/`IsPresentationDebugEnabled()`/`IsColorKeyDebugEnabled()`
+call `SDL_getenv` on every single invocation (uncached), unlike `IsPerfDebugEnabled()` in the same
+file, which caches its result in a `static int`. This costs a getenv lookup per `Blt`/`BltFast`
+call even with logging disabled — real but minor hot-path overhead, not an output/correctness bug.
+Left unfixed here since TASK-24H-0117 (the fix task) is explicitly scoped to "ungated log output,"
+not this narrower overhead question; flagging it as a possible future P2 cleanup if profiling ever
+shows it matters.
+
 ### TASK-24H-0112: Audit FREE_DIRECT_DEBUG_PRESENTATION coverage for gaps
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Audit
@@ -4633,8 +4646,13 @@ Acceptance criteria:
 Out of scope:
 - None beyond the audit itself.
 
+Finding: **all gated, no violation.** All `PresentLog(...)`/`SDL_LogInfo(...)` calls in
+`PresentPrimary` and related presentation-path functions are gated behind
+`IsPresentationDebugEnabled()` (`FREE_DIRECT_DEBUG_PRESENTATION`), same uncached-getenv note as
+TASK-24H-0111 applies here too (not actioned, same reasoning).
+
 ### TASK-24H-0113: Audit FREE_DIRECT_DEBUG_COLORKEY coverage for gaps
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Audit
@@ -4653,8 +4671,11 @@ Acceptance criteria:
 Out of scope:
 - None beyond the audit itself.
 
+Finding: **all gated, no violation.** All `ColorKeyLog(...)` calls are gated behind
+`IsColorKeyDebugEnabled()` (`FREE_DIRECT_DEBUG_COLORKEY`), same uncached-getenv note applies.
+
 ### TASK-24H-0114: Audit FREE_DIRECT_DEBUG_DSOUND coverage for gaps
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Audit
@@ -4673,8 +4694,18 @@ Acceptance criteria:
 Out of scope:
 - None beyond the audit itself.
 
+Finding: `DS_LOG`/`DS_FMTLOG` macros are correctly gated behind `dsDebugEnabled()`/
+`dsFormatDebugEnabled()` (`FREE_DIRECT_DEBUG_DSOUND`/`FREE_DIRECT_DEBUG_DSOUND_FORMAT`), and unlike
+`DirectDraw.cpp`, these **are** cached in a `static int` (no per-call getenv overhead — this file's
+pattern is actually the better one of the two). Five raw, unconditional `SDL_Log(...)` calls exist
+outside those macros (lines ~169, 175, 365, 550, 557) — but all five are SDL API **failure-path**
+logs (`SDL_InitSubSystem`/`SDL_OpenAudioDevice`/`SDL_PutAudioStreamData`/`SDL_CreateAudioStream`/
+`SDL_BindAudioStream` failing), not per-frame/per-call success-path logs. Per CLAUDE.md's own
+Documentation/Diagnostics policy ("Keep fatal/error logs useful"), these are correctly left
+unconditional — not a gap.
+
 ### TASK-24H-0115: Add FREE_DIRECT_DEBUG_DPLAY gate for any ungated DirectPlay diagnostic logs
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Implementation
@@ -4696,8 +4727,13 @@ Acceptance criteria:
 Out of scope:
 - Do not add verbose new logging that didn't exist before — gate what's already there.
 
+Finding: **no logging exists at all** in any `src/directplay/*.cpp` file (confirmed by grep for
+`printf`/`std::cout`/`SDL_Log`/`fprintf` — zero matches). Nothing to gate; no
+`FREE_DIRECT_DEBUG_DPLAY` flag was added since there is no unconditional (or any) log statement to
+control. Revisit if/when DirectPlay logging is actually added.
+
 ### TASK-24H-0116: Add FREE_DIRECT_DEBUG_ENET gate for any ungated ENet diagnostic logs
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Implementation
@@ -4717,8 +4753,11 @@ Acceptance criteria:
 Out of scope:
 - Do not add new logging.
 
+Finding: **no logging exists at all** in `EnetDirectPlayTransport.cpp` (confirmed by grep, same as
+TASK-24H-0115). Nothing to gate.
+
 ### TASK-24H-0117: Fix any ungated per-blit log found in Blt/BltFast hot paths
-Status: TODO
+Status: DONE (no-op — no gap found)
 Priority: P0
 Area: Diagnostics
 Type: Bugfix
@@ -4738,8 +4777,11 @@ Acceptance criteria:
 Out of scope:
 - Only act if TASK-24H-0111 actually found a gap — do not speculatively change working code.
 
+Verified no-op: TASK-24H-0111 found no ungated log in `Blt`/`BltFast` — all output is correctly
+suppressed by default. No code change made, per this task's own out-of-scope clause.
+
 ### TASK-24H-0118: Fix any ungated per-call log found in DirectSound Play/Lock/Unlock
-Status: TODO
+Status: DONE (no-op — no gap found)
 Priority: P1
 Area: Diagnostics
 Type: Bugfix
@@ -4757,6 +4799,10 @@ Acceptance criteria:
 
 Out of scope:
 - Only act if TASK-24H-0114 found a gap.
+
+Verified no-op: TASK-24H-0114 found the five unconditional `SDL_Log` calls in `DirectSound.cpp` are
+all failure-path (not per-call success-path) logs, correctly left unconditional per policy. No
+code change made.
 
 ### TASK-24H-0119: Add CMake compile-definition overrides for FREE_DIRECT_DEBUG_* flags
 Status: TODO
