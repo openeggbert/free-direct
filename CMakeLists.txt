@@ -109,6 +109,26 @@ if(FREE_DIRECT_DIAGNOSTICS)
 endif()
 target_include_directories(free-direct PRIVATE src)
 
+# Optional sanitizer builds (24-Hour Stabilization Backlog TASK-24H-0010, plan.md). OFF by
+# default. Applied PRIVATE/directly to free-direct's own targets only (this file's FREE_DIRECT
+# demo executable, and tests/CMakeLists.txt's test executables via the same cache variable,
+# inherited into that add_subdirectory() scope) - never PUBLIC/INTERFACE, so a target game
+# consuming free-direct via add_subdirectory() never has sanitizer flags forced onto its own
+# targets just because free-direct was configured with one of these on.
+option(FREE_DIRECT_ENABLE_ASAN "Build free-direct's own targets with AddressSanitizer" OFF)
+option(FREE_DIRECT_ENABLE_UBSAN "Build free-direct's own targets with UndefinedBehaviorSanitizer" OFF)
+set(FREE_DIRECT_SANITIZER_FLAGS "")
+if(FREE_DIRECT_ENABLE_ASAN)
+    list(APPEND FREE_DIRECT_SANITIZER_FLAGS -fsanitize=address -fno-omit-frame-pointer)
+endif()
+if(FREE_DIRECT_ENABLE_UBSAN)
+    list(APPEND FREE_DIRECT_SANITIZER_FLAGS -fsanitize=undefined)
+endif()
+if(FREE_DIRECT_SANITIZER_FLAGS)
+    target_compile_options(free-direct PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
+    target_link_options(free-direct PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
+endif()
+
 # Intentionally mirrors the legacy DirectX SDK include layout, e.g. #include <ddraw.h>.
 target_include_directories(free-direct
         PUBLIC
@@ -146,6 +166,10 @@ target_link_libraries(FREE_DIRECT
         SDL3_image::SDL3_image
         SDL3_mixer::SDL3_mixer
 )
+if(FREE_DIRECT_SANITIZER_FLAGS)
+    target_compile_options(FREE_DIRECT PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
+    target_link_options(FREE_DIRECT PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
+endif()
 
 # FreeDirect's own test executables (plan.md Phase 15 / 24-Hour Stabilization Backlog
 # TASK-24H-0001). OFF by default so target-game diamond builds (free-eggbert, planetblupi)

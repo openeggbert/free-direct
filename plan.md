@@ -2249,7 +2249,7 @@ the user). ENet-specific behavior is now covered separately by `tests/enet_direc
 (TASK-24H-0097/0098/0108).
 
 ### TASK-24H-0010: Add optional FREE_DIRECT_ENABLE_ASAN/UBSAN CMake options
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Build
 Type: Implementation
@@ -2270,6 +2270,38 @@ Acceptance criteria:
 
 Out of scope:
 - Do not enable sanitizers by default. Do not apply them to `free-api` or target-game targets.
+
+Verified: Added `FREE_DIRECT_ENABLE_ASAN`/`FREE_DIRECT_ENABLE_UBSAN` options to the root
+`CMakeLists.txt`, building a `FREE_DIRECT_SANITIZER_FLAGS` list applied `PRIVATE` to the
+`free-direct` static library and the `FREE_DIRECT` demo executable only; `tests/CMakeLists.txt`
+applies the same (parent-scope-inherited) variable to every test executable via a `foreach` loop,
+including `enet_directplay_tests` when `FREE_DIRECT_ENABLE_ENET` is also on. Tested four separate
+standalone scratch builds (`-DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON` plus):
+ASan only, ASan+UBSan, a plain non-sanitizer control build, and ASan+UBSan+`FREE_DIRECT_ENABLE_ENET`
+(against the vendored `third_party/enet`). All four configured and built with 0 errors.
+`ctest --output-on-failure` passed 100% (7/7, or 8/8 with ENet's `enet_directplay_tests` included)
+in every configuration; each sanitizer-instrumented binary was also run directly and its stdout/
+stderr grepped for `runtime error`/`AddressSanitizer`/`heap-buffer`/`use-after`/`leak` to confirm no
+diagnostic was silently swallowed by CTest's pass/fail reporting.
+
+**Found and fixed a real bug via this sanitizer build**: the first ASan+UBSan run reported
+`DirectPlayMessageQueue.hpp:115:20: runtime error: null pointer passed as argument 2, which is
+declared to never be null` from `directplay_tests`. Root cause: `TryReceive()`'s
+`std::memcpy(lpData, front->payload.data(), payloadSize)` call passed `front->payload.data()`
+(a `std::vector<std::uint8_t>::data()`) as `memcpy`'s `src` argument unconditionally; a
+zero-length message (a legitimate case - `Send()` allows a null/zero-length payload) leaves
+`payload` empty, and an empty `std::vector::data()` is permitted by the standard to return
+`nullptr`, which is UB to pass to `memcpy` even at `count == 0` because glibc declares its `src`
+parameter `nonnull`. Fixed by skipping the `memcpy` call entirely when `payloadSize == 0` (see
+`src/directplay/DirectPlayMessageQueue.hpp`). Audited every other `memcpy`/`memcmp`/`memmove` call
+site in `src/` and `include/` for the same pattern (`grep -rn "memcpy\|memcmp\|memmove"`): all
+others either copy a fixed non-zero `sizeof(...)` field (`DirectPlayWireProtocol.hpp`,
+`DirectPlay.cpp`) or are already `!front.empty()`-guarded (`EnetDirectPlayTransport.cpp:152`,
+`LoopbackDirectPlayTransport.cpp:86`) - this was the only real instance. Re-ran the full matrix
+above after the fix; all four configurations still pass 100% with zero sanitizer diagnostics.
+`bash tests/check_header_hygiene.sh include` still passes (the touched header is a private header
+under `src/directplay/`, not `include/`, but re-run anyway per the established post-change habit).
+All scratch build directories removed after verification.
 
 ### TASK-24H-0011: Document exact standalone/free-eggbert/planetblupi/ENet build+test commands in README
 Status: TODO

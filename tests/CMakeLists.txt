@@ -98,3 +98,20 @@ if(FREE_DIRECT_ENABLE_ENET)
     add_test(NAME enet_directplay_tests COMMAND enet_directplay_tests)
     set_tests_properties(enet_directplay_tests PROPERTIES LABELS "enet")
 endif()
+
+# Applies the root CMakeLists.txt's optional ASan/UBSan flags (TASK-24H-0010) to every test
+# executable defined above - FREE_DIRECT_SANITIZER_FLAGS is a plain (non-cache) variable set in
+# the parent scope, inherited here automatically since add_subdirectory() child scopes see their
+# parent's variables. Empty (and this loop a no-op) unless FREE_DIRECT_ENABLE_ASAN/UBSAN is ON.
+if(FREE_DIRECT_SANITIZER_FLAGS)
+    set(FREE_DIRECT_SANITIZED_TEST_TARGETS
+            directplay_tests header_smoke_ddraw header_smoke_dsound header_smoke_dplay
+            directdraw_tests directsound_tests)
+    if(FREE_DIRECT_ENABLE_ENET)
+        list(APPEND FREE_DIRECT_SANITIZED_TEST_TARGETS enet_directplay_tests)
+    endif()
+    foreach(sanitized_target ${FREE_DIRECT_SANITIZED_TEST_TARGETS})
+        target_compile_options(${sanitized_target} PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
+        target_link_options(${sanitized_target} PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
+    endforeach()
+endif()

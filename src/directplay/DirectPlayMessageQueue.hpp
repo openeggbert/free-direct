@@ -112,7 +112,14 @@ public:
         }
         if (!lpData) return DPERR_INVALIDPARAMS;
 
-        std::memcpy(lpData, front->payload.data(), payloadSize);
+        // payloadSize == 0 is a legitimate zero-byte message (Send() allows a null/zero-length
+        // payload). An empty std::vector<std::uint8_t>::data() is permitted to return nullptr,
+        // which UBSan correctly flags as passing a null src to memcpy's nonnull-declared
+        // parameter even at count 0 - skip the call entirely rather than relying on memcpy
+        // tolerating a null pointer at zero length (found via ASan/UBSan build, TASK-24H-0010).
+        if (payloadSize > 0) {
+            std::memcpy(lpData, front->payload.data(), payloadSize);
+        }
         *lpdwDataSize = payloadSize;
         if (lpidFrom) *lpidFrom = front->idFrom;
         if (lpidTo) *lpidTo = front->idTo;
