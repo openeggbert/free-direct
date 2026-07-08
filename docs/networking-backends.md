@@ -5,6 +5,10 @@ concrete detail of what is actually implemented today. It does not introduce any
 see `docs/directplay-design.md` for the numbered Decisions that shaped the abstraction described
 here, and `docs/directplay-limitations.md` for what each backend still cannot do.
 
+**None of the backends described below are wire-compatible with real Microsoft DirectPlay.**
+FreeDirect multiplayer - regardless of which backend moves the bytes - only ever works between two
+programs both built against this FreeDirect DirectPlay implementation.
+
 ## The abstraction: `IDirectPlayTransport`
 
 `src/directplay/DirectPlayTransport.hpp` (a **private** header - never installed, never reachable

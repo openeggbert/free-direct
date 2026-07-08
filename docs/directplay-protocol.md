@@ -12,8 +12,9 @@ both backends, so this document applies to either.
 
 ## Header layout
 
-Every FreeDirect-to-FreeDirect DirectPlay packet begins with a fixed 56-byte header
-(`DirectPlayWirePacketHeader`), serialized field-by-field with `std::memcpy` in declaration order
+Every FreeDirect-to-FreeDirect DirectPlay packet begins with a fixed-layout header (72 bytes on
+this project's verified Linux/LP64 build - see the platform-dependent-size note in "Known gaps"
+below) (`DirectPlayWirePacketHeader`), serialized field-by-field with `std::memcpy` in declaration order
 (**not** `sizeof(DirectPlayWirePacketHeader)`'s in-memory, padding-affected layout - the wire form
 is flat and padding-free by construction). Payload bytes, if any, follow immediately after the
 header with no gap.

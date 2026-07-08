@@ -24,7 +24,7 @@ DirectX 3 (subset)
 * **Free Direct** → reimplements selected DirectX 3 APIs (2D only)
 * **DirectDraw** → Current real implementation focus, constrained to methods and flags used by the game and demo.
 * **DirectSound** → Partially implemented: SDL3-backed audio playback for static PCM buffers.
-* **DirectPlay** → Currently stubbed (dummy implementations).
+* **DirectPlay** → Real session/player/message-queue state over a loopback transport: hosting, joining, unicast send/receive, and session enumeration all work between two FreeDirect processes. An optional ENet backend (`FREE_DIRECT_ENABLE_ENET`) adds real UDP networking for hosting; joining and discovery are not yet wired up over ENet. Broadcast (`idTo == 0`) and host-to-host message relay between two non-host peers are not implemented. `DirectPlayEnumerateA`/`W` remain stubs. **FreeDirect-to-FreeDirect only — never compatible with real Microsoft DirectPlay at the wire/packet level.** See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation list.
 * **Direct3D** → Not implemented (not used by target code).
 * **SDL 3** → Internal implementation detail used only inside `.cpp` files.
 
@@ -53,13 +53,78 @@ DirectX 3 (subset)
 
 * **DirectDraw**: Narrow subset implemented using SDL3.
 * **DirectSound**: Partially implemented over SDL3 audio (see DirectSound section below).
-* **DirectPlay**: Declarations and dummy stubs provided.
+* **DirectPlay**: Real loopback-backed session hosting/joining, player management, and unicast message delivery, plus an optional real-networking ENet transport for hosting. FreeDirect-to-FreeDirect only, never Microsoft-wire-compatible — see [docs/directplay-limitations.md](docs/directplay-limitations.md) and [docs/directplay-protocol.md](docs/directplay-protocol.md).
 * Surface creation for primary and system-memory/offscreen surfaces.
 * `Blt` / `BltFast` with clipping and source color key handling.
 * `Lock` / `Unlock` for direct pixel access.
 * Palette support (`CreatePalette`, `SetEntries`, `GetEntries`, `SetPalette`).
 * Primary surface presentation through SDL renderer.
 * Minimal clipper support (`CreateClipper`, `SetHWnd`, `SetClipper`).
+
+---
+
+## Compatibility Status
+
+Per-method status, sourced directly from the `@note Status:` Doxygen tags in `include/*.h` at the
+time of writing (`STUB` = returns a fixed/dummy result with no real behavior; `PARTIAL` = real
+behavior for some call patterns, not others; `IMPLEMENTED` = real behavior for the subset this
+project targets). `QueryInterface`/`AddRef`/`Release` are `IMPLEMENTED` on every interface below
+and omitted from the table for brevity.
+
+**DirectDraw** (`include/ddraw.h`)
+
+| Method | Status |
+|---|---|
+| `DirectDrawCreate` | PARTIAL |
+| `SetCooperativeLevel` | IMPLEMENTED |
+| `CreateSurface` | PARTIAL (Primary and Offscreen only) |
+| `SetDisplayMode` | IMPLEMENTED |
+| `CreatePalette` | IMPLEMENTED |
+| `Blt` | PARTIAL (ColorFill and Surface-to-Surface blit only) |
+| `BltFast` | IMPLEMENTED |
+| `Flip` | IMPLEMENTED (simplified present) |
+| `SetClipper` | IMPLEMENTED |
+| `SetPalette` | IMPLEMENTED |
+| `IsLost` / `Restore` | IMPLEMENTED |
+| `GetDC` / `ReleaseDC` | STUB |
+| `Lock` / `Unlock` | IMPLEMENTED |
+
+See [docs/directdraw-limitations.md](docs/directdraw-limitations.md) for the full findings behind
+these tags.
+
+**DirectSound** (`include/dsound.h`)
+
+| Method | Status |
+|---|---|
+| `DirectSoundCreate` | IMPLEMENTED |
+| `SetCooperativeLevel` | IMPLEMENTED |
+| `CreateSoundBuffer` | IMPLEMENTED |
+| `GetStatus` | IMPLEMENTED |
+| `Play` | PARTIAL (looping not implemented) |
+| `Stop` | IMPLEMENTED |
+| `Lock` / `Unlock` | IMPLEMENTED |
+| `SetCurrentPosition` | PARTIAL (stream is not seekable) |
+| `SetVolume` | IMPLEMENTED |
+| `SetPan` | PARTIAL (constant-power pan, mono sources only) |
+
+See [docs/directsound-limitations.md](docs/directsound-limitations.md) for the full findings
+behind these tags.
+
+**DirectPlay** (`include/dplay.h`)
+
+| Method | Status |
+|---|---|
+| `DirectPlayCreate` | IMPLEMENTED |
+| `DirectPlayEnumerateA` / `W` | STUB |
+| `EnumSessions` | PARTIAL (loopback-only registry; no ENet or LAN discovery) |
+| `Open` | PARTIAL (loopback host+join and ENet hosting work; ENet joining never connects) |
+| `CreatePlayer` | IMPLEMENTED (name/data/event-handle fields accepted but not stored) |
+| `Send` | PARTIAL (self-send and host-to-one-assigned-remote-player unicast only; no broadcast, no non-host-to-non-host relay) |
+| `Receive` | IMPLEMENTED |
+| `Close` | IMPLEMENTED |
+
+See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation table
+and the 7 standing open design questions.
 
 ---
 
@@ -165,6 +230,10 @@ as above still applying to the ENet+sanitizer combination).
 ## Project Status
 
 **Work in progress**
+
+See [docs/audit-24h-free-direct.md](docs/audit-24h-free-direct.md) for the most recent full
+evidence-based audit of DirectDraw/DirectSound/DirectPlay call-site usage in both target games,
+and the "Compatibility Status" section above for current per-method status.
 
 Current focus:
 
