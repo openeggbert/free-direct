@@ -60,3 +60,20 @@ set_tests_properties(directdraw_tests PROPERTIES
         LABELS "directdraw"
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
 )
+
+# DirectSound tests: same rationale as directdraw_tests, needs the real free-direct library and
+# runs headlessly via the dummy SDL audio driver.
+# 24-Hour Stabilization Backlog TASK-24H-0056 through TASK-24H-0072 (plan.md).
+add_executable(directsound_tests directsound_tests.cpp)
+target_link_libraries(directsound_tests
+        PRIVATE
+        free-direct
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_mixer::SDL3_mixer
+)
+add_test(NAME directsound_tests COMMAND directsound_tests)
+set_tests_properties(directsound_tests PROPERTIES
+        LABELS "directsound"
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+)

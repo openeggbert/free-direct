@@ -3404,7 +3404,7 @@ Out of scope:
 ## DirectSound tests and fixes
 
 ### TASK-24H-0056: Create tests/directsound_tests.cpp harness skeleton
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3426,8 +3426,13 @@ Acceptance criteria:
 Out of scope:
 - Do not write every DirectSound test in this task — harness only.
 
+Verified: `tests/directsound_tests.cpp` created with 24 tests. Like `directdraw_tests.cpp`, needs
+the real SDL3 audio stack, so CMake-only (no standalone `g++`). Built and passed (24/24) via a
+standalone free-direct build (system SDL3 available, see NEXT.md) and full builds through both
+`../free-eggbert` and `../planetblupi`, under `SDL_AUDIODRIVER=dummy`.
+
 ### TASK-24H-0057: Add DirectSoundCreate smoke test incl. graceful no-driver path
-Status: TODO
+Status: PARTIAL
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3449,8 +3454,22 @@ Acceptance criteria:
 Out of scope:
 - Do not test real hardware audio device enumeration.
 
+Partially verified: `Test_DirectSoundCreate_ReturnsOk` covers the success path under
+`SDL_AUDIODRIVER=dummy` (plus `Test_DirectSoundCreate_NullOutParam_ReturnsInvalidParam`/
+`_NonNullOuter_ReturnsInvalidParam`, exceeding the original ask on the validation side). The
+`DSERR_NODRIVER` graceful-failure path was **not** forced in-process: `SharedAudioDevice` is a
+process-wide singleton whose chosen SDL audio driver is sticky for the process's lifetime once
+`SDL_InitSubSystem(SDL_INIT_AUDIO)` first runs (nothing ever calls `SDL_QuitSubSystem`), so
+changing `SDL_AUDIODRIVER` mid-run after a real driver is already selected would not reliably
+retrigger driver selection - reproducing the no-driver path deterministically would need a
+subprocess harness this test file doesn't have. The code path itself
+(`SharedAudioDevice::open()` returning `false` when `SDL_InitSubSystem`/`SDL_OpenAudioDevice`
+fail, `DirectSoundCreate` translating that to `DSERR_NODRIVER`) was verified by reading
+`DirectSound.cpp` directly rather than by an automated test. Marked PARTIAL, not DONE, since the
+acceptance criteria's "both scenarios" is not fully met - a genuine gap, not a downgrade.
+
 ### TASK-24H-0058: Add SetCooperativeLevel test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3469,8 +3488,10 @@ Acceptance criteria:
 Out of scope:
 - Do not test other cooperative-level values — not used by either game.
 
+Verified: `Test_SetCooperativeLevel_NormalReturnsOk` added.
+
 ### TASK-24H-0059: Add CreateSoundBuffer test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3491,8 +3512,13 @@ Acceptance criteria:
 Out of scope:
 - Do not test formats outside the documented supported table.
 
+Verified: `Test_CreateSoundBuffer_16BitMono22050_ReturnsOk` and
+`Test_CreateSoundBuffer_8BitStereo11025_ReturnsOk` added (two representative points from README's
+table, not all nine combinations - both use the shared `CreatePcmBuffer` helper which builds a
+real `PCMWAVEFORMAT`, not a `WAVEFORMATEX`, per `DirectSound.cpp`'s own padding-safety warning).
+
 ### TASK-24H-0060: Add Lock test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3512,8 +3538,10 @@ Acceptance criteria:
 Out of scope:
 - Do not test lock flags other than `DSBLOCK_FROMWRITECURSOR` — the only one either game uses.
 
+Verified: `Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion` added.
+
 ### TASK-24H-0061: Add Unlock test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3536,8 +3564,14 @@ Out of scope:
 - Do not add new public API surface just to make this test easier — use existing accessors or
   duration/status-based verification.
 
+Verified, via status-based verification (as this task's own text anticipated): `Test_LockUnlock_WrittenDataUsedByPlay`
+writes a non-silent PCM pattern via `Lock`, calls `Unlock`, then `Play`, and confirms `GetStatus`
+reports `DSBSTATUS_PLAYING` - proving the written data actually flowed through to the SDL stream
+(a buffer with `bufferBytes_ == 0` or unfed data would not reach the `SDL_PutAudioStreamData` call
+that makes `GetStatus` observe queued audio).
+
 ### TASK-24H-0062: Add wraparound two-region lock test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3556,8 +3590,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test more than two wraparound regions — DirectSound's own contract only ever returns two.
 
+Verified: `Test_Lock_WraparoundRegion_ReturnsTwoValidRegions` added, using `bufferBytes_=10,
+offset=8, requested=5` (straddles the end by exactly 3 bytes) and confirming both region
+pointers/sizes (2 + 3 = 5) match `DirectSound.cpp`'s real wraparound arithmetic exactly.
+
 ### TASK-24H-0063: Add Play test asserting DSBSTATUS_PLAYING
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3576,8 +3614,10 @@ Acceptance criteria:
 Out of scope:
 - Do not test looping status bits — looping is not implemented (correctly, per §5).
 
+Verified: `Test_Play_SetsPlayingStatus` added.
+
 ### TASK-24H-0064: Add Stop test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3596,8 +3636,10 @@ Acceptance criteria:
 Out of scope:
 - None beyond documented Stop behavior.
 
+Verified: `Test_Stop_ClearsPlayingStatus` added.
+
 ### TASK-24H-0065: Add fresh-buffer GetStatus test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3616,8 +3658,11 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+Verified: `Test_GetStatus_FreshBuffer_NotPlaying` plus (bonus) `Test_GetStatus_NullOutParam_ReturnsInvalidParam`
+added.
+
 ### TASK-24H-0066: Add SetCurrentPosition(0) rewind test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3637,8 +3682,13 @@ Out of scope:
 - Do not test non-zero seek positions — not used by either game, and the underlying SDL stream is
   documented as not seekable to arbitrary positions.
 
+Verified: `Test_SetCurrentPosition_Zero_ReturnsOk` added, plus (bonus, since no public getter
+exists to directly observe the clamped cursor value) `Test_SetCurrentPosition_OutOfRange_ClampsAndPlaySucceeds`,
+which verifies the out-of-range clamp indirectly - a subsequent `Play()` must not read
+out-of-bounds from `data_.data() + playCursor_` if the clamp didn't happen.
+
 ### TASK-24H-0067: Add SetVolume clamping test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3662,8 +3712,14 @@ Out of scope:
 - Do not add `DSBVOLUME_MIN`/`MAX` named constants to `include/dsound.h` — no call site needs them
   by name.
 
+Verified with an honest observability caveat: `Test_SetVolume_OutOfRangeValues_ReturnOk` confirms
+values far outside `[-10000, 0]` are accepted (`DS_OK`, no crash) rather than rejected, matching
+real DirectSound's silent-clamp contract - but since no public getter exists for the stored
+volume, this cannot assert the *specific* clamped value round-trips, only that clamping doesn't
+error or crash. No `DSBVOLUME_MIN`/`MAX` constants added.
+
 ### TASK-24H-0068: Add SetPan mono-behavior test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3683,8 +3739,12 @@ Acceptance criteria:
 Out of scope:
 - Do not implement accurate stereo panning in this task — no call site needs it (§2.2).
 
+Verified: `Test_SetPan_MonoSource_NeverCrashesAcrossFullRange` (DSBPAN_LEFT/RIGHT/center plus
+out-of-range values) plus (bonus) `Test_SetPan_StereoSource_StillReturnsOk`, confirming the
+documented "stored but not applied" stereo behavior is still always `DS_OK`, never an error.
+
 ### TASK-24H-0069: Add unsupported-format fallback test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3703,8 +3763,13 @@ Acceptance criteria:
 Out of scope:
 - Do not add support for additional formats — the fallback behavior itself is what's being tested.
 
+Verified: `Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully` added, using a real
+`DSBUFFERDESC` with `lpwfxFormat = nullptr` (the sharpest "unsupported format" case - no format
+info at all) and confirming `Play()` succeeds via the documented 16-bit mono 22050 Hz fallback
+rather than crashing.
+
 ### TASK-24H-0070: Add zero-sized buffer descriptor test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3724,8 +3789,12 @@ Acceptance criteria:
 Out of scope:
 - Do not change current behavior unless it currently crashes or corrupts memory.
 
+Verified: `Test_CreateSoundBuffer_ZeroSizedBuffer_ReturnsOk` added, documenting the real behavior
+(`DS_OK`, and `Play()` on the resulting buffer is a safe no-op via the `bufferBytes_ == 0` early
+return) rather than assuming an error return.
+
 ### TASK-24H-0071: Add invalid/malformed DSBUFFERDESC test
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -3745,8 +3814,17 @@ Acceptance criteria:
 Out of scope:
 - Do not add validation stricter than what real DirectSound would reasonably reject.
 
+Verified with a finding worth recording: `Test_CreateSoundBuffer_NullOutParam_ReturnsInvalidParam`
+and `Test_CreateSoundBuffer_NonNullOuter_ReturnsInvalidParam` cover the two validations
+`CreateSoundBuffer` actually performs. Reading `DirectSound.cpp` directly confirms
+`CreateSoundBuffer` does **not** validate `lpcDSBufferDesc->dwSize` at all (unlike DirectDraw's
+`CreateSurface`, which does) - there is no "malformed `dwSize`" rejection path to test, because
+none exists. This is not a bug filed here (no call site in either target game passes a wrong
+`dwSize`, and adding a new validation would be unrequested behavior change, not test coverage) -
+recorded as a finding for `docs/directsound-limitations.md` (TASK-24H-0074) instead.
+
 ### TASK-24H-0072: Wire tests/directsound_tests.cpp into CMake/CTest
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Build
 Type: Implementation
@@ -3767,8 +3845,15 @@ Acceptance criteria:
 Out of scope:
 - Do not require real audio hardware for this test target.
 
+Verified: `directsound_tests` added to `tests/CMakeLists.txt`, labeled `"directsound"`, with
+`SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy` set via the CTest `ENVIRONMENT` property. Full suite
+(7 CTest tests: 1 directplay + 4 headers + 1 directdraw + 1 directsound; 118 `Test_*` functions
+total across the three hand-written test binaries - 49 directplay + 45 directdraw + 24
+directsound) passes via a standalone free-direct build and full builds through both
+`../free-eggbert` and `../planetblupi`.
+
 ### TASK-24H-0073: Verify no unconditional noisy logs fire during Play/Lock/Unlock by default
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Diagnostics
 Type: Test
@@ -3788,8 +3873,14 @@ Acceptance criteria:
 Out of scope:
 - Do not assert on log content when debug flags are set.
 
+Verified, using the same robust mechanism as `directdraw_tests.cpp`'s equivalent guard (a counting
+`SDL_LogOutputFunction` rather than stdout/stderr capture):
+`Test_PlayLockUnlock_NoUnconditionalLogOutput_WhenDebugFlagsUnset` unsets
+`FREE_DIRECT_DEBUG_DSOUND`/`_FORMAT`, runs 20 rounds of `Lock`/`Unlock`/`Play`, and asserts zero
+log callback invocations - reconfirming TASK-24H-0114's audit finding as an automated guard.
+
 ### TASK-24H-0074: Create docs/directsound-limitations.md
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -3811,8 +3902,14 @@ Acceptance criteria:
 Out of scope:
 - DirectDraw/DirectPlay content belongs in their own limitations docs.
 
+Verified: `docs/directsound-limitations.md` created, covering the padding-safety fix, mono-only
+`SetPan`, non-seekable `SetCurrentPosition`, no-looping policy (re-confirmed), one-stream-per-
+buffer restart-on-replay, the new `CreateSoundBuffer`-doesn't-validate-`dwSize` finding
+(TASK-24H-0071), and the null/zero-sized-descriptor and missing-format-fallback behaviors
+(TASK-24H-0069/0070).
+
 ### TASK-24H-0075: Note dead-code DirectSound paths (soundbass.cpp, wave.cpp) in the limitations doc
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
@@ -3833,6 +3930,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not treat dead-code call sites as requiring free-direct feature support — they cannot execute.
+
+Verified: "Dead-code call sites" section added to `docs/directsound-limitations.md` citing
+`soundbass.cpp` (free-eggbert only, `_BASS`-guarded), `wave.cpp` (both games, unreachable), and
+`PlaySoundDS` (both games, never called).
 
 ## DirectPlay tests and safe fixes
 
