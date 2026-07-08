@@ -23,3 +23,22 @@ target_link_libraries(directplay_tests
 
 add_test(NAME directplay_tests COMMAND directplay_tests)
 set_tests_properties(directplay_tests PROPERTIES LABELS "directplay")
+
+# Compile-only smoke tests: each public header must compile standalone, as a real consumer would
+# include it, without pulling in free-direct's own .cpp implementation.
+# 24-Hour Stabilization Backlog TASK-24H-0016/0017/0018/0019 (plan.md).
+foreach(header_name ddraw dsound dplay)
+    set(target_name header_smoke_${header_name})
+    add_executable(${target_name} header_smoke_${header_name}.cpp)
+    target_link_libraries(${target_name} PRIVATE free-direct)
+    add_test(NAME ${target_name} COMMAND ${target_name})
+    set_tests_properties(${target_name} PROPERTIES LABELS "headers")
+endforeach()
+
+# Header-hygiene regression check: no SDL3/SDL3_net/ENet identifier may leak into include/.
+# 24-Hour Stabilization Backlog TASK-24H-0024 (plan.md).
+add_test(
+        NAME header_hygiene
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/check_header_hygiene.sh ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+set_tests_properties(header_hygiene PROPERTIES LABELS "headers")

@@ -2370,7 +2370,7 @@ Out of scope:
 ## Header hygiene
 
 ### TASK-24H-0016: Add a compile-only smoke test for include/ddraw.h
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Headers
 Type: Test
@@ -2392,8 +2392,11 @@ Acceptance criteria:
 Out of scope:
 - Do not add any assertions about DirectDraw behavior here — this is a compile-only check.
 
+Verified: `tests/header_smoke_ddraw.cpp` added and wired (see TASK-24H-0019); compiles cleanly
+through both `free-eggbert` and `planetblupi` subdirectory builds.
+
 ### TASK-24H-0017: Add a compile-only smoke test for include/dsound.h
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Headers
 Type: Test
@@ -2412,8 +2415,10 @@ Acceptance criteria:
 Out of scope:
 - Do not add behavioral assertions.
 
+Verified: `tests/header_smoke_dsound.cpp` added and wired (see TASK-24H-0019); compiles cleanly.
+
 ### TASK-24H-0018: Add a compile-only smoke test for include/dplay.h
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Headers
 Type: Test
@@ -2434,8 +2439,11 @@ Acceptance criteria:
 Out of scope:
 - Do not add behavioral assertions.
 
+Verified: `tests/header_smoke_dplay.cpp` added and wired (see TASK-24H-0019); compiles cleanly with
+only the pre-existing, expected `-Wmissing-field-initializers` warning.
+
 ### TASK-24H-0019: Wire the three header smoke tests into CTest with a "headers" label
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Build
 Type: Implementation
@@ -2450,6 +2458,11 @@ Required work:
 
 Acceptance criteria:
 - `ctest --test-dir build -L headers` runs and passes all three.
+
+Verified: `ctest -L headers` (run from inside the `FREE_DIRECT` build subdirectory, per
+TASK-24H-0003's top-level-discovery caveat) runs and passes all four `headers`-labeled tests (the
+three smoke tests plus `header_hygiene`, added in the same pass — see TASK-24H-0024) through both
+`free-eggbert` and `planetblupi` builds.
 
 Out of scope:
 - Do not merge the three files into one — keep them separate per-header, matching the one-purpose-
@@ -2541,7 +2554,7 @@ Out of scope:
 - Do not remove the constant; it costs nothing to keep and documents a real (if dead) call site.
 
 ### TASK-24H-0024: Add a CTest-registered header-hygiene grep check
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Headers
 Type: Test
@@ -2565,6 +2578,13 @@ Acceptance criteria:
 Out of scope:
 - Do not implement a general-purpose static analysis tool — a targeted grep-based check is
   sufficient and matches CLAUDE.md's own stated verification method.
+
+Verified: `tests/check_header_hygiene.sh` added, registered as CTest `header_hygiene`. Classifies a
+line as an allowed prose mention if it starts with `*`/`/**`/`//` after stripping leading
+whitespace (matching this codebase's Doxygen comment style) — a real code-line hit fails the test.
+Confirmed the check has teeth by temporarily injecting a real violation
+(`typedef SDL_AudioDeviceID FakeLeak;` into `include/dplay.h`) and observing it fail, then reverted
+and confirmed it passes clean.
 
 ### TASK-24H-0025: Verify no new public declaration lacks a cited call site or test justification
 Status: TODO
