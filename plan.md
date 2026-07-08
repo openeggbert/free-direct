@@ -3312,7 +3312,7 @@ one-time `Create()` sequence (`CreateClipper` → `SetHWnd` with a real `HWND` �
 target surface), plus (bonus) `Test_CreateClipper_NullOutParam_ReturnsInvalidParams`.
 
 ### TASK-24H-0051: Create docs/directdraw-limitations.md
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -3335,8 +3335,14 @@ Acceptance criteria:
 Out of scope:
 - Do not use this doc to describe DirectSound or DirectPlay limitations — DirectDraw only.
 
+Verified: `docs/directdraw-limitations.md` created, covering the corrected Blt-vs-BltFast framing,
+the new `SetDisplayMode`/`dwBPP`-discarded finding, the 8-bit palette conversion audit result, the
+color-key range audit result, GetDC/ReleaseDC's risk profile, IsLost/Restore's inert-stub status,
+the simplified flip chain, DDBLTFX.dwFillColor's simplified interpretation, and the presentation
+throttle/dirty-flag testability limits.
+
 ### TASK-24H-0052: Correct the Blt-vs-BltFast call-site risk framing in existing docs
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -3361,8 +3367,15 @@ Out of scope:
 - Do not edit `CLAUDE.md` as part of this task — flag the discrepancy to the user instead if a
   charter update seems warranted.
 
+Verified: corrected framing (real counts: 4 vs 6 for free-eggbert, 3 vs 5 for planetblupi, with
+`Blt` covering the once-per-frame present call in both games) recorded in
+`docs/directdraw-limitations.md`'s first section, cross-referenced to `docs/audit-24h-free-direct.md`.
+`CLAUDE.md` itself was not edited, per this task's own out-of-scope note — flagging here for the
+user: `CLAUDE.md`'s DirectDraw Policy section still cites the older, superseded call-site counts
+("18 vs. 1", "17 vs. 0") and may be worth a charter update at the user's discretion.
+
 ### TASK-24H-0053: Audit primary-surface/resolution behavior against real target-game resolutions
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Audit
@@ -3383,8 +3396,17 @@ Acceptance criteria:
 Out of scope:
 - Do not add support for arbitrary resolutions beyond what's actually requested.
 
+Verified with a real finding: width/height are handled correctly (both games request 640x480,
+which `CreateSurface` uses exactly). **`dwBPP` is accepted by `SetDisplayMode` but never stored or
+used** — the primary surface is always created 32bpp regardless of what bpp was requested. This is
+currently latent, not visibly broken, since neither game's offscreen surfaces set
+`DDSD_PIXELFORMAT` either (both default to 32bpp through a separate code path), so the whole
+surface set is internally consistent today. Recorded in `docs/directdraw-limitations.md`; not
+fixed speculatively (no call site currently forces a visible mismatch, and fixing would need real
+testing against actual 8-bit primary usage first).
+
 ### TASK-24H-0054: Audit 8-bit palette conversion correctness against real asset colors
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Audit
@@ -3405,8 +3427,16 @@ Acceptance criteria:
 Out of scope:
 - Do not implement dithering or color-correction beyond exact palette-value mapping.
 
+Verified: **no issue found**. The palette-to-RGBA32 conversion arithmetic in `PresentPrimary`
+matches `FillColor`/`BlitFrom`'s `[R,G,B,A]` byte layout exactly, verified by code inspection
+(not by rendering real game assets, since — per TASK-24H-0053's finding — neither game's real
+surfaces are actually 8bpp today, making this path currently unreachable in live gameplay). A
+minor, harmless code smell was found and recorded: the `hasPalette` local is unconditionally
+`true` in both branches, making the "no palette → grayscale" comment describe dead code (the
+correct default-palette fallback still applies, just isn't distinguished for logging).
+
 ### TASK-24H-0055: Audit color-key range handling for planetblupi's 2 call sites
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Audit
@@ -3427,6 +3457,14 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change color-key comparison semantics without evidence of an actual bug.
+
+Verified: **no issue found**. Both of planetblupi's `Cache()`-driven call sites construct a
+degenerate range (`low == high`, matched via `DDColorMatch` against white) rather than a real
+multi-value range; free-direct's comparison (`index/pixel >= low && <= high`) correctly degenerates
+to an exact-match test in that case, verified for both the 8-bit and 32-bit comparison branches
+(the 32-bit one is the one actually exercised at runtime, per TASK-24H-0053's bpp finding).
+Whether `DDColorMatch`'s own `GetDC`/`SetPixel`/`Lock` round-trip produces the *correct* matched
+value is a separate question tracked under the existing GetDC/ReleaseDC risk area, not this task.
 
 ## DirectSound tests and fixes
 
