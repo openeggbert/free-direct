@@ -38,11 +38,12 @@
  *   `pendingPeers_` (a queue of connected-but-unidentified peers, populated by
  *   `Service()` on `ENET_EVENT_TYPE_CONNECT`). A hosting instance's `hostPeer_` stays
  *   null forever; `Send(targetId, ...)` now routes to `connectedPeers_[targetId]`
- *   directly (Decision 14) - `Receive()` still always returns `false` for every role,
- *   since `Service()` still discards `ENET_EVENT_TYPE_RECEIVE` packets rather than
- *   buffering them; real receive-side delivery over ENet is a separate, still-open task
- *   (this is an intentional, documented limitation, not a silent regression - see
- *   Decision 7's sub-question 3, now narrowed by Decision 14 to just the receive side).
+ *   directly (Decision 14). **Updated 2026-07-08 (24-Hour Stabilization Backlog, found while
+ *   auditing this file for TASK-24H-0097/0108): `Receive()` no longer always returns `false` -
+ *   this paragraph was stale.** `Service()` now buffers every `ENET_EVENT_TYPE_RECEIVE` packet
+ *   into `buffered_` (Decision 19), and `Receive()` pops from it for real, mirroring
+ *   `LoopbackDirectPlayTransport::Receive()` exactly, for both roles. See `buffered_`'s own
+ *   member comment below.
  *   When an *already-assigned* peer disconnects, its `DPID` is queued in
  *   `disconnectedPeerIds_` (`docs/directplay-design.md` Decision 8), retrievable via
  *   `HasDisconnectedPeer()`/`TakeDisconnectedPeer()` - a peer that disconnects while

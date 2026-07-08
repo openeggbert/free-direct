@@ -2,9 +2,9 @@
  * @file directplay_tests.cpp
  * @brief Standalone DirectPlay unit tests (`plan.md` Phase 3 and Phase 4).
  *
- * Not yet wired into CMake/CTest - that is `plan.md` Phase 15's job ("Add a
- * DirectPlay unit test executable"). Until then, build and run this file
- * directly from the repository root, e.g.:
+ * Wired into CMake/CTest since the 24-Hour Stabilization Backlog's TASK-24H-0001..0004
+ * (`tests/CMakeLists.txt`, label `directplay`). For fast iteration without CMake/SDL, it can
+ * still be built and run directly from the repository root:
  *
  *   g++ -std=c++20 -Wall -Wextra \
  *       -I include -I ../free-api/include -I ../free-api/include_non_windows \
@@ -16,6 +16,21 @@
  *
  * Prints "OK: ..." and exits 0 on success; prints one line per failed
  * check and exits nonzero otherwise.
+ *
+ * **Important**: this suite assumes the default (`FREE_DIRECT_ENABLE_ENET=OFF`) build, where
+ * `Open()` always uses `LoopbackDirectPlayTransport`'s synchronous semantics (e.g. an immediate
+ * `DPERR_NOSESSIONS` on a failed join). Building `free-direct` itself with
+ * `-DFREE_DIRECT_ENABLE_ENET=ON` switches `Open()` to `EnetDirectPlayTransport` instead
+ * (Decision 4: build-time-only backend selection, no runtime switch) - confirmed this session
+ * that running this exact suite against such a build fails 29/61 checks, because
+ * `EnetDirectPlayTransport`'s real, asynchronous network model does not honor the same timing/
+ * ordering guarantees loopback's synchronous registry lookups do. This is expected and correct,
+ * not a regression to chase: this file is deliberately scoped to the loopback backend
+ * (CLAUDE.md Testing Policy), and `tests/enet_directplay_tests.cpp` is where ENet-specific
+ * transport behavior is tested instead, gated behind the same `FREE_DIRECT_ENABLE_ENET` option.
+ * A CI setup that enables both `FREE_DIRECT_BUILD_TESTS` and `FREE_DIRECT_ENABLE_ENET` together
+ * should expect this file's CTest entry to fail for this structural reason, not treat it as a
+ * signal of a new bug.
  */
 #include "dplay.h"
 #include "DirectPlayMessageQueue.hpp"

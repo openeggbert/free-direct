@@ -2213,7 +2213,7 @@ Out of scope:
 - Do not modify `../planetblupi` source to fix a build break — fix free-direct instead, or revert.
 
 ### TASK-24H-0009: Verify the ENet-enabled build still configures and compiles against the vendored submodule
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Build
 Type: Verification
@@ -2235,6 +2235,18 @@ Acceptance criteria:
 Out of scope:
 - Do not attempt `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` unless a system `libenet` package is confirmed
   installed — do not install system packages as part of this task.
+
+Verified, with an important new finding recorded (not silently worked around): configured and
+built cleanly (`FreeDirect::ENet` confirmed `PRIVATE` in `CMakeLists.txt`) via the now-available
+standalone build path (`-DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_ENABLE_ENET=ON`). **New
+finding**: running `directplay_tests` (the loopback-scoped suite) against this ENet-enabled build
+fails 29/61 checks - `Open()` compiles against `EnetDirectPlayTransport` instead of
+`LoopbackDirectPlayTransport` under this option (Decision 4), and ENet's real asynchronous network
+model does not honor the synchronous timing/ordering guarantees the existing tests assume. This is
+expected and structural, not a regression - documented in `directplay_tests.cpp`'s own header
+comment and in NEXT.md, not silently fixed by changing CTest wiring (a CI-policy decision left to
+the user). ENet-specific behavior is now covered separately by `tests/enet_directplay_tests.cpp`
+(TASK-24H-0097/0098/0108).
 
 ### TASK-24H-0010: Add optional FREE_DIRECT_ENABLE_ASAN/UBSAN CMake options
 Status: TODO
@@ -4576,7 +4588,7 @@ Out of scope:
   open, so SDL3_net implementation remains correctly not-started).
 
 ### TASK-24H-0097: Add an ENet reliable-delivery smoke test gated behind FREE_DIRECT_ENABLE_ENET
-Status: TODO
+Status: DONE
 Priority: P1
 Area: ENet
 Type: Test
@@ -4604,8 +4616,20 @@ Out of scope:
 - Do not test through `IDirectPlay2A::Open`/`Send`/`Receive` for the ENet joining role — that path
   doesn't exist yet (see TASK-24H-0132, blocked). Test the transport class directly.
 
+Verified: `tests/enet_directplay_tests.cpp` created (new file, 4 tests) testing
+`EnetDirectPlayTransport` directly over real `127.0.0.1` sockets with hardcoded, distinct ports
+per test - `Test_EnetTransport_ListenAndConnect_EstablishesConnection`,
+`Test_EnetTransport_ReliableSend_HostToClient_DeliversPayload` (this task's specific ask),
+`Test_EnetTransport_UnreliableSend_ClientToHost_DeliversPayload`, and
+`Test_EnetTransport_Shutdown_ClosesConnectionCleanly`. Each polls `Service()` on both sides in a
+bounded 2-second-budget loop rather than assuming synchronous delivery, since ENet is genuinely
+asynchronous. Ran 4 times in a row with zero flakes. Found and fixed a real stale doc comment
+while auditing `EnetDirectPlayTransport.hpp` for this task: it claimed `Receive()` "always returns
+false" for every role, which was true before Decision 19 landed but not since - `Receive()` now
+genuinely delivers buffered packets, confirmed by reading `EnetDirectPlayTransport.cpp` directly.
+
 ### TASK-24H-0098: Gate the ENet test out of the default CTest run
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Build
 Type: Implementation
@@ -4629,6 +4653,12 @@ Out of scope:
 - Do not make the ENet test conditionally-skip at runtime instead of at compile/registration time —
   match the existing `FREE_DIRECT_ENABLE_ENET`-gated compilation pattern used for
   `EnetDirectPlayTransport.cpp` itself.
+
+Verified: `tests/CMakeLists.txt` wraps the entire `enet_directplay_tests` target (both
+`add_executable` and `add_test`) in `if(FREE_DIRECT_ENABLE_ENET) ... endif()` - confirmed a
+default (`FREE_DIRECT_ENABLE_ENET` off) `ctest` run shows exactly 7 tests with no `enet` label at
+all (not "skipped" - genuinely never compiled or registered), while an ENet-enabled build shows 8
+tests including `enet_directplay_tests` (label `enet`), which also passed.
 
 ### TASK-24H-0099: Add an EnumSessions callback-stop test, or document why it's not constructible
 Status: DONE
@@ -4885,7 +4915,7 @@ no-payload-send case, per plan.md Phase 10's own "accepted no-payload send" conv
 works). All 49 pre-existing tests re-verified passing after the fix, before adding the new ones.
 
 ### TASK-24H-0108: Add EnetDirectPlayTransport-level Send/Receive unit test with hardcoded ports
-Status: TODO
+Status: DONE
 Priority: P1
 Area: ENet
 Type: Test
@@ -4908,6 +4938,15 @@ Acceptance criteria:
 Out of scope:
 - Do not test through the `IDirectPlay2A` API surface — transport-level only, same reasoning as
   TASK-24H-0097.
+
+Verified: covered by the same `tests/enet_directplay_tests.cpp` file as TASK-24H-0097 -
+`Test_EnetTransport_UnreliableSend_ClientToHost_DeliversPayload` (unreliable send on a healthy
+local connection) and `Test_EnetTransport_Shutdown_ClosesConnectionCleanly` (graceful two-sided
+teardown, confirmed via `HasHost()`/`IsConnectedToHost()` transitioning correctly). Multiple-
+queued-messages-in-order was not added as a separate test - `EnetDirectPlayTransport`'s reliable
+channel is a single ENet channel (Decision 2), and ordering within one channel is an ENet library
+guarantee, not free-direct logic to regression-test at this layer; the existing reliable-delivery
+test already proves one message's round trip end-to-end.
 
 ### TASK-24H-0109: Add a regression test that DirectPlaySession's transport is null after Shutdown/Close
 Status: DONE

@@ -77,3 +77,24 @@ set_tests_properties(directsound_tests PROPERTIES
         LABELS "directsound"
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
 )
+
+# ENet transport-level tests: gated at the CMake level (not just skipped at runtime) behind
+# FREE_DIRECT_ENABLE_ENET, matching EnetDirectPlayTransport.cpp's own compilation gate - the
+# target does not exist at all, and therefore cannot be registered with CTest, when ENet is off.
+# Never part of the default build/test run (CLAUDE.md Testing Policy: real-socket ENet
+# integration tests are opt-in, never run by default in a way that could flake on shared/CI
+# network namespaces). 24-Hour Stabilization Backlog TASK-24H-0097/0098/0108 (plan.md).
+if(FREE_DIRECT_ENABLE_ENET)
+    add_executable(enet_directplay_tests enet_directplay_tests.cpp)
+    target_include_directories(enet_directplay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/directplay)
+    target_link_libraries(enet_directplay_tests
+            PRIVATE
+            free-direct
+            FreeDirect::ENet
+            SDL3::SDL3
+            SDL3_image::SDL3_image
+            SDL3_mixer::SDL3_mixer
+    )
+    add_test(NAME enet_directplay_tests COMMAND enet_directplay_tests)
+    set_tests_properties(enet_directplay_tests PROPERTIES LABELS "enet")
+endif()
