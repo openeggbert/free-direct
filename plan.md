@@ -2518,7 +2518,7 @@ Out of scope:
   per-file convention.
 
 ### TASK-24H-0020: Add a static_assert that DPID is exactly 4 bytes
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Headers
 Type: Test
@@ -2538,8 +2538,16 @@ Acceptance criteria:
 Out of scope:
 - Do not add static_asserts for struct fields that have no cited game-side layout dependency.
 
+Verified: Added `static_assert(sizeof(DPID) == 4, ...)` immediately after the `typedef DWORD DPID,
+*LPDPID;` line in `include/dplay.h`, citing `docs/directplay-callsite-audit.md` section 5. Built a
+full scratch config (`-DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`) with 0 errors
+(the assert trivially holds since `DPID` is `DWORD`, a 4-byte type on every supported platform);
+`ctest` still passes 7/7. This is a compile-time-only check with zero ABI/API-shape impact - the
+narrowest possible new declaration, consistent with TASK-24H-0025's finding below that no other
+public surface was added this session.
+
 ### TASK-24H-0021: Document the compile-only DirectDraw flag constants inline
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Headers
 Type: Documentation
@@ -2561,8 +2569,21 @@ Out of scope:
 - Do not remove these constants — `CLAUDE.md` allows unused-but-declared surface for link
   compatibility with the flag family a real call site needs.
 
+Verified: Re-confirmed the "no call site in either game" premise directly (grepped both sibling
+repos; only hits are the constants' own definitions inside free-eggbert's vendored, unused
+`dxsdk3/sdk/inc/ddraw.h` legacy SDK header - no actual `Blt()` call in either game's source sets
+any of these three flags). Added a Doxygen comment above each in `include/ddraw.h`. Went one step
+further than the task's literal template: `DDBLT_COLORFILL` and `DDBLT_KEYSRC` are actually
+interpreted by `DirectDraw.cpp`'s `Blt()` (verified via grep) and covered by
+`directdraw_tests.cpp`, so their comments say that explicitly rather than the generic "kept for
+API-shape completeness" wording, which is only accurate for `DDBLT_ROTATIONANGLE` (truly
+unimplemented and uncalled). Also found and documented, but did not fix (out of this task's
+explicit "no behavior change" scope, and currently inert either way): `DDBLT_ROTATIONANGLE`'s
+value (`0x01000000L`) does not match free-eggbert's own vendored SDK header (`0x00040000L`).
+Rebuilt and ran full `ctest` (7/7 pass) plus `header_hygiene` after the edit.
+
 ### TASK-24H-0022: Document the compile-only DirectPlay flag constants inline
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Headers
 Type: Documentation
@@ -2581,8 +2602,29 @@ Acceptance criteria:
 Out of scope:
 - Do not remove these constants.
 
+Verified with a corrected premise: this task's own evidence turned out to be **stale/incorrect**.
+Direct grep of `free-eggbert/src/network.cpp` found real call sites for all three: line ~114
+(`EnumSessionsCallback`) checks `dwFlags & DPESC_TIMEDOUT`, and line ~218 sets
+`desc.dwFlags = DPSESSION_KEEPALIVE | DPSESSION_MIGRATEHOST` when hosting. Writing "no call site"
+comments would have been actively false documentation (CLAUDE.md Documentation Policy: "must never
+claim compatibility that does not exist"), so the task's literal template was not applied as
+written. Instead, traced each flag's actual current behavior and wrote accurate comments: (1)
+`DPESC_TIMEDOUT` - real call site exists, but FreeDirect's own `EnumSessions()` is a synchronous
+loopback registry lookup with no timeout concept (Decision 18) and never sets this flag when
+invoking the callback, so the check is real but currently unreachable from FreeDirect's side, not
+a bug (`EnumSessions()` still terminates normally via `DP_OK`). (2) `DPSESSION_KEEPALIVE`/
+`DPSESSION_MIGRATEHOST` - real call sites exist, but grepped all of `src/directplay/` and confirmed
+`lpSessionDesc->dwFlags` (where these live in `DPSESSIONDESC2`) is never read anywhere in `Open()`
+- both are silently accepted and ignored, consistent with host migration being out of scope of the
+current 7 BLOCKED DirectPlay design questions. Both findings tagged in the header comments for
+pickup by TASK-24H-0094 (`docs/directplay-limitations.md`, not yet created - out of this task's own
+scope) rather than fixed, since implementing host migration or a synthesized timeout callback would
+be new DirectPlay behavior requiring the same Phase-0-style call-site-verification-before-code
+discipline CLAUDE.md requires, not a documentation-only change. Rebuilt and ran full `ctest` (7/7
+pass) plus `header_hygiene` after the edit.
+
 ### TASK-24H-0023: Document DSBCAPS_STATIC's real call site is in dead code only
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Headers
 Type: Documentation
@@ -2601,6 +2643,15 @@ Acceptance criteria:
 
 Out of scope:
 - Do not remove the constant; it costs nothing to keep and documents a real (if dead) call site.
+
+Verified: Unlike TASK-24H-0022, this task's premise checked out under direct verification. Grepped
+both sibling repos: `DSBCAPS_STATIC`'s only real-source reference in either game is
+`src/wave.cpp`. Confirmed "unreachable" precisely (not just asserted): `wave.cpp` is absent from
+both games' current `CMakeLists.txt` builds (present only in their legacy, unused `.vcxproj`
+files), and neither `LoadWave` nor `wave_ParseWaveMemory` (the only functions it defines) is called
+from anywhere else in either game's source tree. Added a Doxygen comment above the constant in
+`include/dsound.h` stating this precisely. Rebuilt and ran full `ctest` (7/7 pass) plus
+`header_hygiene` after the edit.
 
 ### TASK-24H-0024: Add a CTest-registered header-hygiene grep check
 Status: DONE
@@ -2636,7 +2687,7 @@ Confirmed the check has teeth by temporarily injecting a real violation
 and confirmed it passes clean.
 
 ### TASK-24H-0025: Verify no new public declaration lacks a cited call site or test justification
-Status: TODO
+Status: DONE
 Priority: P3
 Area: Headers
 Type: Verification
@@ -2657,6 +2708,21 @@ Acceptance criteria:
 
 Out of scope:
 - Do not add speculative public surface "for completeness" during this pass.
+
+Verified: Diffed `include/*.h` from `979bbbf^` (the commit immediately before
+`docs/audit-24h-free-direct.md` was first added - the true start of this entire 24-hour effort,
+spanning both the earlier session and this one) against the current working tree (including
+uncommitted changes), filtering out comment-only lines (`@brief`/`@note`/`Status:`/prose) to isolate
+structurally new declarations. Result: the **only** new declaration across the entire 24-hour
+effort is this session's own `static_assert(sizeof(DPID) == 4, ...)` (TASK-24H-0020) - a
+compile-time-only invariant check, not new API/ABI surface a consumer could call. Every other
+`include/` change across both sessions was either a `@note Status:` tag correction (STUB -> PARTIAL
+-> IMPLEMENTED, reflecting real implementation work landing behind already-existing pure-virtual
+method declarations and already-existing `#define` constants) or a `@brief`/inline comment
+clarifying an existing constant's real call-site status (TASK-24H-0021/0022/0023, this same task
+batch). No unjustified public surface was found. This is the intended, disciplined outcome of
+CLAUDE.md's scope policy, not a coincidence: this session's DirectDraw/DirectSound/DirectPlay work
+was entirely test-writing and internal (`src/`-only) hardening, never public-header expansion.
 
 ## DirectDraw tests and fixes
 

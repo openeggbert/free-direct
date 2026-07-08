@@ -150,8 +150,22 @@ extern "C" {
 #define DDSD_PIXELFORMAT 0x00001000L
 
 #define DDBLT_WAIT      0x00000010L
+/** @brief No call site in free-eggbert/planetblupi as of the 2026-07-08 audit. Unlike
+ *  DDBLT_ROTATIONANGLE below, this flag IS interpreted by Blt() (see DirectDraw.cpp) - the
+ *  implementation exists and is covered by directdraw_tests.cpp, it is simply never set by either
+ *  target game's real call sites. Kept implemented (not just declared) because DDBLT_KEYSRC below
+ *  shares the same Blt() code path and genuinely needs it. */
 #define DDBLT_COLORFILL 0x00000400L
+/** @brief No call site in free-eggbert/planetblupi as of the 2026-07-08 audit. Interpreted by
+ *  Blt() (see DirectDraw.cpp) for source color-key blits, same status as DDBLT_COLORFILL above:
+ *  implemented and test-covered, just never set by either target game's real call sites. */
 #define DDBLT_KEYSRC    0x00008000L
+/** @brief No call site in free-eggbert/planetblupi as of the 2026-07-08 audit, and unlike
+ *  DDBLT_COLORFILL/DDBLT_KEYSRC above, not interpreted anywhere in DirectDraw.cpp either - kept
+ *  only for API-shape completeness of the DDBLT_* flag family. Note: this value does not match
+ *  free-eggbert's own vendored dxsdk3/sdk/inc/ddraw.h (0x00040000L there vs. 0x01000000L here) -
+ *  harmless today since nothing reads this constant, but worth correcting against the real SDK
+ *  value before any future call site relies on it. */
 #define DDBLT_ROTATIONANGLE 0x01000000L
 
 #define DDBLTFAST_SRCCOLORKEY 0x00000001L

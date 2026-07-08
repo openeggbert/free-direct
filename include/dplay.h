@@ -89,8 +89,20 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 
 #define DPSEND_GUARANTEED 0x00000001L
 
+/** @brief Real call site: free-eggbert's network.cpp EnumSessionsCallback checks
+ *  `dwFlags & DPESC_TIMEDOUT` to detect end-of-enumeration. FreeDirect's own `EnumSessions()` is a
+ *  synchronous loopback registry lookup (docs/directplay-design.md Decision 18) with no timeout
+ *  concept, so it never sets this flag when invoking the callback - the check compiles and is
+ *  correct by value, but is presently unreachable from FreeDirect's side. Not a bug: EnumSessions()
+ *  still terminates normally (returns DP_OK after the loop) without it. Tracked for
+ *  docs/directplay-limitations.md (TASK-24H-0094). */
 #define DPESC_TIMEDOUT 0x00000001L
 
+/** @brief Real call sites: free-eggbert's network.cpp sets both flags in DPSESSIONDESC2::dwFlags
+ *  when hosting (`Open(DPOPEN_CREATE, ...)`). FreeDirect's `Open()` never reads
+ *  `lpSessionDesc->dwFlags` - both are silently accepted and ignored today (no host-migration
+ *  support exists at all, consistent with host routing/player-lost semantics being open BLOCKED
+ *  design questions per CLAUDE.md). Tracked for docs/directplay-limitations.md (TASK-24H-0094). */
 #define DPSESSION_KEEPALIVE   0x00000008L
 #define DPSESSION_MIGRATEHOST 0x00000004L
 /** @} */
@@ -109,6 +121,10 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
  * @note Status: PARTIAL
  */
 typedef DWORD DPID, *LPDPID;
+static_assert(sizeof(DPID) == 4,
+    "free-eggbert's event.cpp NetPlayer struct walk uses a hardcoded 32-byte pointer-arithmetic "
+    "stride derived from a 4-byte DPID (see docs/directplay-callsite-audit.md section 5); "
+    "widening DPID would silently break that stride.");
 
 /**
  * @brief Player/group display names used by DirectPlay APIs.

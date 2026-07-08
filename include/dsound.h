@@ -82,6 +82,12 @@ typedef struct IDirectSoundBuffer* LPDIRECTSOUNDBUFFER;
 #define DSBCAPS_CTRLFREQUENCY 0x00000020L
 #define DSBCAPS_CTRLPAN       0x00000040L
 #define DSBCAPS_CTRLVOLUME    0x00000080L
+/** @brief Referenced in both free-eggbert's and planetblupi's src/wave.cpp, but that file is dead
+ *  code in both games as of the 2026-07-08 audit: it is absent from both games' current
+ *  CMakeLists.txt build (only listed in their legacy, unused .vcxproj files), and no function it
+ *  defines (LoadWave, wave_ParseWaveMemory) is called from anywhere else in either game's source
+ *  tree. Kept implemented/accepted here regardless, since it costs nothing and documents a real
+ *  (if unreachable) call site. */
 #define DSBCAPS_STATIC        0x00000002L
 /** @} */
 
