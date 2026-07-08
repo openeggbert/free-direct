@@ -121,11 +121,24 @@ Current known limitations:
 Debug logging and performance options:
 
 * DirectSound debug logs can be enabled with `FREE_DIRECT_DEBUG_DSOUND=1`.
+* Extended DirectSound format logging can be enabled with `FREE_DIRECT_DEBUG_DSOUND_FORMAT=1`
+  (also implied by `FREE_DIRECT_DEBUG_DSOUND=1`).
 * DirectDraw debug logs can be enabled with `FREE_DIRECT_DEBUG_DDRAW=1`.
 * Presentation-path debug logs can be enabled with `FREE_DIRECT_DEBUG_PRESENTATION=1`.
 * Color-key diagnostics can be enabled with `FREE_DIRECT_DEBUG_COLORKEY=1`.
 * Optional one-time primary clear diagnostic can be enabled with `FREE_DIRECT_DEBUG_PRIMARY_CLEAR=1`.
 * Performance counters (presents/s, uploads/s, blts/s) can be enabled with `FREE_DIRECT_DEBUG_PERF=1`.
+* Memory/object-lifetime diagnostic counters (periodic RSS + live-object snapshot logging) can be
+  enabled at runtime with `FREE_DIRECT_DIAGNOSTICS=1`, but only take effect in a build configured
+  with `-DFREE_DIRECT_DIAGNOSTICS=ON` (CMake option, OFF by default) - the counters are compiled
+  out entirely otherwise, so the env var alone has no effect in a default build.
+* Each of the seven `FREE_DIRECT_DEBUG_*` flags above (`DDRAW`, `PRESENTATION`, `COLORKEY`, `PERF`,
+  `PRIMARY_CLEAR`, `DSOUND`, `DSOUND_FORMAT`) has a corresponding CMake force-enable option that
+  turns it on at compile time regardless of the environment - e.g. `-DFREE_DIRECT_FORCE_DEBUG_DDRAW=ON`,
+  `-DFREE_DIRECT_FORCE_DEBUG_DSOUND=ON` - useful for a CI diagnostic build where setting an
+  environment variable at every invocation is less convenient. OFF by default; the env var remains
+  the primary mechanism. (`FREE_DIRECT_DIAGNOSTICS` is unrelated to this force-enable group: it is
+  already its own CMake option gating compilation, as described above.)
 
 Color-key behavior (subset):
 

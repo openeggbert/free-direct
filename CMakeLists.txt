@@ -109,6 +109,21 @@ if(FREE_DIRECT_DIAGNOSTICS)
 endif()
 target_include_directories(free-direct PRIVATE src)
 
+# Optional CMake-level force-enable for the FREE_DIRECT_DEBUG_* runtime env-var flags
+# (24-Hour Stabilization Backlog TASK-24H-0119, plan.md). The env-var check each flag already
+# performs (SDL_getenv("FREE_DIRECT_DEBUG_...")) remains the primary/default mechanism - these
+# options are strictly additive, for cases (e.g. a CI diagnostic build) where forcing a flag on at
+# compile time is more convenient than setting an environment variable at every invocation. OFF by
+# default, so default builds are unaffected. See README.md's "Debug logging and performance
+# options" section for the full list of underlying FREE_DIRECT_DEBUG_* flags.
+foreach(free_direct_debug_flag DDRAW PRESENTATION COLORKEY PERF PRIMARY_CLEAR DSOUND DSOUND_FORMAT)
+    option(FREE_DIRECT_FORCE_DEBUG_${free_direct_debug_flag}
+            "Force-enable FREE_DIRECT_DEBUG_${free_direct_debug_flag} at compile time, regardless of the env var" OFF)
+    if(FREE_DIRECT_FORCE_DEBUG_${free_direct_debug_flag})
+        target_compile_definitions(free-direct PRIVATE FREE_DIRECT_DEBUG_${free_direct_debug_flag}=1)
+    endif()
+endforeach()
+
 # Optional sanitizer builds (24-Hour Stabilization Backlog TASK-24H-0010, plan.md). OFF by
 # default. Applied PRIVATE/directly to free-direct's own targets only (this file's FREE_DIRECT
 # demo executable, and tests/CMakeLists.txt's test executables via the same cache variable,

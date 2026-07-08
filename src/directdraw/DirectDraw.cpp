@@ -32,19 +32,35 @@ namespace {
             || SDL_strcasecmp(env, "on") == 0;
     }
 
+    // Each flag's runtime env-var check remains the primary/default mechanism; the #ifdef is an
+    // additive CMake-level force-on path (FREE_DIRECT_FORCE_DEBUG_* options, TASK-24H-0119) for
+    // cases like a CI diagnostic build where forcing a flag at compile time beats setting an env
+    // var at every invocation. Mirrors the pattern already used by DirectSound.cpp's dsDebugEnabled().
     bool IsDirectDrawDebugEnabled()
     {
+#ifdef FREE_DIRECT_DEBUG_DDRAW
+        return true;
+#else
         return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_DDRAW");
+#endif
     }
 
     bool IsPresentationDebugEnabled()
     {
+#ifdef FREE_DIRECT_DEBUG_PRESENTATION
+        return true;
+#else
         return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_PRESENTATION");
+#endif
     }
 
     bool IsColorKeyDebugEnabled()
     {
+#ifdef FREE_DIRECT_DEBUG_COLORKEY
+        return true;
+#else
         return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_COLORKEY");
+#endif
     }
 
     void DirectDrawLog(const char* format, ...)
@@ -105,7 +121,13 @@ namespace {
     bool IsPerfDebugEnabled()
         {
             static int v = -1;
-            if (v < 0) v = IsEnvFlagEnabled("FREE_DIRECT_DEBUG_PERF") ? 1 : 0;
+            if (v < 0) {
+#ifdef FREE_DIRECT_DEBUG_PERF
+                v = 1;
+#else
+                v = IsEnvFlagEnabled("FREE_DIRECT_DEBUG_PERF") ? 1 : 0;
+#endif
+            }
             return v != 0;
         }
 
@@ -120,6 +142,9 @@ namespace {
 
         bool IsDebugPrimaryClearEnabled()
     {
+#ifdef FREE_DIRECT_DEBUG_PRIMARY_CLEAR
+        return true;
+#else
         const char* env = SDL_getenv("FREE_DIRECT_DEBUG_PRIMARY_CLEAR");
         if (!env) {
             return false;
@@ -129,6 +154,7 @@ namespace {
             || SDL_strcasecmp(env, "true") == 0
             || SDL_strcasecmp(env, "yes") == 0
             || SDL_strcasecmp(env, "on") == 0;
+#endif
     }
 
     std::atomic<uint64_t> g_nextSurfaceId{1};

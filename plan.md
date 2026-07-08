@@ -5258,7 +5258,7 @@ all failure-path (not per-call success-path) logs, correctly left unconditional 
 code change made.
 
 ### TASK-24H-0119: Add CMake compile-definition overrides for FREE_DIRECT_DEBUG_* flags
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Diagnostics
 Type: Implementation
@@ -5283,8 +5283,31 @@ Out of scope:
 - Do not remove the env-var-based runtime toggle — it remains the primary mechanism per existing
   design.
 
+Verified: Grepped `src/` for every `FREE_DIRECT_DEBUG_*`/`SDL_getenv` read (7 flags found: DDRAW,
+PRESENTATION, COLORKEY, PERF, PRIMARY_CLEAR in `DirectDraw.cpp`; DSOUND, DSOUND_FORMAT in
+`DirectSound.cpp`). `DirectSound.cpp` already had `#ifdef FREE_DIRECT_DEBUG_DSOUND[_FORMAT]`
+compile-time override support with no CMake option wired to it; `DirectDraw.cpp` had neither.
+Added matching `#ifdef` short-circuits to all 5 DirectDraw flag-check functions (mirroring
+`DirectSound.cpp`'s existing pattern: `#ifdef` forces `true`, else falls through to the existing
+runtime env-var check - additive, not a replacement). Added a `foreach` loop in the root
+`CMakeLists.txt` defining `FREE_DIRECT_FORCE_DEBUG_{DDRAW,PRESENTATION,COLORKEY,PERF,
+PRIMARY_CLEAR,DSOUND,DSOUND_FORMAT}` options (OFF by default), each adding
+`target_compile_definitions(free-direct PRIVATE FREE_DIRECT_DEBUG_<X>=1)` when ON. Verified the
+mechanism actually works, not just compiles: built two separate scratch configs, one with
+`-DFREE_DIRECT_FORCE_DEBUG_DDRAW=ON` and one with `-DFREE_DIRECT_FORCE_DEBUG_DSOUND=ON` (both
+`-DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`), and ran `directdraw_tests`/
+`directsound_tests` in each with the corresponding env var explicitly unset. Both builds produced
+exactly one failing check each - `directdraw_tests.cpp`'s and `directsound_tests.cpp`'s own
+zero-log regression guards (`Test_BltFast_NoUnconditionalLogOutput_WhenDebugFlagsUnset`,
+`Test_PlayLockUnlock_NoUnconditionalLogOutput_WhenDebugFlagsUnset`) - proving logs now fire purely
+from the compile-time flag with the runtime env var unset, i.e. exactly the acceptance criterion
+("logs appear even with the env var unset"), and that failure was the *only* failure in each run
+(no unrelated breakage). Then rebuilt a fully-default scratch config (no `FORCE_DEBUG` options set)
+and confirmed `ctest` still passes 7/7 clean, proving default builds are unaffected. All scratch
+directories removed after verification.
+
 ### TASK-24H-0120: Consolidate FREE_DIRECT_DEBUG_* documentation in one place
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
@@ -5304,6 +5327,17 @@ Acceptance criteria:
 
 Out of scope:
 - Do not invent new flags — documentation-completeness only.
+
+Verified: Cross-checked `grep -rn "FREE_DIRECT_DEBUG_\|FREE_DIRECT_DIAGNOSTICS\|FREE_DIRECT_TARGET_FPS\|
+FREE_DIRECT_ENABLE_VSYNC" src/` against README.md's "Debug logging and performance options"
+section. Found two undocumented flags: `FREE_DIRECT_DEBUG_DSOUND_FORMAT` (env-var read in
+`DirectSound.cpp`, never mentioned in README) and `FREE_DIRECT_DIAGNOSTICS` (both its pre-existing
+CMake option and its runtime env-var gate in `Diagnostics.cpp`, also never mentioned). Added both
+to README, plus documented the 7 new `FREE_DIRECT_FORCE_DEBUG_*` CMake options this session's
+TASK-24H-0119 introduced (with a clarifying note that `FREE_DIRECT_DIAGNOSTICS` is a materially
+different mechanism - compile-gate, not force-enable-regardless-of-env - so it isn't lumped into
+that group). Re-ran the same grep/cross-check afterward: every source-level flag name now has a
+matching README mention with no extras invented beyond what source actually reads.
 
 ## Documentation
 
