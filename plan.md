@@ -3790,7 +3790,7 @@ Out of scope:
 - None.
 
 ### TASK-24H-0080: Add Receive() buffer-size-query test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectPlay
 Type: Test
@@ -3811,8 +3811,12 @@ Acceptance criteria:
 Out of scope:
 - Do not change the buffer-size-query contract — test existing behavior only.
 
+Verified: test added, exercised through the real public `IDirectPlay2A::Receive()` over a loopback
+self-send (not just the whitebox `DirectPlayMessageQueue::TryReceive()` call already covered by
+`Test_ReceiveWithTooSmallBuffer_PreservesPacket`). Full suite: 49/49 passing.
+
 ### TASK-24H-0081: Add Release()-without-Close() cleanup test
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectPlay
 Type: Test
@@ -3833,6 +3837,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change `Release()`'s behavior — test existing behavior only.
+
+Verified: test added, proving both that a fresh `EnumSessions` no longer finds the released
+session and that a brand-new host can rebind the same fixed loopback port. Full suite: 49/49
+passing.
 
 ### TASK-24H-0082: Add CreatePlayer malformed DPNAME.dwSize test
 Status: TODO
@@ -4090,7 +4098,7 @@ Out of scope:
   question is resolved.
 
 ### TASK-24H-0092: Add a characterization test for the host DPID-0 self-send/broadcast collision
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectPlay
 Type: Test
@@ -4114,6 +4122,12 @@ Acceptance criteria:
 
 Out of scope:
 - Do not implement real broadcast delivery in this task. Do not change what `idTo == 0` means.
+
+Verified: `Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf` added, reproducing free-eggbert's
+exact `Send(m_dpid, 0, ...)` call shape from the host role. Confirms the host's own `Receive()`
+gets the message while the connected remote client's `Receive()` returns `DPERR_NOMESSAGES`. Full
+suite: 49/49 passing. The DPID-0 semantics question itself remains BLOCKED (TASK-24H-0131) and was
+not decided.
 
 ### TASK-24H-0093: Add tests for DirectPlayEnumerateA/W's current stub behavior
 Status: TODO

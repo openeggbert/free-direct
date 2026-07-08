@@ -1253,6 +1253,149 @@ void Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer() {
     CHECK(parsed->payloadLength == 2);
 }
 
+// 24-Hour Stabilization Backlog TASK-24H-0092 (plan.md), docs/audit-24h-free-direct.md §1/§6.
+//
+// Characterization test, not a correctness test: it locks in today's *actual* behavior so a
+// future change to broadcast semantics is a deliberate, visible diff here rather than a silent
+// behavior change. It does not assert this behavior is correct - it is arguably a real bug.
+//
+// docs/directplay-design.md Decision 3 assigns DPID 0 to the host's own first local player.
+// free-eggbert's only reachable Send() call pattern is Send(m_dpid, 0, ...) - a broadcast to
+// DPID 0. When the HOST makes that exact call, idTo (0) == idFrom (0), so DirectPlay2AImpl::Send()
+// takes the self-send branch (Decision 12: self-send bypasses the transport entirely) instead of
+// reaching any remote client. This test proves exactly that: the host's own Receive() gets the
+// message, but a connected remote client's Receive() does not.
+void Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(hostPlayer == 0); // Decision 3: the host's first local player gets DPID 0
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    // Drives the host's pending-connection assignment loop and the join handshake for real.
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    pollSize = sizeof(pollBuf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+
+    // The exact call shape of free-eggbert's src/network.cpp:254 (Send(m_dpid, 0, ...)), made by
+    // the host, whose own m_dpid-equivalent (hostPlayer) is also 0.
+    const char msg[] = "broadcast-shaped";
+    CHECK(hostDp2->Send(hostPlayer, 0, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
+
+    // Today's actual behavior: only the host itself receives it (self-send, Decision 12) ...
+    char hostBuf[32] = {};
+    DWORD hostBufSize = sizeof(hostBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, hostBuf, &hostBufSize) == DP_OK);
+    CHECK(hostBufSize == sizeof(msg));
+    CHECK(from == 0 && to == 0);
+    CHECK(std::memcmp(hostBuf, msg, sizeof(msg)) == 0);
+
+    // ... the connected remote client never sees it, even though a real broadcast should have
+    // delivered it there too.
+    char clientBuf[32] = {};
+    DWORD clientBufSize = sizeof(clientBuf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, clientBuf, &clientBufSize) ==
+          DPERR_NOMESSAGES);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0080 (plan.md): Receive()'s buffer-size-query contract
+// (lpData == nullptr && *lpdwDataSize == 0 reports the required size without dequeuing) is
+// implemented in DirectPlayMessageQueue::TryReceive() (exercised directly by
+// Test_ReceiveWithTooSmallBuffer_PreservesPacket above) but had no test going through the real
+// public IDirectPlay2A::Receive() end-to-end. This one does, over a loopback self-send.
+void Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "query-my-size";
+    const DWORD msgLen = sizeof(msg);
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, (LPVOID)msg, msgLen) == DP_OK);
+
+    // Buffer-size query: null data pointer, zero size.
+    DPID from = 0, to = 0;
+    DWORD querySize = 0;
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL, nullptr, &querySize) == DP_OK);
+    CHECK(querySize == msgLen);
+
+    // The message must still be queued - a real receive right after gets the same payload.
+    char buf[32] = {};
+    DWORD size = sizeof(buf);
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(size == msgLen);
+    CHECK(std::memcmp(buf, msg, msgLen) == 0);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0081 (plan.md): Release()'s defensive cleanup path for a
+// caller that never called Close() first (DirectPlay.cpp's Release() unregisters from the
+// EnumSessions registry and shuts down the transport unconditionally on last release) had no test
+// proving it actually runs. Mirrors Test_LoopbackShutdown_UnregistersPortForReuse's port-reuse
+// proof, but through the public IDirectPlay2A API rather than the whitebox transport.
+void Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication.Data1 = 0xCAFEF00D;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    // Release() WITHOUT a prior Close() call - the defensive cleanup path under test.
+    hostDp2->Release();
+    hostDp->Release();
+
+    // A fresh instance must see the registry/port as fully cleaned up: EnumSessions finds
+    // nothing, and a brand-new host can bind the same (fixed) loopback port again.
+    LPDIRECTPLAY checkDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &checkDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A checkDp2 = nullptr;
+    CHECK(checkDp->QueryInterface(IID_IDirectPlay2A, (void**)&checkDp2) == DP_OK);
+
+    EnumSessionsResult result;
+    CHECK(checkDp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &result, 0) == DP_OK);
+    CHECK(result.callCount == 0);
+
+    DPSESSIONDESC2 newDesc{};
+    std::memset(&newDesc, 0, sizeof(newDesc));
+    newDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(checkDp2->Open(&newDesc, DPOPEN_CREATE) == DP_OK); // proves the port was freed
+
+    checkDp2->Release();
+    checkDp->Release();
+}
+
 } // namespace
 
 int main() {
@@ -1302,6 +1445,9 @@ int main() {
     Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer();
     Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength();
     Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer();
+    Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf();
+    Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming();
+    Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectPlay tests passed.\n");
