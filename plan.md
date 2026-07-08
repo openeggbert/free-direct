@@ -1514,9 +1514,14 @@ single-session-at-a-time design (see above), not a shortfall in the implementati
 Goal: give player creation, naming, and removal real, race-free semantics consistent with the
 Phase 0 DPID-vs-index finding.
 
-- [ ] Implement stable DPID allocation in `DirectPlaySession`/`DirectPlayPlayer`, using the
+- [x] Implement stable DPID allocation in `DirectPlaySession`/`DirectPlayPlayer`, using the
       strategy documented in Phase 0/Phase 6 (host-assigned sequential small integers in join
-      order).
+      order). **Reconciled 2026-07-08 (TASK-24H-0088):** already satisfied by
+      `DirectPlaySession::nextPlayerId`, a sequential allocator starting at 0
+      (`docs/directplay-design.md` Decision 3), consumed by both `CreatePlayer()` (local players)
+      and `Receive()`'s pending-connection assignment loop (remote players) — checked off now that
+      this checkbox-drift finding from the 24-Hour Stabilization Backlog's reconciliation has been
+      confirmed against current code, not assumed.
 - [x] Reserve an invalid DPID value (`0`, matching real DirectPlay's `DPID_SYSMSG`/
       `DPID_ALLPLAYERS` convention) so it is never assigned to a real player — **and explicitly
       resolve the conflict** with Phase 0's finding that `free-eggbert`'s receive-side code
@@ -4026,7 +4031,7 @@ Out of scope:
 - Do not modify test logic while wiring — wiring only.
 
 ### TASK-24H-0077: Add DirectPlayCreate failure-path tests
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4049,8 +4054,11 @@ Out of scope:
 - Do not test COM aggregation support itself — `DPERR_NOAGGREGATION` rejection is the only
   aggregation-related behavior in scope.
 
+Verified: both tests added exactly as named; confirms `*lplpDP` is zeroed before the `pUnkOuter`
+check fires. Total test count: 49 -> 61 across this whole batch (see TASK-24H-0110).
+
 ### TASK-24H-0078: Add QueryInterface unknown-GUID test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4070,8 +4078,12 @@ Acceptance criteria:
 Out of scope:
 - Do not test `IID_IDirectPlay` acceptance here — already covered by existing tests.
 
+Verified: `Test_QueryInterface_UnknownGuid_ReturnsNoInterfaceAndNullsOutParam` added, using a
+sentinel non-null pointer value beforehand to prove `*ppvObject` is actively nulled, not just left
+untouched.
+
 ### TASK-24H-0079: Add QueryInterface null-ppvObject test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4089,6 +4101,8 @@ Acceptance criteria:
 
 Out of scope:
 - None.
+
+Verified: added and passing.
 
 ### TASK-24H-0080: Add Receive() buffer-size-query test
 Status: DONE
@@ -4144,7 +4158,7 @@ session and that a brand-new host can rebind the same fixed loopback port. Full 
 passing.
 
 ### TASK-24H-0082: Add CreatePlayer malformed DPNAME.dwSize test
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4163,6 +4177,8 @@ Acceptance criteria:
 
 Out of scope:
 - None.
+
+Verified: added and passing.
 
 ### TASK-24H-0083: Fix the stale file-level `@note Status: STUB` comment in include/dplay.h
 Status: DONE
@@ -4253,7 +4269,7 @@ Out of scope:
 Verified: all three `IDirectPlay` method comments updated to `IMPLEMENTED`.
 
 ### TASK-24H-0086: Reconcile plan.md Phase 6 checkbox state against merged Decisions 10/18
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Cleanup
@@ -4277,8 +4293,14 @@ Out of scope:
 - Do not check the still-genuinely-blocked join-rejection-addressing box (structurally blocked per
   Phase 6's own text) — that one stays unchecked.
 
+Verified: re-read all of Phase 6's checkboxes against current code. **No drift found** — every
+task whose work is demonstrably complete was already checked `[x]` (including the Decision 10/18
+items this task named), and the one structurally-blocked task (`JoinReject` addressing) is
+correctly still unchecked. This task's premise (undercounted progress) turned out to already be
+resolved by the time this backlog item was reached; no new checkbox changes were needed here.
+
 ### TASK-24H-0087: Reconcile plan.md Phase 7 checkbox state against merged Decisions 11/13/16
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Cleanup
@@ -4299,8 +4321,14 @@ Acceptance criteria:
 Out of scope:
 - Do not check any ENet-joining-related box — that work does not exist yet.
 
+Verified: re-read all of Phase 7's checkboxes against current code. **No drift found** — the
+loopback-side items (join-request send, join-accepted receive, host-assigned-ID adoption, the
+three loopback tests) were already checked `[x]`, and the genuinely-unresolved ENet-side items
+(host-address resolution, `Connect()` for ENet, session-descriptor sync, join timeout,
+`DPERR_TIMEOUT` distinction) are correctly still unchecked. No new checkbox changes were needed.
+
 ### TASK-24H-0088: Reconcile plan.md Phase 9's DPID-allocation-strategy checkbox
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Cleanup
@@ -4323,8 +4351,12 @@ Out of scope:
 - Do not check any other Phase 9 box in this task — see TASK-24H-0136/0137 for the
   still-blocked ones.
 
+Verified: checked Phase 9's "Implement stable DPID allocation..." box, citing
+`DirectPlaySession::nextPlayerId` and Decision 3 directly in the annotation. This was the one
+genuine checkbox-drift finding across Phases 6/7/9 (0086/0087 found none).
+
 ### TASK-24H-0089: Annotate Phase 7's join-timeout tasks to reflect the chosen asynchronous join model
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -4348,8 +4380,13 @@ Acceptance criteria:
 Out of scope:
 - Do not re-litigate the async-vs-blocking design choice — it's already decided (Decision 16).
 
+Verified: the join-timeout task in Phase 7 was already annotated with the async-model explanation
+and a Decision 16 citation when reached (a prior session's implementation work had already added
+it alongside the code change) — no further edit needed, confirmed the existing annotation meets
+this task's acceptance criteria exactly.
+
 ### TASK-24H-0090: Annotate Phase 9's "reserve invalid DPID value 0" task with its actual resolution
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
@@ -4371,6 +4408,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change the DPID-0 semantics — documentation clarity only.
+
+Verified: the existing annotation (Phase 9, "Reserve an invalid DPID value..." box) already clearly
+cites Decision 3 and explains the direction of resolution in detail - confirmed it meets this
+task's acceptance criteria exactly, no further edit needed.
 
 ### TASK-24H-0091: Add DPID_ALLPLAYERS and DPID_SYSMSG constants to include/dplay.h
 Status: BLOCKED
@@ -4431,7 +4472,7 @@ suite: 49/49 passing. The DPID-0 semantics question itself remains BLOCKED (TASK
 not decided.
 
 ### TASK-24H-0093: Add tests for DirectPlayEnumerateA/W's current stub behavior
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4453,6 +4494,9 @@ Out of scope:
 - Do not implement real provider enumeration in this task — that's a separate, larger task
   (TASK-24H-0100) requiring `CNetwork::CreateProvider`'s bound-check semantics to be matched
   exactly.
+
+Verified: both tests added, using a callback that increments a counter and returns `TRUE` (so if a
+future change ever did invoke it, the test would fail loudly rather than silently passing).
 
 ### TASK-24H-0094: Create docs/directplay-limitations.md
 Status: TODO
@@ -4587,7 +4631,7 @@ Out of scope:
   `EnetDirectPlayTransport.cpp` itself.
 
 ### TASK-24H-0099: Add an EnumSessions callback-stop test, or document why it's not constructible
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Test
@@ -4612,6 +4656,12 @@ Acceptance criteria:
 Out of scope:
 - Do not redesign the loopback registry to support multiple simultaneous sessions per process just
   to make this test possible — that's a larger architectural change outside this task's scope.
+
+Verified as genuinely not constructible (confirmed by re-reading `Open()`'s fixed-port `Listen()`
+call and `Test_LoopbackListen_OnAlreadyRegisteredPort_Fails`'s proof that a second `Listen()` on
+the same port fails). Added this task's ID as an explicit citation to the existing explanatory
+comment above `Test_EnumSessions_FindsOneHostedSession` in `tests/directplay_tests.cpp`, satisfying
+the "document why, citing this task ID" acceptance criteria without a code/behavior change.
 
 ### TASK-24H-0100: Implement real DirectPlayEnumerateA/W provider enumeration
 Status: TODO
@@ -4640,7 +4690,7 @@ Out of scope:
 - Do not enumerate more than one provider. Do not implement real Windows service-provider discovery.
 
 ### TASK-24H-0101: Add a test asserting Close() is idempotent
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4660,8 +4710,11 @@ Acceptance criteria:
 Out of scope:
 - Do not change `Close()`'s behavior unless the test reveals a crash or corruption.
 
+Verified: `Test_Close_CalledTwice_SecondCallIsSafe` added, confirming both calls return `DP_OK`
+with no crash.
+
 ### TASK-24H-0102: Add a test asserting Send() to an invalid DPID returns DPERR_INVALIDPLAYER
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4681,8 +4734,14 @@ Acceptance criteria:
 Out of scope:
 - Do not test the DPID-0 broadcast ambiguity here — that's TASK-24H-0092's characterization test.
 
+Already satisfied by pre-existing tests, confirmed by re-reading `tests/directplay_tests.cpp`:
+`Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer` and
+`Test_SendFromUnknownLocalPlayer_ReturnsInvalidPlayer` already cover exactly this (recipient and
+sender halves respectively), predating this backlog. No new test needed - marking DONE with this
+citation rather than adding a duplicate.
+
 ### TASK-24H-0103: Add a test asserting oversized-payload rejection is consistent across self-send and unicast
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4703,8 +4762,12 @@ Out of scope:
 - Do not change the payload size limit (4096 bytes) without evidence a real call site needs more —
   `free-eggbert`'s fixed 500-byte receive buffer means this limit has ample headroom already.
 
+Verified: `Test_SelfSend_OversizedPayload_ReturnsSendTooBig` added, confirming the same
+`kMaxPayloadBytes` limit applies to the self-send path as the existing unicast test already
+confirmed for that path.
+
 ### TASK-24H-0104: Add a test asserting Receive() on an empty queue returns DPERR_NOMESSAGES for the host role too
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4726,8 +4789,12 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+Already satisfied: `Test_ReceiveOnEmptyQueue_ReturnsNoMessages` (pre-existing, in the file since
+Phase 3) opens with `DPOPEN_CREATE` — the host role — and asserts `DPERR_NOMESSAGES` on an empty
+queue. No change needed; marking DONE with this citation.
+
 ### TASK-24H-0105: Add a test asserting Send/Receive return DPERR_NOCONNECTION after Close()
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4749,8 +4816,12 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+Already satisfied: `Test_LoopbackClose_SendAndReceiveReportNoConnection` (pre-existing) already
+asserts both `Send()` and `Receive()` return `DPERR_NOCONNECTION` after `Close()`. No change
+needed; marking DONE with this citation.
+
 ### TASK-24H-0106: Sweep IDirectPlay2A methods for missing null-pointer checks
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Audit
@@ -4775,8 +4846,19 @@ Out of scope:
 - Do not add null checks for parameters no real call site or test exercises with null, without
   first confirming real DirectPlay's contract actually requires rejecting null there.
 
+Verified with a real finding: swept `EnumSessions`, `Open`, `CreatePlayer`, `Send`, `Receive` in
+`DirectPlay.cpp`. **Found one genuine gap**: `Send()` never checked `lpData` for null before
+pointer arithmetic (`bytes + dwDataSize` in the self-send path, `payloadBytes + dwDataSize` in the
+unicast path) when `dwDataSize > 0` - undefined behavior on a null `lpData` with a nonzero size, a
+real crash risk. All other pointer parameters were already correctly handled: `lpEnumSessionsDesc`
+(optional, matches real DirectPlay's "enumerate all" contract), `lpSessionDesc` (checked),
+`lpPlayerName` (optional, checked when present), `lpidPlayer`/`lpidFrom`/`lpidTo` (output params,
+correctly treated as optional before writing), `lpdwDataSize` (checked inside `TryReceive`). Fixed
+in `DirectPlay.cpp` (see TASK-24H-0107) rather than only documented, since this is hardening
+existing validated behavior against a real crash, not new API surface.
+
 ### TASK-24H-0107: Add tests for any null-pointer gap found in TASK-24H-0106
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Test
@@ -4794,6 +4876,13 @@ Acceptance criteria:
 
 Out of scope:
 - Do not fix gaps unrelated to null-pointer handling while doing this sweep — file separate tasks.
+
+Verified: added `if (!lpData && dwDataSize > 0) return DPERR_INVALIDPARAMS;` once in `Send()`,
+covering both the self-send and unicast branches (both come after this check). Two tests added:
+`Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams` (proves the fix) and
+`Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk` (proves the still-valid null+zero-size
+no-payload-send case, per plan.md Phase 10's own "accepted no-payload send" convention, still
+works). All 49 pre-existing tests re-verified passing after the fix, before adding the new ones.
 
 ### TASK-24H-0108: Add EnetDirectPlayTransport-level Send/Receive unit test with hardcoded ports
 Status: TODO
@@ -4821,7 +4910,7 @@ Out of scope:
   TASK-24H-0097.
 
 ### TASK-24H-0109: Add a regression test that DirectPlaySession's transport is null after Shutdown/Close
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Test
@@ -4845,8 +4934,16 @@ Out of scope:
 - Do not add new public API surface to make this internal state observable — internal/whitebox
   testing only, and only if it doesn't require touching `include/dplay.h`.
 
+Verified via the indirect proof this task's own text anticipated (no test-only accessor exists,
+and none was added, per the out-of-scope note): `Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown`
+confirms that after `Close()`, a brand-new host can immediately rebind the same fixed loopback
+port - which could only succeed if the closed session's transport genuinely released the port
+binding, the same indirect-proof pattern `Test_LoopbackShutdown_UnregistersPortForReuse` already
+established at the transport level and `Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry`
+established for `Release()`.
+
 ### TASK-24H-0110: Re-verify the "46 tests" count is accurate after all DirectPlay test additions in this backlog
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Tests
 Type: Verification
@@ -4866,6 +4963,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not round or approximate the count.
+
+Verified: `grep -c "^void Test_" tests/directplay_tests.cpp` reports **61** (up from 49 at the
+start of this continuation session, 46 at the start of the prior session). `NEXT.md` updated to
+match exactly (see this session's NEXT.md update).
 
 ## Diagnostics/logging
 

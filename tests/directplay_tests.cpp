@@ -759,7 +759,9 @@ void Test_EnumSessions_FindsZeroSessions() {
 // prevent a second invocation even when two sessions exist") is not implemented - it cannot be,
 // under the current design: only one loopback-hosted session can exist per process at a time
 // (Decisions 11/12's fixed-port constraint), so there is no way to construct a real
-// two-simultaneous-sessions scenario to exercise the stop-on-FALSE behavior against.
+// two-simultaneous-sessions scenario to exercise the stop-on-FALSE behavior against
+// (24-Hour Stabilization Backlog TASK-24H-0099, plan.md: this comment is that task's required
+// documented-constructibility-limitation deliverable).
 void Test_EnumSessions_FindsOneHostedSession() {
     LPDIRECTPLAY hostDp = nullptr;
     CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
@@ -1396,6 +1398,187 @@ void Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry() {
     checkDp->Release();
 }
 
+// 24-Hour Stabilization Backlog TASK-24H-0077 (plan.md): DirectPlayCreate's failure paths were
+// previously verified only via uncommitted scratch harnesses (Phase 1/2 notes).
+void Test_DirectPlayCreate_NullOutParam_ReturnsInvalidParams() {
+    CHECK(DirectPlayCreate(nullptr, nullptr, nullptr) == DPERR_INVALIDPARAMS);
+}
+
+void Test_DirectPlayCreate_NonNullOuter_ReturnsNoAggregation() {
+    LPDIRECTPLAY dp = nullptr;
+    int dummyOuter = 0;
+    CHECK(DirectPlayCreate(nullptr, &dp, reinterpret_cast<IUnknown*>(&dummyOuter)) == DPERR_NOAGGREGATION);
+    CHECK(dp == nullptr); // *lplpDP is zeroed before the pUnkOuter check
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0078/0079 (plan.md): QueryInterface's rejection paths
+// were previously exercised only with the correct IID_IDirectPlay2A value across all other tests.
+void Test_QueryInterface_UnknownGuid_ReturnsNoInterfaceAndNullsOutParam() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+
+    GUID unknownGuid{0x11111111, 0x2222, 0x3333, {0, 0, 0, 0, 0, 0, 0, 0}};
+    void* out = reinterpret_cast<void*>(0x1); // sentinel - must be nulled, not left untouched
+    CHECK(dp->QueryInterface(unknownGuid, &out) == E_NOINTERFACE);
+    CHECK(out == nullptr);
+
+    dp->Release();
+}
+
+void Test_QueryInterface_NullOutParam_ReturnsInvalidParams() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, nullptr) == DPERR_INVALIDPARAMS);
+    dp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0082 (plan.md): CreatePlayer validates DPNAME.dwSize
+// when a non-null name is given (DirectPlay.cpp), but no test exercised the rejection path.
+void Test_CreatePlayer_MalformedDpNameSize_ReturnsInvalidParams() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPNAME name{};
+    std::memset(&name, 0, sizeof(name));
+    name.dwSize = sizeof(DPNAME) - 1; // malformed
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, &name, nullptr, nullptr, 0, 0) == DPERR_INVALIDPARAMS);
+
+    dp2->Release();
+    dp->Release();
+}
+
+namespace {
+BOOL FailIfCalledEnumDpCallbackA(LPGUID, LPSTR, DWORD, DWORD, LPVOID lpContext) {
+    auto* callCount = static_cast<int*>(lpContext);
+    ++(*callCount);
+    return TRUE;
+}
+BOOL FailIfCalledEnumDpCallbackW(LPGUID, LPWSTR, DWORD, DWORD, LPVOID lpContext) {
+    auto* callCount = static_cast<int*>(lpContext);
+    ++(*callCount);
+    return TRUE;
+}
+} // namespace
+
+// 24-Hour Stabilization Backlog TASK-24H-0093 (plan.md): DirectPlayEnumerateA/W are genuinely
+// still stubs (docs/directplay-design.md Decision 1: decided, not yet implemented) - these tests
+// document today's exact behavior (DP_OK, callback invoked zero times) so a future implementation
+// of Decision 1 is a deliberate, visible diff here, not a silent behavior change.
+void Test_DirectPlayEnumerateA_InvokesCallbackZeroTimes() {
+    int callCount = 0;
+    CHECK(DirectPlayEnumerateA(FailIfCalledEnumDpCallbackA, &callCount) == DP_OK);
+    CHECK(callCount == 0);
+}
+
+void Test_DirectPlayEnumerateW_InvokesCallbackZeroTimes() {
+    int callCount = 0;
+    CHECK(DirectPlayEnumerateW(FailIfCalledEnumDpCallbackW, &callCount) == DP_OK);
+    CHECK(callCount == 0);
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0101 (plan.md): no test verified calling Close() twice
+// in a row is safe.
+void Test_Close_CalledTwice_SecondCallIsSafe() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    CHECK(dp2->Close() == DP_OK);
+    CHECK(dp2->Close() == DP_OK); // second call must not crash or misbehave
+
+    dp2->Release();
+    dp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0103 (plan.md): oversized-payload rejection was only
+// covered for the remote-unicast path (Test_SendOversizedPayloadToRemotePlayer_ReturnsSendTooBig
+// above) - this confirms the same limit applies to the self-send path too.
+void Test_SelfSend_OversizedPayload_ReturnsSendTooBig() {
+    using namespace free_direct_directplay;
+
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    std::vector<char> oversized(DirectPlayMessageQueue::kMaxPayloadBytes + 1, 'x');
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, oversized.data(),
+                     static_cast<DWORD>(oversized.size())) == DPERR_SENDTOOBIG);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0106/0107 (plan.md): a real null-pointer gap found by
+// sweeping IDirectPlay2A's methods - Send() never checked lpData for null before pointer
+// arithmetic (`bytes + dwDataSize`) when dwDataSize > 0, undefined behavior on a null lpData with
+// a nonzero size. Fixed in DirectPlay.cpp (a single check covering both the self-send and
+// unicast paths); these tests prove the fix and the still-valid null+zero-size no-payload case.
+void Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, nullptr, 5) == DPERR_INVALIDPARAMS);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// plan.md Phase 10: "Validate a null payload with zero length ... as an accepted no-payload
+// send" - a null lpData with dwDataSize == 0 must still succeed (no bytes to read, no UB).
+void Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, nullptr, 0) == DP_OK);
+
+    char buf[8] = {};
+    DPID from = 0, to = 0;
+    DWORD size = sizeof(buf);
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(size == 0);
+
+    dp2->Release();
+    dp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0109 (plan.md): DirectPlaySession's transport being
+// nulled after Close() cannot be observed via whitebox access (DirectPlay2AImpl is in an
+// anonymous namespace with no separate header) - this proves it indirectly instead, the same way
+// Test_LoopbackShutdown_UnregistersPortForReuse proves it at the transport level: if Close()
+// genuinely shuts down and releases the transport (rather than leaking the port binding), a new
+// host can bind the same fixed loopback port immediately afterward.
+void Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+    CHECK(dp2->Close() == DP_OK);
+
+    LPDIRECTPLAY dp2Inst = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp2Inst, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2Second = nullptr;
+    CHECK(dp2Inst->QueryInterface(IID_IDirectPlay2A, (void**)&dp2Second) == DP_OK);
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2Second->Open(&desc, DPOPEN_CREATE) == DP_OK); // proves the port was freed
+
+    dp2Second->Release();
+    dp2Inst->Release();
+    dp2->Release();
+    dp->Release();
+}
+
 } // namespace
 
 int main() {
@@ -1448,6 +1631,18 @@ int main() {
     Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf();
     Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming();
     Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry();
+    Test_DirectPlayCreate_NullOutParam_ReturnsInvalidParams();
+    Test_DirectPlayCreate_NonNullOuter_ReturnsNoAggregation();
+    Test_QueryInterface_UnknownGuid_ReturnsNoInterfaceAndNullsOutParam();
+    Test_QueryInterface_NullOutParam_ReturnsInvalidParams();
+    Test_CreatePlayer_MalformedDpNameSize_ReturnsInvalidParams();
+    Test_DirectPlayEnumerateA_InvokesCallbackZeroTimes();
+    Test_DirectPlayEnumerateW_InvokesCallbackZeroTimes();
+    Test_Close_CalledTwice_SecondCallIsSafe();
+    Test_SelfSend_OversizedPayload_ReturnsSendTooBig();
+    Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams();
+    Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk();
+    Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectPlay tests passed.\n");

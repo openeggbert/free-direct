@@ -1,7 +1,8 @@
 /**
  * @file DirectPlay.cpp
- * @brief Narrow DirectPlay subset reimplementation (Stubs).
- * @note Status: STUB
+ * @brief Narrow DirectPlay subset reimplementation over a real loopback (and, partially, ENet)
+ *        transport. See include/dplay.h for accurate per-method status tags.
+ * @note Status: PARTIAL
  */
 #include "dplay.h"
 #include "DirectPlaySession.hpp"
@@ -266,6 +267,12 @@ namespace {
 
         HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) override {
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
+            // A null payload with zero length is a valid no-payload send (plan.md Phase 10); a
+            // null payload with nonzero length has no bytes to actually read and was previously
+            // unchecked here (TASK-24H-0106's null-pointer sweep) - both self-send's and the
+            // unicast path's `bytes + dwDataSize` pointer arithmetic below are undefined behavior
+            // on a null `lpData` when `dwDataSize > 0`, a real crash risk, not a hypothetical one.
+            if (!lpData && dwDataSize > 0) return DPERR_INVALIDPARAMS;
 
             if (idTo == idFrom) {
                 // Validated against localPlayerIds (docs/directplay-design.md Decision 16) - this
