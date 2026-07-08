@@ -5585,6 +5585,160 @@ Acceptance criteria:
 Out of scope:
 - None.
 
+## Additional tasks added during the continuation session (2026-07-08, part 2)
+
+Gaps found while working through the backlog above that didn't map to an existing task ID. Per
+this document's own policy ("Add new TASK-24H-XXXX tasks only for gaps discovered"), these are new
+atomic tasks, not edits to existing ones, numbered continuing from TASK-24H-0141.
+
+### TASK-24H-0142: Add Play() called-twice-in-a-row restart test
+Status: DONE
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: docs/directsound-limitations.md ("Play() always restarts"); gap found while doing DirectSound buffer-lifetime edge-case work
+Depends on: TASK-24H-0063
+
+Problem:
+The "Play() always restarts" behavior (`SDL_ClearAudioStream` + re-feed on every call, documented
+in `docs/directsound-limitations.md`) was described but only exercised once per test elsewhere -
+no test called `Play()` twice on the same buffer to prove the restart path itself works.
+
+Required work:
+- Add `Test_Play_CalledTwiceInARow_StillReportsPlaying`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test overlapping/polyphonic playback of the same buffer instance — not supported by
+  design (one `SDL_AudioStream` per buffer).
+
+Verified: added and passing.
+
+### TASK-24H-0143: Add Stop()-on-never-played-buffer safe no-op test
+Status: DONE
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: DirectSound.cpp's `Stop()` only touches `stream_` `if (stream_)`; gap found during edge-case work
+Depends on: TASK-24H-0064
+
+Problem:
+No test verified calling `Stop()` before ever calling `Play()` (`stream_` still null) is a safe
+no-op rather than an error or undefined behavior.
+
+Required work:
+- Add `Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None.
+
+Verified: added and passing.
+
+### TASK-24H-0144: Add two-buffers-play-simultaneously independence test
+Status: DONE
+Priority: P1
+Area: DirectSound
+Type: Test
+Evidence: Real gameplay pattern (overlapping sound effects); gap found during edge-case work
+Depends on: TASK-24H-0059, TASK-24H-0063
+
+Problem:
+No test verified that two distinct `IDirectSoundBuffer` instances created from the same
+`IDirectSound` device can play simultaneously without interfering with each other's status - the
+realistic pattern both target games exercise (multiple overlapping sound effects).
+
+Required work:
+- Add `Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently`, using two buffers with
+  deliberately different PCM formats, confirming `Stop()` on one does not affect the other's
+  `GetStatus()`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test more than two concurrent buffers — not a distinct code path.
+
+Verified: added and passing.
+
+### TASK-24H-0145: Add release-buffer-then-create-another-on-same-device test
+Status: DONE
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: Real lifetime pattern (IDirectSound outlives individual buffers); gap found during edge-case work
+Depends on: TASK-24H-0059
+
+Problem:
+No test verified that releasing one `IDirectSoundBuffer` does not affect the shared audio device's
+availability for a buffer created afterward from the same still-open `IDirectSound` - the
+realistic pattern for both target games (device opened once at startup, buffers created/destroyed
+over the session).
+
+Required work:
+- Add `Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- Do not test releasing `IDirectSound` itself while a buffer is still alive - not a realistic call
+  pattern for either target game (both keep the device alive for the whole process lifetime) and
+  carries a real, untriaged crash risk (a buffer's `SDL_AudioStream` remains bound to a device that
+  `SharedAudioDevice::release()` may close underneath it) that isn't worth taking for an
+  unrealistic scenario. Documented here, not attempted.
+
+Verified: added and passing.
+
+### TASK-24H-0146: Add IDirectSound AddRef/Release lifetime test
+Status: DONE
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: Mirrors directdraw_tests.cpp's AddRef/Release coverage; gap found during edge-case work
+Depends on: TASK-24H-0056
+
+Problem:
+No test verified `IDirectSound::AddRef`/`Release` refcounting, unlike the equivalent DirectDraw
+coverage added earlier this session.
+
+Required work:
+- Add `Test_DirectSound_AddRefRelease_AdjustsRefCount`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None.
+
+Verified: added and passing.
+
+### TASK-24H-0147: Add IDirectSoundBuffer AddRef/Release lifetime test
+Status: DONE
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: Same rationale as TASK-24H-0146, for the buffer interface
+Depends on: TASK-24H-0059
+
+Problem:
+Same rationale as TASK-24H-0146, for `IDirectSoundBuffer`.
+
+Required work:
+- Add `Test_DirectSoundBuffer_AddRefRelease_AdjustsRefCount`.
+
+Acceptance criteria:
+- Test passes.
+
+Out of scope:
+- None.
+
+Verified: added and passing. DirectSound test count: 24 -> 30 (this session's second batch).
+
 ## Priority summary
 
 - **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,
@@ -5604,3 +5758,7 @@ Out of scope:
 
 Total: 141 atomic tasks (TASK-24H-0001 through TASK-24H-0141), 7 of which are explicitly `BLOCKED`
 pending a user decision (0091, 0131-0137 — note 0091 depends on 0131, both counted).
+
+**Update (2026-07-08, continuation session)**: 6 more atomic tasks added, TASK-24H-0142 through
+0147 (DirectSound edge cases found and closed in the same pass — see "Additional tasks added
+during the continuation session" above). New total: **147 atomic tasks**, still 7 `BLOCKED`.

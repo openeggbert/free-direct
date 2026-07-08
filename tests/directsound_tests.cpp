@@ -305,6 +305,107 @@ void Test_GetStatus_NullOutParam_ReturnsInvalidParam() {
     ds->Release();
 }
 
+// "Play() always restarts" (docs/directsound-limitations.md): calling Play() a second time on an
+// already-playing buffer must not error, and the buffer must still report DSBSTATUS_PLAYING
+// afterward - proving the restart path (SDL_ClearAudioStream + re-feed) works, not just the
+// first-ever Play() call.
+void Test_Play_CalledTwiceInARow_StillReportsPlaying() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 4410, 16, 1, 22050);
+
+    CHECK(buf->Play(0, 0, 0) == DS_OK);
+    CHECK(buf->Play(0, 0, 0) == DS_OK); // restart while already playing
+    DWORD status = 0;
+    CHECK(buf->GetStatus(&status) == DS_OK);
+    CHECK((status & DSBSTATUS_PLAYING) != 0);
+
+    buf->Release();
+    ds->Release();
+}
+
+// Real code path: `Stop()` only calls `SDL_ClearAudioStream` `if (stream_)` - a buffer that was
+// never Play()'d has a null stream_, so Stop() must be a safe no-op, not a crash or error.
+void Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 4410, 16, 1, 22050);
+
+    CHECK(buf->Stop() == DS_OK);
+    DWORD status = 0xFFFFFFFFu;
+    CHECK(buf->GetStatus(&status) == DS_OK);
+    CHECK((status & DSBSTATUS_PLAYING) == 0);
+
+    buf->Release();
+    ds->Release();
+}
+
+// Buffer independence: two distinct buffers created from the same IDirectSound device must be
+// able to play simultaneously without interfering with each other's status - matching real
+// gameplay (multiple sound effects overlapping), each IDirectSoundBuffer owns its own
+// SDL_AudioStream (DirectSound.cpp), not a shared one.
+void Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER bufA = CreatePcmBuffer(ds, 4410, 16, 1, 22050);
+    LPDIRECTSOUNDBUFFER bufB = CreatePcmBuffer(ds, 4410, 8, 2, 11025); // deliberately different format
+
+    CHECK(bufA->Play(0, 0, 0) == DS_OK);
+    CHECK(bufB->Play(0, 0, 0) == DS_OK);
+
+    DWORD statusA = 0, statusB = 0;
+    CHECK(bufA->GetStatus(&statusA) == DS_OK);
+    CHECK(bufB->GetStatus(&statusB) == DS_OK);
+    CHECK((statusA & DSBSTATUS_PLAYING) != 0);
+    CHECK((statusB & DSBSTATUS_PLAYING) != 0);
+
+    // Stopping one must not affect the other.
+    CHECK(bufA->Stop() == DS_OK);
+    CHECK(bufA->GetStatus(&statusA) == DS_OK);
+    CHECK(bufB->GetStatus(&statusB) == DS_OK);
+    CHECK((statusA & DSBSTATUS_PLAYING) == 0);
+    CHECK((statusB & DSBSTATUS_PLAYING) != 0);
+
+    bufA->Release();
+    bufB->Release();
+    ds->Release();
+}
+
+// Realistic lifetime pattern for both target games: IDirectSound stays alive for the whole
+// session while individual sound buffers are created and released over time. Releasing one
+// buffer must not affect the shared audio device's availability for a buffer created afterward.
+void Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+
+    LPDIRECTSOUNDBUFFER first = CreatePcmBuffer(ds, 4410, 16, 1, 22050);
+    CHECK(first->Play(0, 0, 0) == DS_OK);
+    first->Release();
+
+    LPDIRECTSOUNDBUFFER second = CreatePcmBuffer(ds, 4410, 16, 1, 22050);
+    CHECK(second->Play(0, 0, 0) == DS_OK);
+    DWORD status = 0;
+    CHECK(second->GetStatus(&status) == DS_OK);
+    CHECK((status & DSBSTATUS_PLAYING) != 0);
+
+    second->Release();
+    ds->Release();
+}
+
+// ===== AddRef / Release lifetime =====
+
+void Test_DirectSound_AddRefRelease_AdjustsRefCount() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    CHECK(ds->AddRef() == 2);
+    CHECK(ds->Release() == 1);
+    CHECK(ds->Release() == 0); // final release - ds must not be touched after this
+}
+
+void Test_DirectSoundBuffer_AddRefRelease_AdjustsRefCount() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 100, 16, 1, 22050);
+    CHECK(buf->AddRef() == 2);
+    CHECK(buf->Release() == 1);
+    CHECK(buf->Release() == 0); // final release - buf must not be touched after this
+    ds->Release();
+}
+
 // ===== SetCurrentPosition =====
 
 // The only value either target game ever passes (docs/audit-24h-free-direct.md §2.2) - a rewind
@@ -435,6 +536,13 @@ int main() {
     Test_Stop_ClearsPlayingStatus();
     Test_GetStatus_FreshBuffer_NotPlaying();
     Test_GetStatus_NullOutParam_ReturnsInvalidParam();
+    Test_Play_CalledTwiceInARow_StillReportsPlaying();
+    Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp();
+    Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently();
+    Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks();
+
+    Test_DirectSound_AddRefRelease_AdjustsRefCount();
+    Test_DirectSoundBuffer_AddRefRelease_AdjustsRefCount();
 
     Test_SetCurrentPosition_Zero_ReturnsOk();
     Test_SetCurrentPosition_OutOfRange_ClampsAndPlaySucceeds();
