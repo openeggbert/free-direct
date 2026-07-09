@@ -7254,7 +7254,7 @@ the standard idiom for this exact case. No observable behavior change. Full suit
 unchanged (`directsound_tests` 32/32).
 
 ### TASK-24H-0167: Document DirectSound's single-threaded usage assumption
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Documentation
@@ -7282,6 +7282,10 @@ Out of scope:
 - Do not add any actual locking/synchronization in this task beyond `TASK-24H-0166`'s narrower
   `id()` fix — this is documentation-only, since neither target game needs multi-threaded
   DirectSound access today.
+
+Verified: added a `@note Thread safety:` paragraph to `dsound.h`'s top-of-file doc comment,
+mirroring `TASK-24H-0162`'s DirectDraw equivalent. No code change. Full suite passes 7/7
+unchanged.
 
 ### TASK-24H-0168: Document Lock()'s offset clamp and Unlock()'s pointer-lifetime behavior as deliberate
 Status: TODO

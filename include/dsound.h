@@ -16,6 +16,13 @@
  *   - IDirectSoundBuffer::SetPan         PARTIAL (stored; mono only)
  *   - IDirectSoundBuffer::Release        IMPLEMENTED
  *
+ * @note Thread safety: DirectSound objects are not thread-safe beyond their own reference
+ * counting (`AddRef`/`Release`, which use `std::atomic`). Every other operation - buffer content,
+ * volume/pan, playback state, and so on - assumes all calls on a given object happen from a
+ * single thread. This matches both target games' actual usage (`../free-eggbert`,
+ * `../planetblupi` are both single-threaded Win32 message-loop programs) and is not
+ * independently synchronized (docs/audit_dsound.md §6.3, S4, TASK-24H-0167) - do not call into
+ * these objects concurrently from more than one thread.
  * @note Status: PARTIAL
  */
 #ifndef FREE_DIRECT_DSOUND_H
