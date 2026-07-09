@@ -56,17 +56,24 @@ connection management, and a connect/disconnect/receive event model that closely
 DirectPlay-shaped API needs - without FreeDirect having to hand-roll reliability, ordering,
 fragmentation, or retransmission itself.
 
-**What works today:** hosting (`Listen()` on a fixed port, `docs/directplay-design.md` Decision 5),
-accepting and tracking multiple connecting clients (Decision 7), rejecting excess connections over
-`dwMaxPlayers` (Decision 9), the hosting role's addressed `Send()` to one of its own connected
-peers, and real receive-side buffering for both roles (Decision 19 - this was a gap as recently as
-Decision 14, since closed).
+**What works today** (updated 2026-07-09, `docs/audit_dplay.md` §6.2, D4, TASK-24H-0174 - the
+previous version of this section was stale, written before Decisions 22/23 landed): hosting
+(`Listen()` on a fixed port, `docs/directplay-design.md` Decision 5), accepting and tracking
+multiple connecting clients (Decision 7), rejecting excess connections over `dwMaxPlayers`
+(Decision 9), the hosting role's addressed `Send()` to one of its own connected peers, real
+receive-side buffering for both roles (Decision 19), the joining role's `Open()` branch calling a
+real `Connect()` with the host address resolved from the `FREE_DIRECT_ENET_HOST_ADDRESS`
+environment variable (Decision 22, since `DPSESSIONDESC2` has no address-like field of its own),
+the full join handshake (Decision 16) working over ENet the same way it already did over loopback,
+and real LAN session discovery (Decision 23): a hosting session's `DirectPlayDiscoveryService`
+listens on a dedicated raw-UDP port (`51323`, deliberately built on ENet's own portable
+`ENetSocket` primitives, not `ENetHost`/`ENetPeer` - see Decision 23's own rationale) and answers
+`EnumSessions()`'s broadcast-and-collect round trip, so `EnumSessions()` can now see an
+ENet-hosted session, not just loopback ones.
 
-**What does not work today**, all tracked as open items in `docs/directplay-limitations.md`: the
-joining role's `Open()` branch never calls `Connect()` at all (no mechanism exists yet for it to
-learn a host's address - `DPSESSIONDESC2` has no address-like field); the join handshake
-(Decision 16) is loopback-only; `EnumSessions()` (Decision 18) is loopback-only and cannot see an
-ENet-hosted session.
+**What still does not work today**, tracked as open items in `docs/directplay-limitations.md`: host
+migration (`DPSESSION_MIGRATEHOST`) is silently ignored; a joining caller's `guidApplication` is
+never validated against the host's on join.
 
 Uses a single ENet channel (channel `0`) for all traffic (Decision 2) - `IDirectPlay2A`'s
 `Send`/`Receive` have no channel-selection concept for any real call site to need more than one.
@@ -74,8 +81,8 @@ Uses a single ENet channel (channel `0`) for all traffic (Decision 2) - `IDirect
 ## Backend 3: `SdlNetDirectPlayTransport` - optional, future, not implemented
 
 Documented here, per policy, but **not implemented** - and per `CLAUDE.md`, should not be started
-until the ENet backend is stable (it is not yet: joining and discovery remain open per the section
-above). Two possible SDL3_net-based paths exist, each with a real tradeoff:
+until the ENet backend is stable. Two possible SDL3_net-based paths exist, each with a real
+tradeoff:
 
 - **SDL3_net UDP datagrams**: FreeDirect would have to implement reliability, ordering,
   fragmentation, acknowledgement, and retransmission itself - essentially re-deriving what ENet

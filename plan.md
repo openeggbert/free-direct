@@ -7515,11 +7515,18 @@ contradicting their own function-level doc comments a few dozen lines below, whi
 unchanged.
 
 ### TASK-24H-0174: Update networking-backends.md's stale ENet section
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
+Status: DONE | Priority: P2 | Area: DirectPlay | Type: Documentation
 Evidence: docs/audit_dplay.md §6.2 (D4) — doc claims ENet joining/discovery "does not work
 today," contradicted by already-implemented Decisions 22/23. Depends on: None.
 Update the Backend-2 (ENet) section to reflect `Connect()` being wired
 (`FREE_DIRECT_ENET_HOST_ADDRESS`) and real LAN discovery (`DirectPlayDiscoveryService`).
+
+Verified: rewrote Backend 2's "What works today"/"What does not work today" bullets to reflect
+Decisions 22/23 (ENet `Connect()`, the join handshake over ENet, and `DirectPlayDiscoveryService`),
+replacing the stale claims with the two genuinely still-open items (host migration, no
+`guidApplication` validation on join). Also fixed Backend 3's stale cross-reference ("joining and
+discovery remain open") to no longer point at a section that no longer says that. Documentation-only,
+no code change.
 
 ### TASK-24H-0175: Remove or justify DirectPlayPlayer's dead scaffolding
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
