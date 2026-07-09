@@ -8013,7 +8013,7 @@ Out of scope:
   accessors — it is purely a consolidation of existing black-box test scaffolding.
 
 ### TASK-24H-0186: Replace plan.md's stale "Priority summary" section with a self-verifying pointer
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -8046,6 +8046,18 @@ Out of scope:
 - Do not build tooling/scripting to auto-generate this section — a documented `grep` command is
   sufficient at this project's current scale (per the infra audit's own explicit "don't recommend
   enterprise-scale process for a project this size" framing).
+
+Verified: renamed the section "Priority legend" (its actual remaining content) and replaced the
+hand-maintained per-priority task-ID lists with an `awk`-based query command, chosen over a plain
+`grep` since this file has two different task-header formats (most tasks: multi-line `Status:`/
+`Priority:`/... block; `TASK-24H-0172`-`0179`: a condensed single-line `Status: DONE | Priority:
+P1 | ...` format) - a fixed-line-offset `grep -B2` would silently miss the condensed-format tasks
+the same way the old list already silently missed tasks it was never updated for. Ran the exact
+documented command for all four priorities and confirmed sensible, non-empty, roughly-188-in-total
+results across P0/P1/P2/P3 (a small overrun beyond 188 is expected and harmless - this very task's
+own body text and this Verified note both quote example `Priority: PX` strings, which the command
+correctly also counts against `TASK-24H-0186`'s own heading; not a data problem in any other task).
+This is a documentation-only change - no code or test files touched, no build/test run needed.
 
 ### TASK-24H-0187: Consolidate NEXT.md's duplicated task-count status fact to one source of truth
 Status: TODO
@@ -8127,26 +8139,29 @@ and were resolved via `AskUserQuestion`, not assumed. New running total: **188 a
 
 ---
 
-## Priority summary
+## Priority legend
 
-- **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,
-  recurring verification gates): TASK-24H-0001, 0002, 0003, 0007, 0008, 0014, 0015, 0026, 0030,
-  0031, 0035, 0036, 0037, 0038, 0040, 0044, 0049, 0076, 0080, 0081, 0083, 0084, 0092, 0098, 0117,
-  0123, 0131, 0138, 0139, 0140, 0141.
-- **P1**: the majority of test-coverage, documentation-accuracy, and safe-DirectPlay tasks listed
-  above (0004-0006, 0009, 0011, 0013, 0016-0020, 0024, 0027-0029, 0032-0034, 0039, 0041-0043,
-  0045, 0047-0048, 0050-0052, 0056-0057, 0059-0060, 0062-0065, 0067, 0072-0074, 0077-0079, 0082,
-  0085-0090, 0093-0097, 0100-0108, 0110-0116, 0118, 0121, 0124-0127, 0129, 0132, 0134).
-- **P2**: cleanup, header-hygiene documentation, optional hardening, lower-frequency call paths
-  (0010, 0012, 0021-0023, 0025, 0046, 0053-0055, 0058, 0061, 0066, 0068-0071, 0075, 0090, 0091 (once
-  unblocked), 0099, 0109, 0119-0120, 0122, 0128, 0130, 0133, 0135-0137).
-- **P3**: pure documentation/history cleanup (0012 already listed under P2 by nature but tracked
-  once; historical-plan cleanup items are folded into the Phase reconciliation tasks 0086-0090
-  rather than kept as separate P3 entries, per the "atomic, don't duplicate" rule).
+`P0` = build/test-blocking, hot-path correctness, or a recurring verification gate. `P1` = the
+majority of test-coverage, documentation-accuracy, and safe-implementation tasks. `P2` = cleanup,
+optional hardening, lower-frequency call paths, or documentation-only follow-up. `P3` = pure
+documentation/history cleanup, rarely used (most historical-plan cleanup is folded into a Phase
+reconciliation task instead of kept as a separate P3 entry, per the "atomic, don't duplicate"
+rule).
 
-Total: 141 atomic tasks (TASK-24H-0001 through TASK-24H-0141), 7 of which are explicitly `BLOCKED`
-pending a user decision (0091, 0131-0137 — note 0091 depends on 0131, both counted).
+**This section used to enumerate every task ID under its priority by hand. That list was found
+stale during a 2026-07-09 maintainability audit — it stopped at `TASK-24H-0147` and silently
+omitted the next 35 tasks (~19% of the backlog at the time, including two entire audit-hardening
+waves), with nothing to warn a reader it was incomplete (`TASK-24H-0186`).** A hand-maintained,
+duplicated list requires being kept in sync by hand every time a task is added, and demonstrably
+failed to be. Query each task's own `Priority:` field directly instead — it is authoritative by
+construction, since it's each task's only copy of its own priority:
 
-**Update (2026-07-08, continuation session)**: 6 more atomic tasks added, TASK-24H-0142 through
-0147 (DirectSound edge cases found and closed in the same pass — see "Additional tasks added
-during the continuation session" above). New total: **147 atomic tasks**, still 7 `BLOCKED`.
+```bash
+awk '/^### TASK-24H-/{t=$0} /Priority: P0/{print t}' plan.md | sort -u
+```
+
+Substitute `P1`/`P2`/`P3` for `P0` as needed. This works across both this file's task-header
+formats (the verbose multi-line `Status:`/`Priority:`/`Area:`/`Type:` block used by most tasks, and
+the condensed single-line `Status: DONE | Priority: P1 | Area: ... | Type: ...` format used by
+`TASK-24H-0172`-`0179`) by tracking the most recently seen task heading rather than assuming a
+fixed line offset.
