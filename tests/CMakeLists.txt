@@ -78,6 +78,23 @@ set_tests_properties(directsound_tests PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
 )
 
+# Integration tests: DirectDraw + DirectSound both live in one process at once, matching both
+# target games' real unconditional startup behavior. Needs both dummy drivers, same as the two
+# single-subsystem suites above. 24-Hour Stabilization Backlog TASK-24H-0180 (plan.md).
+add_executable(integration_tests integration_tests.cpp)
+target_link_libraries(integration_tests
+        PRIVATE
+        free-direct
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_mixer::SDL3_mixer
+)
+add_test(NAME integration_tests COMMAND integration_tests)
+set_tests_properties(integration_tests PROPERTIES
+        LABELS "integration"
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+)
+
 # ENet transport-level tests: gated at the CMake level (not just skipped at runtime) behind
 # FREE_DIRECT_ENABLE_ENET, matching EnetDirectPlayTransport.cpp's own compilation gate - the
 # target does not exist at all, and therefore cannot be registered with CTest, when ENet is off.
@@ -106,7 +123,7 @@ endif()
 if(FREE_DIRECT_SANITIZER_FLAGS)
     set(FREE_DIRECT_SANITIZED_TEST_TARGETS
             directplay_tests header_smoke_ddraw header_smoke_dsound header_smoke_dplay
-            directdraw_tests directsound_tests)
+            directdraw_tests directsound_tests integration_tests)
     if(FREE_DIRECT_ENABLE_ENET)
         list(APPEND FREE_DIRECT_SANITIZED_TEST_TARGETS enet_directplay_tests)
     endif()

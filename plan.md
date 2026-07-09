@@ -7661,7 +7661,7 @@ and reconfirmed `free-eggbert`'s `CDecor::TreatNetData()` call site is still com
 below.
 
 ### TASK-24H-0180: Add test coverage for DirectDraw+DirectSound running together in one process
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Integration
 Type: Implementation
@@ -7707,6 +7707,29 @@ Out of scope:
 - Do not restructure the existing three test binaries into one combined binary — this task only
   adds new, additive coverage for the untested combination, it does not change existing test
   architecture.
+
+Verified: added `tests/integration_tests.cpp` (new file, 4 tests), wired into `tests/CMakeLists.txt`
+with label `integration` and the same `SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy` `ENVIRONMENT`
+property as `directdraw_tests`/`directsound_tests`, and added to the ASan/UBSan sanitized-target
+list alongside them. Tests: `Test_DirectDrawAndDirectSound_BothCreateSuccessfully_InSameProcess`
+(mirrors both games' real startup order); `Test_DirectDrawBltFastAndPresent_WorksCorrectly_
+WhileDirectSoundBufferIsPlaying` (a real `BltFast`+present, verified via genuine rendered-pixel
+readback, interleaved with a real `Play()`, verified via `DSBSTATUS_PLAYING`, each while the other
+subsystem is live); `Test_ReleaseDirectSoundFirst_DirectDrawStillPresentsCorrectly` and
+`Test_ReleaseDirectDrawFirst_DirectSoundStillPlaysCorrectly` (both teardown orderings). Found and
+fixed two real bugs in this task's own new test code, not in DirectDraw/DirectSound themselves:
+initial pixel-readback assertions read physical `(0,0)`, which every existing `ReadPresentedPixel`
+test in `directdraw_tests.cpp` deliberately avoids in favor of `(10,10)` — matched that established
+convention; a packed-hex-literal expected-pixel-value comparison had R and B reversed (the same
+class of channel-order mistake documented earlier this session for `TASK-24H-0156`'s test) — fixed
+by switching to the established per-channel-extraction comparison style
+(`Test_Flip_PresentsPrimarySurface`'s own pattern) instead of a packed literal, which is harder to
+get backwards. No product code in `DirectDraw.cpp`/`DirectSound.cpp` was touched by this task.
+Verified across three configurations, all clean: default build `ctest` 8/8 (was 7/7);
+`-DFREE_DIRECT_ENABLE_ENET=ON` build `ctest -L enet` 1/1 (unaffected — this task adds no ENet-gated
+code); `-DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON` build `ctest` 8/8 clean, zero
+sanitizer diagnostics from the new combined-subsystem teardown-ordering tests specifically (the
+scenario most likely to expose a real use-after-free/double-free if one existed).
 
 ### TASK-24H-0181: Close TASK-24H-0057 via a dedicated fresh-process CTest binary for DSERR_NODRIVER
 Status: TODO
