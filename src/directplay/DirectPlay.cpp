@@ -462,140 +462,12 @@ namespace {
             // call shape for a hosting process - must mean broadcast, not self-send, even though
             // idFrom == idTo == 0 would otherwise satisfy the self-send check too.
             if (idTo == DPID_ALLPLAYERS) {
-                DirectPlayLog("free-direct Send: broadcast idFrom=%lu dwDataSize=%lu",
-                              static_cast<unsigned long>(idFrom), static_cast<unsigned long>(dwDataSize));
-                if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
-                    session_.localPlayerIds.end()) {
-                    return DPERR_INVALIDPLAYER;
-                }
-                if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
-                    return DPERR_SENDTOOBIG;
-                }
-                if (!session_.transport) return DPERR_INVALIDPLAYER;
-
-                free_direct_directplay::DirectPlayWirePacketHeader header;
-                header.applicationGuid = session_.applicationGuid;
-                header.sessionGuid = session_.sessionInstanceGuid;
-                header.idFrom = idFrom;
-                header.idTo = DPID_ALLPLAYERS;
-                header.payloadLength = dwDataSize;
-                std::vector<std::uint8_t> wireBytes;
-                free_direct_directplay::SerializeDirectPlayWireHeader(header, wireBytes);
-                const auto* payloadBytes = static_cast<const std::uint8_t*>(lpData);
-                wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
-                const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
-
-                if (session_.isHost) {
-                    // Deliver directly to every remote player already known (Decision 14's
-                    // existing per-DPID addressing) - never looped back to the host's own
-                    // queue, since the host is the sender here and broadcast never reaches its
-                    // own sender (Decision 20).
-                    for (const DPID remoteId : session_.remotePlayerIds) {
-                        session_.transport->Send(remoteId, wireBytes.data(), wireBytes.size(), reliable);
-                    }
-                    return DP_OK;
-                }
-                // Joining role: exactly one connection exists (the host) - targetId is accepted
-                // but ignored by the transport for this role (Decision 14), so DPID_ALLPLAYERS
-                // here is only a placeholder argument. Leaving the wire header's own idTo at
-                // DPID_ALLPLAYERS (not resolved to any specific address) is what tells the
-                // host's own Receive() drain loop this packet needs relaying to every other
-                // connected peer (Decision 21), not just local delivery.
-                if (!session_.transport->Send(DPID_ALLPLAYERS, wireBytes.data(), wireBytes.size(), reliable)) {
-                    return DPERR_GENERIC;
-                }
-                return DP_OK;
+                return SendBroadcast(idFrom, dwFlags, lpData, dwDataSize);
             }
-
             if (idTo == idFrom) {
-                DirectPlayLog("free-direct Send: self-send id=%lu dwDataSize=%lu",
-                              static_cast<unsigned long>(idFrom), static_cast<unsigned long>(dwDataSize));
-                // Validated against localPlayerIds (docs/directplay-design.md Decision 16) - this
-                // was previously unchecked, an inconsistency with the unicast path below now that
-                // one exists. Matters concretely for a joining session: its localPlayerIds only
-                // contains a real entry once a join-accepted packet has been processed (Decision
-                // 16), so this doubles as an observable proof that adoption actually happened,
-                // not just an abstract correctness nicety.
-                if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
-                    session_.localPlayerIds.end()) {
-                    return DPERR_INVALIDPLAYER;
-                }
-                // Validated against kMaxPayloadBytes *before* reading lpData below, matching the
-                // broadcast/unicast paths' existing pre-checks (docs/audit_dplay.md §6.5, D2,
-                // TASK-24H-0172) - this branch used to reach packet.payload.assign() first and
-                // only discover an oversized payload afterward, via Enqueue()'s own check. If
-                // dwDataSize ever overstated the caller's real buffer size, that .assign() call
-                // would already have read out of bounds before the eventual DPERR_SENDTOOBIG
-                // rejection could stop it.
-                if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
-                    return DPERR_SENDTOOBIG;
-                }
-                // Enqueued directly into session_.messageQueue rather than round-tripping
-                // through session_.transport (Phase 4's original approach, changed here per
-                // docs/directplay-design.md Decision 12): sending a message to yourself is
-                // always a purely local operation, regardless of whether this session's
-                // transport is idle, hosting (Listen()ing), or joined - it must not depend on,
-                // or be affected by, the transport's connection state. This also sidesteps
-                // Decision 10's deliberate `false` return from a connected transport's
-                // Send()/Receive() (there is no ambiguity to avoid here: idFrom/idTo are known
-                // at this layer, never passed down to the transport, which is exactly why the
-                // transport itself could never distinguish "self-send" from any other traffic).
-                const auto* bytes = static_cast<const std::uint8_t*>(lpData);
-                free_direct_directplay::DirectPlayMessagePacket packet;
-                packet.idFrom = idFrom;
-                packet.idTo = idTo;
-                packet.flags = dwFlags;
-                packet.payload.assign(bytes, bytes + dwDataSize);
-                if (!session_.messageQueue.Enqueue(std::move(packet))) return DPERR_SENDTOOBIG;
-                return DP_OK;
+                return SendSelf(idFrom, dwFlags, lpData, dwDataSize);
             }
-
-            // Real unicast-to-a-specific-remote-player delivery (docs/directplay-design.md
-            // Decision 15), host role only for now: idFrom must be a locally-registered
-            // player, and idTo must be a remote player this host has actually assigned a DPID
-            // to (Decision 7/9's assignment loop) - anything else is DPERR_INVALIDPLAYER,
-            // matching plan.md Phase 10's own validation tasks rather than the old silent
-            // no-op. The joining role cannot yet address a specific remote player at all - it
-            // has no way to learn any remote DPID (including the host's own) before the
-            // join-accepted handshake exists (blocked Phase 7 tasks) - so it always gets
-            // DPERR_INVALIDPLAYER here too, an honest "not supported yet."
-            DirectPlayLog("free-direct Send: unicast idFrom=%lu idTo=%lu dwDataSize=%lu",
-                          static_cast<unsigned long>(idFrom), static_cast<unsigned long>(idTo),
-                          static_cast<unsigned long>(dwDataSize));
-            if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
-                session_.localPlayerIds.end()) {
-                return DPERR_INVALIDPLAYER;
-            }
-            if (!session_.isHost || !session_.transport) return DPERR_INVALIDPLAYER;
-            if (std::find(session_.remotePlayerIds.begin(), session_.remotePlayerIds.end(), idTo) ==
-                session_.remotePlayerIds.end()) {
-                return DPERR_INVALIDPLAYER;
-            }
-            // Enforced here, before ever reaching the transport, not just as a Receive()-side
-            // nicety: an oversized packet that made it onto the wire would arrive larger than
-            // Receive()'s fixed-size read buffer (see Receive(), below) and get stuck at the
-            // front of the receiver's queue forever, wedging every message behind it too.
-            if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
-                return DPERR_SENDTOOBIG;
-            }
-
-            free_direct_directplay::DirectPlayWirePacketHeader header;
-            header.applicationGuid = session_.applicationGuid;
-            header.sessionGuid = session_.sessionInstanceGuid;
-            header.idFrom = idFrom;
-            header.idTo = idTo;
-            header.payloadLength = dwDataSize;
-
-            std::vector<std::uint8_t> wireBytes;
-            free_direct_directplay::SerializeDirectPlayWireHeader(header, wireBytes);
-            const auto* payloadBytes = static_cast<const std::uint8_t*>(lpData);
-            wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
-
-            const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
-            if (!session_.transport->Send(idTo, wireBytes.data(), wireBytes.size(), reliable)) {
-                return DPERR_GENERIC;
-            }
-            return DP_OK;
+            return SendUnicast(idFrom, idTo, dwFlags, lpData, dwDataSize);
         }
 
         HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) override {
@@ -685,104 +557,7 @@ namespace {
                     }
                 }
             }
-            // Drain every real transport-delivered wire packet (docs/directplay-design.md
-            // Decision 15/16), for both roles - a host receiving from one of its
-            // remotePlayerIds (or a join-request), or a joining session receiving from the host
-            // it Connect()ed to (a join-accepted response, or ordinary data). Each blob handed
-            // back by transport->Receive() is exactly one Send()-call's worth
-            // (LoopbackDirectPlayTransport's buffered_ never coalesces or splits), so one wire
-            // header + payload is parsed per iteration. A blob that fails to deserialize (too
-            // small, or a payloadLength that disagrees with what actually arrived) is dropped
-            // silently rather than crashing or corrupting the queue - the same defensive posture
-            // TryDeserializeDirectPlayWireHeader was built for in Phase 5.
-            if (session_.transport) {
-                constexpr std::size_t kMaxWireBufferSize =
-                    free_direct_directplay::kDirectPlayWireHeaderSize +
-                    free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes;
-                // wireBuf_ is a persistent member (TASK-24H-0179), resized once and reused across
-                // calls instead of allocating fresh every time - a no-op after the first call.
-                if (wireBuf_.size() < kMaxWireBufferSize) {
-                    wireBuf_.resize(kMaxWireBufferSize);
-                }
-                std::vector<std::uint8_t>& wireBuf = wireBuf_;
-                std::size_t receivedSize = 0;
-                while (session_.transport->Receive(wireBuf.data(), wireBuf.size(), &receivedSize)) {
-                    const auto header = free_direct_directplay::TryDeserializeDirectPlayWireHeader(
-                        wireBuf.data(), receivedSize);
-                    if (!header) continue;
-
-                    switch (header->type) {
-                        case free_direct_directplay::DirectPlayWirePacketType::Data: {
-                            DirectPlayLog("free-direct Receive: Data idFrom=%lu idTo=%lu payloadLength=%lu",
-                                          static_cast<unsigned long>(header->idFrom),
-                                          static_cast<unsigned long>(header->idTo),
-                                          static_cast<unsigned long>(header->payloadLength));
-                            // A full messageQueue silently drops the packet (Enqueue()'s
-                            // existing bounded-growth contract, unchanged) - there is no
-                            // send-side acknowledgement/backpressure to report the drop to yet.
-                            free_direct_directplay::DirectPlayMessagePacket packet;
-                            packet.idFrom = header->idFrom;
-                            packet.idTo = header->idTo;
-                            packet.payload.assign(
-                                wireBuf.begin() + free_direct_directplay::kDirectPlayWireHeaderSize,
-                                wireBuf.begin() + receivedSize);
-                            session_.messageQueue.Enqueue(std::move(packet));
-
-                            // Host-side broadcast relay (docs/directplay-design.md Decision 21):
-                            // a broadcast arriving from one connected peer (idTo ==
-                            // DPID_ALLPLAYERS) is re-sent, byte-for-byte unchanged, to every
-                            // OTHER connected peer - never back to the original sender
-                            // (header->idFrom). The host's own copy was already enqueued just
-                            // above - the host is itself a legitimate broadcast recipient when a
-                            // non-host peer is the sender, distinct from Decision 20's "broadcast
-                            // never reaches its own sender" rule, which is about the sender, not
-                            // the host acting as relay/recipient. A non-host peer's Receive()
-                            // never reaches this branch's effects (session_.isHost is false
-                            // there), so it just enqueues like any other Data packet, unchanged
-                            // from before this decision.
-                            if (session_.isHost && header->idTo == DPID_ALLPLAYERS) {
-                                for (const DPID remoteId : session_.remotePlayerIds) {
-                                    if (remoteId == header->idFrom) continue;
-                                    session_.transport->Send(remoteId, wireBuf.data(), receivedSize,
-                                                              /*reliable=*/true);
-                                }
-                            }
-                            break;
-                        }
-                        case free_direct_directplay::DirectPlayWirePacketType::JoinAccept: {
-                            DirectPlayLog("free-direct Receive: JoinAccept assignedId=%lu",
-                                          static_cast<unsigned long>(header->idTo));
-                            // Adopts the host-assigned DPID as this session's own local player
-                            // identity (docs/directplay-design.md Decision 16) - only meaningful
-                            // for a joining role that hasn't already processed this. Not
-                            // enqueued into messageQueue - this is session control state, not a
-                            // user-visible Data message.
-                            if (!session_.isHost) {
-                                session_.applicationGuid = header->applicationGuid;
-                                session_.sessionInstanceGuid = header->sessionGuid;
-                                const DPID assignedId = header->idTo;
-                                if (std::find(session_.localPlayerIds.begin(),
-                                              session_.localPlayerIds.end(),
-                                              assignedId) == session_.localPlayerIds.end()) {
-                                    session_.localPlayerIds.push_back(assignedId);
-                                }
-                                if (session_.nextPlayerId <= assignedId) {
-                                    session_.nextPlayerId = assignedId + 1;
-                                }
-                            }
-                            break;
-                        }
-                        default:
-                            DirectPlayLog("free-direct Receive: type=%u consumed and ignored",
-                                          static_cast<unsigned>(header->type));
-                            // Join (host-side only meaningful, and assignment already happens
-                            // independently of it - see the assignment loop above),
-                            // JoinReject/Discovery/DiscoveryResponse (not implemented yet) -
-                            // consumed from the queue and otherwise ignored.
-                            break;
-                    }
-                }
-            }
+            DrainWirePackets();
             // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
             // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
             // be exercised directly by tests/directplay_tests.cpp without needing a way to
@@ -834,6 +609,263 @@ namespace {
         }
 
     private:
+        // ===== Send() delivery paths, extracted from Send() itself (TASK-24H-0184
+        // extract-method refactor - a behavior-preserving restructure, user-approved via
+        // AskUserQuestion as a scoped exception to this project's standing "no broad refactor"
+        // default, plan.md). Each method's body and comments are unchanged from Send()'s own
+        // original inline code - only the split into separate methods and each one's parameter
+        // list (only the arguments that specific path actually needs) are new. =====
+
+        HRESULT SendBroadcast(DPID idFrom, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) {
+            DirectPlayLog("free-direct Send: broadcast idFrom=%lu dwDataSize=%lu",
+                          static_cast<unsigned long>(idFrom), static_cast<unsigned long>(dwDataSize));
+            if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
+                session_.localPlayerIds.end()) {
+                return DPERR_INVALIDPLAYER;
+            }
+            if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
+                return DPERR_SENDTOOBIG;
+            }
+            if (!session_.transport) return DPERR_INVALIDPLAYER;
+
+            free_direct_directplay::DirectPlayWirePacketHeader header;
+            header.applicationGuid = session_.applicationGuid;
+            header.sessionGuid = session_.sessionInstanceGuid;
+            header.idFrom = idFrom;
+            header.idTo = DPID_ALLPLAYERS;
+            header.payloadLength = dwDataSize;
+            std::vector<std::uint8_t> wireBytes;
+            free_direct_directplay::SerializeDirectPlayWireHeader(header, wireBytes);
+            const auto* payloadBytes = static_cast<const std::uint8_t*>(lpData);
+            wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
+            const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
+
+            if (session_.isHost) {
+                // Deliver directly to every remote player already known (Decision 14's
+                // existing per-DPID addressing) - never looped back to the host's own
+                // queue, since the host is the sender here and broadcast never reaches its
+                // own sender (Decision 20).
+                for (const DPID remoteId : session_.remotePlayerIds) {
+                    session_.transport->Send(remoteId, wireBytes.data(), wireBytes.size(), reliable);
+                }
+                return DP_OK;
+            }
+            // Joining role: exactly one connection exists (the host) - targetId is accepted
+            // but ignored by the transport for this role (Decision 14), so DPID_ALLPLAYERS
+            // here is only a placeholder argument. Leaving the wire header's own idTo at
+            // DPID_ALLPLAYERS (not resolved to any specific address) is what tells the
+            // host's own Receive() drain loop this packet needs relaying to every other
+            // connected peer (Decision 21), not just local delivery.
+            if (!session_.transport->Send(DPID_ALLPLAYERS, wireBytes.data(), wireBytes.size(), reliable)) {
+                return DPERR_GENERIC;
+            }
+            return DP_OK;
+        }
+
+        HRESULT SendSelf(DPID id, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) {
+            DirectPlayLog("free-direct Send: self-send id=%lu dwDataSize=%lu",
+                          static_cast<unsigned long>(id), static_cast<unsigned long>(dwDataSize));
+            // Validated against localPlayerIds (docs/directplay-design.md Decision 16) - this
+            // was previously unchecked, an inconsistency with the unicast path below now that
+            // one exists. Matters concretely for a joining session: its localPlayerIds only
+            // contains a real entry once a join-accepted packet has been processed (Decision
+            // 16), so this doubles as an observable proof that adoption actually happened,
+            // not just an abstract correctness nicety.
+            if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), id) ==
+                session_.localPlayerIds.end()) {
+                return DPERR_INVALIDPLAYER;
+            }
+            // Validated against kMaxPayloadBytes *before* reading lpData below, matching the
+            // broadcast/unicast paths' existing pre-checks (docs/audit_dplay.md §6.5, D2,
+            // TASK-24H-0172) - this branch used to reach packet.payload.assign() first and
+            // only discover an oversized payload afterward, via Enqueue()'s own check. If
+            // dwDataSize ever overstated the caller's real buffer size, that .assign() call
+            // would already have read out of bounds before the eventual DPERR_SENDTOOBIG
+            // rejection could stop it.
+            if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
+                return DPERR_SENDTOOBIG;
+            }
+            // Enqueued directly into session_.messageQueue rather than round-tripping
+            // through session_.transport (Phase 4's original approach, changed here per
+            // docs/directplay-design.md Decision 12): sending a message to yourself is
+            // always a purely local operation, regardless of whether this session's
+            // transport is idle, hosting (Listen()ing), or joined - it must not depend on,
+            // or be affected by, the transport's connection state. This also sidesteps
+            // Decision 10's deliberate `false` return from a connected transport's
+            // Send()/Receive() (there is no ambiguity to avoid here: idFrom/idTo are known
+            // at this layer, never passed down to the transport, which is exactly why the
+            // transport itself could never distinguish "self-send" from any other traffic).
+            const auto* bytes = static_cast<const std::uint8_t*>(lpData);
+            free_direct_directplay::DirectPlayMessagePacket packet;
+            packet.idFrom = id;
+            packet.idTo = id;
+            packet.flags = dwFlags;
+            packet.payload.assign(bytes, bytes + dwDataSize);
+            if (!session_.messageQueue.Enqueue(std::move(packet))) return DPERR_SENDTOOBIG;
+            return DP_OK;
+        }
+
+        // Real unicast-to-a-specific-remote-player delivery (docs/directplay-design.md
+        // Decision 15), host role only for now: idFrom must be a locally-registered
+        // player, and idTo must be a remote player this host has actually assigned a DPID
+        // to (Decision 7/9's assignment loop) - anything else is DPERR_INVALIDPLAYER,
+        // matching plan.md Phase 10's own validation tasks rather than the old silent
+        // no-op. The joining role cannot yet address a specific remote player at all - it
+        // has no way to learn any remote DPID (including the host's own) before the
+        // join-accepted handshake exists (blocked Phase 7 tasks) - so it always gets
+        // DPERR_INVALIDPLAYER here too, an honest "not supported yet."
+        HRESULT SendUnicast(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) {
+            DirectPlayLog("free-direct Send: unicast idFrom=%lu idTo=%lu dwDataSize=%lu",
+                          static_cast<unsigned long>(idFrom), static_cast<unsigned long>(idTo),
+                          static_cast<unsigned long>(dwDataSize));
+            if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
+                session_.localPlayerIds.end()) {
+                return DPERR_INVALIDPLAYER;
+            }
+            if (!session_.isHost || !session_.transport) return DPERR_INVALIDPLAYER;
+            if (std::find(session_.remotePlayerIds.begin(), session_.remotePlayerIds.end(), idTo) ==
+                session_.remotePlayerIds.end()) {
+                return DPERR_INVALIDPLAYER;
+            }
+            // Enforced here, before ever reaching the transport, not just as a Receive()-side
+            // nicety: an oversized packet that made it onto the wire would arrive larger than
+            // Receive()'s fixed-size read buffer (see Receive(), below) and get stuck at the
+            // front of the receiver's queue forever, wedging every message behind it too.
+            if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
+                return DPERR_SENDTOOBIG;
+            }
+
+            free_direct_directplay::DirectPlayWirePacketHeader header;
+            header.applicationGuid = session_.applicationGuid;
+            header.sessionGuid = session_.sessionInstanceGuid;
+            header.idFrom = idFrom;
+            header.idTo = idTo;
+            header.payloadLength = dwDataSize;
+
+            std::vector<std::uint8_t> wireBytes;
+            free_direct_directplay::SerializeDirectPlayWireHeader(header, wireBytes);
+            const auto* payloadBytes = static_cast<const std::uint8_t*>(lpData);
+            wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
+
+            const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
+            if (!session_.transport->Send(idTo, wireBytes.data(), wireBytes.size(), reliable)) {
+                return DPERR_GENERIC;
+            }
+            return DP_OK;
+        }
+
+        // ===== Receive()'s per-packet-type dispatch + drain loop, extracted from Receive()
+        // itself (TASK-24H-0184, same rationale as the Send() split above). Bodies and comments
+        // unchanged from Receive()'s own original inline code. =====
+
+        void HandleDataPacket(const free_direct_directplay::DirectPlayWirePacketHeader& header,
+                               const std::vector<std::uint8_t>& wireBuf, std::size_t receivedSize) {
+            DirectPlayLog("free-direct Receive: Data idFrom=%lu idTo=%lu payloadLength=%lu",
+                          static_cast<unsigned long>(header.idFrom),
+                          static_cast<unsigned long>(header.idTo),
+                          static_cast<unsigned long>(header.payloadLength));
+            // A full messageQueue silently drops the packet (Enqueue()'s
+            // existing bounded-growth contract, unchanged) - there is no
+            // send-side acknowledgement/backpressure to report the drop to yet.
+            free_direct_directplay::DirectPlayMessagePacket packet;
+            packet.idFrom = header.idFrom;
+            packet.idTo = header.idTo;
+            packet.payload.assign(
+                wireBuf.begin() + free_direct_directplay::kDirectPlayWireHeaderSize,
+                wireBuf.begin() + receivedSize);
+            session_.messageQueue.Enqueue(std::move(packet));
+
+            // Host-side broadcast relay (docs/directplay-design.md Decision 21):
+            // a broadcast arriving from one connected peer (idTo ==
+            // DPID_ALLPLAYERS) is re-sent, byte-for-byte unchanged, to every
+            // OTHER connected peer - never back to the original sender
+            // (header->idFrom). The host's own copy was already enqueued just
+            // above - the host is itself a legitimate broadcast recipient when a
+            // non-host peer is the sender, distinct from Decision 20's "broadcast
+            // never reaches its own sender" rule, which is about the sender, not
+            // the host acting as relay/recipient. A non-host peer's Receive()
+            // never reaches this branch's effects (session_.isHost is false
+            // there), so it just enqueues like any other Data packet, unchanged
+            // from before this decision.
+            if (session_.isHost && header.idTo == DPID_ALLPLAYERS) {
+                for (const DPID remoteId : session_.remotePlayerIds) {
+                    if (remoteId == header.idFrom) continue;
+                    session_.transport->Send(remoteId, wireBuf.data(), receivedSize,
+                                              /*reliable=*/true);
+                }
+            }
+        }
+
+        void HandleJoinAcceptPacket(const free_direct_directplay::DirectPlayWirePacketHeader& header) {
+            DirectPlayLog("free-direct Receive: JoinAccept assignedId=%lu",
+                          static_cast<unsigned long>(header.idTo));
+            // Adopts the host-assigned DPID as this session's own local player
+            // identity (docs/directplay-design.md Decision 16) - only meaningful
+            // for a joining role that hasn't already processed this. Not
+            // enqueued into messageQueue - this is session control state, not a
+            // user-visible Data message.
+            if (!session_.isHost) {
+                session_.applicationGuid = header.applicationGuid;
+                session_.sessionInstanceGuid = header.sessionGuid;
+                const DPID assignedId = header.idTo;
+                if (std::find(session_.localPlayerIds.begin(),
+                              session_.localPlayerIds.end(),
+                              assignedId) == session_.localPlayerIds.end()) {
+                    session_.localPlayerIds.push_back(assignedId);
+                }
+                if (session_.nextPlayerId <= assignedId) {
+                    session_.nextPlayerId = assignedId + 1;
+                }
+            }
+        }
+
+        // Drain every real transport-delivered wire packet (docs/directplay-design.md
+        // Decision 15/16), for both roles - a host receiving from one of its
+        // remotePlayerIds (or a join-request), or a joining session receiving from the host
+        // it Connect()ed to (a join-accepted response, or ordinary data). Each blob handed
+        // back by transport->Receive() is exactly one Send()-call's worth
+        // (LoopbackDirectPlayTransport's buffered_ never coalesces or splits), so one wire
+        // header + payload is parsed per iteration. A blob that fails to deserialize (too
+        // small, or a payloadLength that disagrees with what actually arrived) is dropped
+        // silently rather than crashing or corrupting the queue - the same defensive posture
+        // TryDeserializeDirectPlayWireHeader was built for in Phase 5.
+        void DrainWirePackets() {
+            if (!session_.transport) return;
+
+            constexpr std::size_t kMaxWireBufferSize =
+                free_direct_directplay::kDirectPlayWireHeaderSize +
+                free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes;
+            // wireBuf_ is a persistent member (TASK-24H-0179), resized once and reused across
+            // calls instead of allocating fresh every time - a no-op after the first call.
+            if (wireBuf_.size() < kMaxWireBufferSize) {
+                wireBuf_.resize(kMaxWireBufferSize);
+            }
+            std::vector<std::uint8_t>& wireBuf = wireBuf_;
+            std::size_t receivedSize = 0;
+            while (session_.transport->Receive(wireBuf.data(), wireBuf.size(), &receivedSize)) {
+                const auto header = free_direct_directplay::TryDeserializeDirectPlayWireHeader(
+                    wireBuf.data(), receivedSize);
+                if (!header) continue;
+
+                switch (header->type) {
+                    case free_direct_directplay::DirectPlayWirePacketType::Data:
+                        HandleDataPacket(*header, wireBuf, receivedSize);
+                        break;
+                    case free_direct_directplay::DirectPlayWirePacketType::JoinAccept:
+                        HandleJoinAcceptPacket(*header);
+                        break;
+                    default:
+                        DirectPlayLog("free-direct Receive: type=%u consumed and ignored",
+                                      static_cast<unsigned>(header->type));
+                        // Join (host-side only meaningful, and assignment already happens
+                        // independently of it - see the assignment loop above),
+                        // JoinReject/Discovery/DiscoveryResponse (not implemented yet) -
+                        // consumed from the queue and otherwise ignored.
+                        break;
+                }
+            }
+        }
+
         std::atomic<ULONG> refCount_;
         free_direct_directplay::DirectPlaySession session_;
         // Persistent scratch buffer for Receive()'s drain loop, reused across calls instead of

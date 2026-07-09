@@ -7942,7 +7942,7 @@ system-level code most likely to hide a sanitizer-catchable bug, checked deliber
 out-of-tree `../free-eggbert` rebuild (`CONFIGURE_EXIT=0`, `BUILD_EXIT=0`, zero `error:` matches).
 
 ### TASK-24H-0184: Extract Send()/Receive()'s delivery paths into private helper methods (behavior-preserving)
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Implementation
@@ -7989,6 +7989,35 @@ Out of scope:
   worth doing.
 - Do not add new logging as part of this task even though `TASK-24H-0183` is landing nearby — keep
   the two changes independent and separately reviewable/revertable.
+
+Verified: `Send()` is now a 12-line dispatcher calling three new private methods -
+`SendBroadcast(idFrom, dwFlags, lpData, dwDataSize)`, `SendSelf(id, dwFlags, lpData, dwDataSize)`,
+`SendUnicast(idFrom, idTo, dwFlags, lpData, dwDataSize)` - each taking only the parameters that
+path actually uses (`SendSelf` collapses the original `idFrom`/`idTo` to one `id` parameter, since
+reaching that path already guarantees they're equal). `Receive()` calls a new `DrainWirePackets()`
+in place of its former inline drain loop, which itself calls two new methods,
+`HandleDataPacket(header, wireBuf, receivedSize)`/`HandleJoinAcceptPacket(header)`, for the two
+packet types with real handling logic (the `default:` case stayed inline in `DrainWirePackets`'s
+own `switch` - three lines, not worth its own method). `TASK-24H-0183`'s `DirectPlayLog(...)` calls
+travelled with the code blocks they were already inside (not added by this task - that would have
+violated this task's own "do not add new logging" scope line - just carried along, unchanged,
+during extraction). Every comment, including full Decision-number citations, moved verbatim with
+its associated code - not paraphrased, summarized, or dropped - so a reviewer diffing an extracted
+method's body against the original inline code sees the intended "cut and paste into a method
+signature" mechanical transformation, not a rewrite. Confirmed via `git diff --stat`: only
+`DirectPlay.cpp` changed, zero test file edits, satisfying the task's own first acceptance
+criterion literally, not just in spirit. Verified across five configurations, all clean: fast
+`g++` loop (`tests/directplay_tests.cpp`'s own documented dependency-light build, unaffected by
+this task but re-run anyway since it touches the same file `TASK-24H-0183` had to fix a real
+dependency regression in) - `OK: all DirectPlay tests passed`; default build `ctest` 9/9;
+`-DFREE_DIRECT_ENABLE_ENET=ON` build `ctest -L enet` 1/1, **and** the unfiltered `ctest` under that
+same ENet build still shows exactly 66 failing assertions in `directplay_tests` - the identical
+count observed before this refactor (`TASK-24H-0183`'s own verification run), confirming the
+extraction changed no behavior even in the already-documented loopback-vs-ENet incompatibility
+path; `-DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON` build `ctest` 9/9 clean; the
+same sanitizer flags combined with `-DFREE_DIRECT_ENABLE_ENET=ON`, `ctest -L enet` 1/1 clean; a
+full out-of-tree `../free-eggbert` rebuild (`CONFIGURE_EXIT=0`, `BUILD_EXIT=0`, zero `error:`
+matches).
 
 ### TASK-24H-0185: Add a shared tests/TestHelpers.hpp, consolidating DirectDraw/DirectSound test scaffolding
 Status: DONE
