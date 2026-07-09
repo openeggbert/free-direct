@@ -1754,6 +1754,36 @@ void Test_SelfSend_OversizedPayload_ReturnsSendTooBig() {
     dp->Release();
 }
 
+// docs/audit_dplay.md §6.5 (D2), TASK-24H-0172: unlike the test above (an honestly-sized
+// oversized buffer), this passes a dwDataSize that *overstates* a genuinely small real buffer -
+// exactly the shape that, before this fix, would have made Send()'s self-send path read past the
+// real buffer via packet.payload.assign() before Enqueue() ever got a chance to reject it.
+// Return-value-only checking can't distinguish "rejected safely" from "read out of bounds, then
+// rejected" - this test's real value is as a regression guard under an ASan build
+// (FREE_DIRECT_ENABLE_ASAN), which would flag the out-of-bounds read directly if the size check
+// were ever moved back below the .assign() call.
+void Test_SelfSend_DwDataSizeOverstatesRealBuffer_ReturnsSendTooBigNoOverread() {
+    using namespace free_direct_directplay;
+
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    // The real buffer is tiny; dwDataSize claims it is far larger than both the real buffer and
+    // kMaxPayloadBytes.
+    char smallRealBuffer[4] = {'a', 'b', 'c', 'd'};
+    const DWORD claimedSize = static_cast<DWORD>(DirectPlayMessageQueue::kMaxPayloadBytes) + 1000;
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, smallRealBuffer, claimedSize) == DPERR_SENDTOOBIG);
+
+    dp2->Release();
+    dp->Release();
+}
+
 // 24-Hour Stabilization Backlog TASK-24H-0106/0107 (plan.md): a real null-pointer gap found by
 // sweeping IDirectPlay2A's methods - Send() never checked lpData for null before pointer
 // arithmetic (`bytes + dwDataSize`) when dwDataSize > 0, undefined behavior on a null lpData with
@@ -1890,6 +1920,7 @@ int main() {
     Test_DirectPlayEnumerateW_NullCallback_ReturnsInvalidParams();
     Test_Close_CalledTwice_SecondCallIsSafe();
     Test_SelfSend_OversizedPayload_ReturnsSendTooBig();
+    Test_SelfSend_DwDataSizeOverstatesRealBuffer_ReturnsSendTooBigNoOverread();
     Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams();
     Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk();
     Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown();

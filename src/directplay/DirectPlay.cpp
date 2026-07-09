@@ -447,6 +447,16 @@ namespace {
                     session_.localPlayerIds.end()) {
                     return DPERR_INVALIDPLAYER;
                 }
+                // Validated against kMaxPayloadBytes *before* reading lpData below, matching the
+                // broadcast/unicast paths' existing pre-checks (docs/audit_dplay.md §6.5, D2,
+                // TASK-24H-0172) - this branch used to reach packet.payload.assign() first and
+                // only discover an oversized payload afterward, via Enqueue()'s own check. If
+                // dwDataSize ever overstated the caller's real buffer size, that .assign() call
+                // would already have read out of bounds before the eventual DPERR_SENDTOOBIG
+                // rejection could stop it.
+                if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
+                    return DPERR_SENDTOOBIG;
+                }
                 // Enqueued directly into session_.messageQueue rather than round-tripping
                 // through session_.transport (Phase 4's original approach, changed here per
                 // docs/directplay-design.md Decision 12): sending a message to yourself is

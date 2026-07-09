@@ -7348,7 +7348,7 @@ internal FreeDirect architecture fact unrelated to free-eggbert's decompilation 
 continues from `TASK-24H-0171`.
 
 ### TASK-24H-0172: Validate dwDataSize before reading lpData in Send()'s self-send path
-Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
+Status: DONE | Priority: P1 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §6.5 (D2) — self-send does `packet.payload.assign(bytes, bytes +
 dwDataSize)` (`DirectPlay.cpp:465`) before any size check; broadcast/unicast both check
 `dwDataSize > kMaxPayloadBytes` first. Depends on: None.
@@ -7360,6 +7360,14 @@ above the `.assign()` call. Add a test with a `dwDataSize` larger than its real 
 doesn't catch this). Not reachable by free-eggbert today (its one `Send()` call site always passes
 `idTo=0`, routing through broadcast, never self-send) — real defect regardless, since self-send is
 a first-class, directly-testable public API path.
+
+Verified: moved the `kMaxPayloadBytes` check above `.assign()` (`DirectPlay.cpp:450-452`). New test
+`Test_SelfSend_DwDataSizeOverstatesRealBuffer_ReturnsSendTooBigNoOverread` passes a 4-byte real
+buffer with `dwDataSize = kMaxPayloadBytes + 1000`. Proved the test has teeth, not just a matching
+return value: temporarily disabled the new check and rebuilt under `-DFREE_DIRECT_ENABLE_ASAN=ON
+-DFREE_DIRECT_ENABLE_UBSAN=ON` — ASan immediately caught a real `stack-buffer-overflow in memcpy`.
+Restored the fix, rebuilt, re-ran under the same ASan+UBSan config: clean, 0 diagnostics, full
+`ctest` 7/7. Default (non-sanitizer) build also passes 7/7 unchanged.
 
 ### TASK-24H-0173: Fix dplay.h's stale top-of-file broadcast-status comment
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
