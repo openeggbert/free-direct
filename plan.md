@@ -7178,7 +7178,7 @@ poison pointer (not pre-nulled) to verify the function actually nulls it, and co
 `DSERR_INVALIDPARAM` with no crash. Full suite passes 7/7 (`directsound_tests` 31/31, up from 30).
 
 ### TASK-24H-0165: Document and regression-test the real SharedAudioDevice close/reopen cost
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Documentation
@@ -7212,6 +7212,14 @@ Out of scope:
 - Do not attempt to reduce or hide the underlying cost in this task (it originates in SDL3's own
   device open/close path, not FreeDirect's code) — this task is documentation plus a
   correctness-only regression test.
+
+Verified: added a new section to `docs/directsound-limitations.md` ("Real device close/reopen cost
+is large, but confirmed not currently reachable") citing the measured ~51ms/cycle vs. ~0.00006ms
+figures. New test `Test_DirectSoundCreate_SoleOwnerCreateReleaseCycle_CompletesWithoutError`
+(`tests/directsound_tests.cpp`) runs 3 real sole-owner create/release cycles, asserting only
+correctness (`DS_OK`/non-null/refcount-0), no timing bound. Full suite passes 7/7
+(`directsound_tests` 32/32, up from 31; total suite runtime increased by roughly the expected
+~150ms for 3 real device cycles, consistent with the measured per-cycle cost).
 
 ### TASK-24H-0166: Take mutex_ in SharedAudioDevice::id()
 Status: TODO

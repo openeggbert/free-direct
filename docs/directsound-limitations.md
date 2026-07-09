@@ -94,6 +94,23 @@ passing a zeroed spec to SDL, which would fail. This is the same fallback README
 `tests/directsound_tests.cpp`'s `Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully` covers
 this exact path.
 
+## Real device close/reopen cost is large, but confirmed not currently reachable
+
+`SharedAudioDevice::open()`/`release()` wrap `SDL_OpenAudioDevice`/`SDL_CloseAudioDevice` with a
+process-wide reference count, so the real device is only actually closed and reopened when the
+*last* live `IDirectSound` is released and a *new* one is later created (`DirectSound.cpp`).
+Measured directly against the real compiled library (`docs/audit_dsound.md` §8.3, TASK-24H-0165):
+a full close+reopen cycle as the sole owner costs **~51ms/cycle**, versus ~0.00006ms/cycle when
+another `IDirectSound` instance keeps the device open throughout (a pure reference-count bump) -
+roughly 850,000x more expensive, and more than 3 full frames' worth of stall at 60fps per cycle.
+The exact cause is inside SDL3's own device open/close path, not this project's code.
+
+Confirmed not triggered by either target game today: both `../free-eggbert` and `../planetblupi`
+call `DirectSoundCreate` exactly once and `Release()` exactly once, for the life of the process
+(`docs/audit_dsound.md` §4) - this cost is paid once, at startup, in both games. Recorded here so a
+future contributor adding a "restart audio" feature, device-hotplug handling, or test code that
+loops over create/release doesn't rediscover this by surprise.
+
 ## Dead-code call sites (informational only)
 
 This audit found DirectSound-shaped call sites in both target games that are compiled but

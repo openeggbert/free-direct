@@ -407,6 +407,20 @@ void Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks() {
     ds->Release();
 }
 
+// docs/directsound-limitations.md ("Real device close/reopen cost..."), TASK-24H-0165: a
+// sole-owner create/release cycle (the real SDL device actually closes and reopens each time,
+// measured at ~51ms/cycle in docs/audit_dsound.md §8.3) must still complete without error or
+// hang - no timing bound asserted here, only correctness, since exact timing is too
+// environment-dependent for CI.
+void Test_DirectSoundCreate_SoleOwnerCreateReleaseCycle_CompletesWithoutError() {
+    for (int i = 0; i < 3; ++i) {
+        LPDIRECTSOUND ds = nullptr;
+        CHECK(DirectSoundCreate(nullptr, &ds, nullptr) == DS_OK);
+        CHECK(ds != nullptr);
+        CHECK(ds->Release() == 0); // sole owner - this really closes the SDL device
+    }
+}
+
 // ===== AddRef / Release lifetime =====
 
 void Test_DirectSound_AddRefRelease_AdjustsRefCount() {
@@ -560,6 +574,7 @@ int main() {
     Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp();
     Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently();
     Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks();
+    Test_DirectSoundCreate_SoleOwnerCreateReleaseCycle_CompletesWithoutError();
 
     Test_DirectSound_AddRefRelease_AdjustsRefCount();
     Test_DirectSoundBuffer_AddRefRelease_AdjustsRefCount();
