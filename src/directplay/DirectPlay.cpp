@@ -10,6 +10,9 @@
 #include "LoopbackDirectPlayTransport.hpp"
 #ifdef FREE_DIRECT_ENABLE_ENET
 #include "EnetDirectPlayTransport.hpp"
+#include <SDL3/SDL.h>
+#include <cstdlib>
+#include <string>
 #endif
 #include <algorithm>
 #include <atomic>
@@ -46,6 +49,40 @@ namespace {
         for (auto& byte : guid.Data4) byte = static_cast<unsigned char>(distByte(rng));
         return guid;
     }
+
+#ifdef FREE_DIRECT_ENABLE_ENET
+    // Parses FREE_DIRECT_ENET_HOST_ADDRESS (docs/directplay-design.md Decision 22): "<host>" or
+    // "<host>:<port>". Returns false (leaving outHost/outPort unmodified) if the env var is
+    // unset, empty, or malformed - Open() maps that to DPERR_NOSESSIONS, the same code the
+    // loopback backend already uses for "nothing to connect to" (Decision 11), rather than
+    // inventing a new error condition for what is, from the caller's perspective, the same kind
+    // of "could not find/reach a session" outcome.
+    bool ParseEnetHostAddressEnvVar(std::string& outHost, std::uint16_t& outPort) {
+        const char* raw = SDL_getenv("FREE_DIRECT_ENET_HOST_ADDRESS");
+        if (!raw || !*raw) return false;
+        const std::string value(raw);
+        const auto colonPos = value.rfind(':');
+        if (colonPos == std::string::npos) {
+            if (value.empty()) return false;
+            outHost = value;
+            outPort = free_direct_directplay::kDefaultDirectPlayEnetPort;
+            return true;
+        }
+        const std::string host = value.substr(0, colonPos);
+        const std::string portStr = value.substr(colonPos + 1);
+        if (host.empty() || portStr.empty()) return false;
+        // Reject anything non-numeric outright (e.g. a second colon from an unsupported IPv6
+        // literal) rather than letting strtol silently parse a prefix of a garbage string.
+        for (const char c : portStr) {
+            if (c < '0' || c > '9') return false;
+        }
+        const long parsedPort = std::strtol(portStr.c_str(), nullptr, 10);
+        if (parsedPort <= 0 || parsedPort > 65535) return false;
+        outHost = host;
+        outPort = static_cast<std::uint16_t>(parsedPort);
+        return true;
+    }
+#endif
 
     // Process-wide static registry (docs/directplay-design.md Decision 18), keyed by the fixed
     // loopback port (docs/directplay-design.md Decisions 11/12) - lets EnumSessions() find a
@@ -185,14 +222,35 @@ namespace {
             session_.transport = std::make_unique<free_direct_directplay::EnetDirectPlayTransport>();
             if (session_.isHost) {
                 // Fixed default port (docs/directplay-design.md Decision 5) - DPSESSIONDESC2
-                // has no port-like field to derive one from. Only the hosting role listens
-                // here; a joining role calling Connect() over ENet still isn't wired - how it
-                // would resolve a host address is a separate, still-open design question
-                // (plan.md Phase 7), not decided by this task.
+                // has no port-like field to derive one from.
                 if (!session_.transport->Listen(free_direct_directplay::kDefaultDirectPlayEnetPort)) {
                     session_.transport.reset();
                     return DPERR_CANTCREATESESSION;
                 }
+            } else {
+                // DPOPEN_JOIN/DPOPEN_OPENSESSION over ENet (docs/directplay-design.md Decision
+                // 22): the host address is read from FREE_DIRECT_ENET_HOST_ADDRESS
+                // ("<host>" or "<host>:<port>") since DPSESSIONDESC2 has no address-like field
+                // (the same gap Decision 5 already found for the hosting port). A missing or
+                // malformed env var, or a failed Connect(), both map to DPERR_NOSESSIONS - the
+                // existing "could not find/reach a session" code the loopback path already uses
+                // for the equivalent case (Decision 11), not a new error condition.
+                std::string host;
+                std::uint16_t port = 0;
+                if (!ParseEnetHostAddressEnvVar(host, port) ||
+                    !session_.transport->Connect(host.c_str(), port)) {
+                    session_.transport.reset();
+                    return DPERR_NOSESSIONS;
+                }
+                // Send a join-request packet to the host (Decision 16), fire-and-forget - the
+                // exact same shape and rationale as the loopback path's own join packet below.
+                free_direct_directplay::DirectPlayWirePacketHeader joinHeader;
+                joinHeader.type = free_direct_directplay::DirectPlayWirePacketType::Join;
+                joinHeader.applicationGuid = session_.applicationGuid;
+                joinHeader.sessionGuid = session_.sessionInstanceGuid;
+                std::vector<std::uint8_t> joinBytes;
+                free_direct_directplay::SerializeDirectPlayWireHeader(joinHeader, joinBytes);
+                session_.transport->Send(0, joinBytes.data(), joinBytes.size(), true);
             }
 #else
             session_.transport = std::make_unique<free_direct_directplay::LoopbackDirectPlayTransport>();

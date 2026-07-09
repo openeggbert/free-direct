@@ -6186,7 +6186,7 @@ the shared broadcast/relay logic needed zero ENet-specific code, exactly as anti
 `header_hygiene` (clean); a full out-of-tree `../free-eggbert` rebuild (exit 0).
 
 ### TASK-24H-0149: Wire ENet joining Open() to a host address via FREE_DIRECT_ENET_HOST_ADDRESS
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Implementation
@@ -6215,6 +6215,22 @@ Out of scope:
 - LAN discovery (TASK-24H-0150) - this task only wires a manually-supplied address.
 - GUID-mismatch validation on join (Decision 16's own already-recorded "deliberately still out of
   scope").
+
+Verified: `ParseEnetHostAddressEnvVar` helper added (anonymous namespace, `DirectPlay.cpp`) -
+parses `"<host>"`/`"<host>:<port>"`, rejects a non-numeric port substring outright rather than
+letting `strtol` silently parse a garbage prefix. `Open()`'s ENet joining branch calls it +
+`transport->Connect()`, returning `DPERR_NOSESSIONS` on any failure, then sends the existing
+`Join` packet unchanged. `tests/enet_directplay_tests.cpp` extended with 2 new tests going through
+the real public `IDirectPlay2A` API (not whitebox, since this capability lives in `Open()` itself):
+unset-env-var rejection, and a real end-to-end join (host `Open(DPOPEN_CREATE)`, client sets the
+env var to `127.0.0.1` and `Open(DPOPEN_JOIN)`, polled until the client's deterministically-
+expected DPID `1` is observably adopted via a self-send probe). 4/4 -> 6/6
+`enet_directplay_tests`. Also fixed a stale file-header comment in the same test file (claimed the
+host-discovery question was still BLOCKED per `TASK-24H-0132`, no longer true). **Verified for
+real**: full CMake build+`ctest` (7/7, this task's changes are entirely inside `#ifdef
+FREE_DIRECT_ENABLE_ENET`, so the default build is provably unaffected); ENet-enabled `ctest -L
+enet` (1/1); ASan+UBSan+ENet combined build (7/7 clean, zero sanitizer diagnostics); `header_hygiene`
+(clean); a full out-of-tree `../free-eggbert` rebuild (exit 0).
 
 ### TASK-24H-0150: Implement LAN UDP broadcast discovery for ENet-hosted sessions
 Status: TODO

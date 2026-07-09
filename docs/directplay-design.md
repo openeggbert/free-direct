@@ -1822,13 +1822,32 @@ equivalent "nothing is there" case, Decision 11).
 
 ### Implemented
 
-`src/directplay/DirectPlay.cpp`: `Open()`'s ENet branch (`#ifdef FREE_DIRECT_ENABLE_ENET`), joining
-case: reads `FREE_DIRECT_ENET_HOST_ADDRESS` via `SDL_getenv`, parses an optional trailing
-`:<port>`, calls `transport->Connect(host, port)`, returning `DPERR_NOSESSIONS` on a missing env
-var or a failed `Connect()`. Sends the same `Join` wire packet the loopback path already sends
-post-`Connect()` (Decision 16), unchanged. **Verified for real**: a real two-process (or two-thread
-test-harness) ENet connect using the env var, gated behind `FREE_DIRECT_ENABLE_ENET` -
-`tests/enet_directplay_tests.cpp`.
+`src/directplay/DirectPlay.cpp`: a new anonymous-namespace helper, `ParseEnetHostAddressEnvVar`,
+reads `FREE_DIRECT_ENET_HOST_ADDRESS` via `SDL_getenv`, splits on the last `:` for an optional
+port (rejecting a non-numeric port substring outright, e.g. a second colon from an unsupported
+IPv6 literal, rather than letting `strtol` silently parse a garbage prefix), and defaults to
+`kDefaultDirectPlayEnetPort` when no port is given. `Open()`'s ENet branch, joining case, calls it
+and `transport->Connect(host, port)`, returning `DPERR_NOSESSIONS` on a missing/malformed env var
+or a failed `Connect()`. Sends the same `Join` wire packet the loopback path already sends
+post-`Connect()` (Decision 16), unchanged.
+
+New tests in `tests/enet_directplay_tests.cpp` (extended to also test through the real public
+`IDirectPlay2A` API for this specific capability, since it lives in `DirectPlay.cpp`'s `Open()`,
+not the transport - the file's other tests remain whitebox-only, unchanged):
+`Test_OpenAsJoinOverEnet_WithNoHostAddressEnvVar_ReturnsNoSessions` (env var unset ->
+`DPERR_NOSESSIONS`, no crash, no real network attempt) and
+`Test_OpenAsJoinOverEnet_WithHostAddressEnvVar_JoinsSuccessfully` (a real host `Open()`s
+`DPOPEN_CREATE`; a client sets `FREE_DIRECT_ENET_HOST_ADDRESS=127.0.0.1` and `Open()`s
+`DPOPEN_JOIN`; polls both sides' real public `Receive()` in a bounded loop until the client's
+deterministically-expected assigned DPID (`1`, the first remote connection after the host's own
+DPID-`0` local player, Decision 3) is observably adopted - proven the same way
+`directplay_tests.cpp`'s own loopback join test proves it, via a self-send that only succeeds once
+adoption has genuinely happened). **Verified for real**: 6/6 `enet_directplay_tests` (was 4/4);
+full CMake build+`ctest` (7/7, unaffected - this decision only touches `#ifdef
+FREE_DIRECT_ENABLE_ENET` code paths); ENet-enabled `ctest -L enet` (1/1); ASan+UBSan+ENet combined
+build (7/7 clean, zero sanitizer diagnostics); `header_hygiene` (clean, no `include/` changes for
+this decision); a full out-of-tree `../free-eggbert` rebuild (exit 0, this decision is fully inert
+for a default non-ENet build).
 
 ---
 
