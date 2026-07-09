@@ -274,6 +274,56 @@ namespace {
             // on a null `lpData` when `dwDataSize > 0`, a real crash risk, not a hypothetical one.
             if (!lpData && dwDataSize > 0) return DPERR_INVALIDPARAMS;
 
+            // Broadcast (docs/directplay-design.md Decision 20), checked before the
+            // idTo == idFrom self-send branch below so it takes priority even for the one case
+            // where they could otherwise both match: the host's own DPID is always
+            // DPID_ALLPLAYERS's value (0, Decision 3), so Send(0, 0, ...) - free-eggbert's real
+            // call shape for a hosting process - must mean broadcast, not self-send, even though
+            // idFrom == idTo == 0 would otherwise satisfy the self-send check too.
+            if (idTo == DPID_ALLPLAYERS) {
+                if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
+                    session_.localPlayerIds.end()) {
+                    return DPERR_INVALIDPLAYER;
+                }
+                if (dwDataSize > free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes) {
+                    return DPERR_SENDTOOBIG;
+                }
+                if (!session_.transport) return DPERR_INVALIDPLAYER;
+
+                free_direct_directplay::DirectPlayWirePacketHeader header;
+                header.applicationGuid = session_.applicationGuid;
+                header.sessionGuid = session_.sessionInstanceGuid;
+                header.idFrom = idFrom;
+                header.idTo = DPID_ALLPLAYERS;
+                header.payloadLength = dwDataSize;
+                std::vector<std::uint8_t> wireBytes;
+                free_direct_directplay::SerializeDirectPlayWireHeader(header, wireBytes);
+                const auto* payloadBytes = static_cast<const std::uint8_t*>(lpData);
+                wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
+                const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
+
+                if (session_.isHost) {
+                    // Deliver directly to every remote player already known (Decision 14's
+                    // existing per-DPID addressing) - never looped back to the host's own
+                    // queue, since the host is the sender here and broadcast never reaches its
+                    // own sender (Decision 20).
+                    for (const DPID remoteId : session_.remotePlayerIds) {
+                        session_.transport->Send(remoteId, wireBytes.data(), wireBytes.size(), reliable);
+                    }
+                    return DP_OK;
+                }
+                // Joining role: exactly one connection exists (the host) - targetId is accepted
+                // but ignored by the transport for this role (Decision 14), so DPID_ALLPLAYERS
+                // here is only a placeholder argument. Leaving the wire header's own idTo at
+                // DPID_ALLPLAYERS (not resolved to any specific address) is what tells the
+                // host's own Receive() drain loop this packet needs relaying to every other
+                // connected peer (Decision 21), not just local delivery.
+                if (!session_.transport->Send(DPID_ALLPLAYERS, wireBytes.data(), wireBytes.size(), reliable)) {
+                    return DPERR_GENERIC;
+                }
+                return DP_OK;
+            }
+
             if (idTo == idFrom) {
                 // Validated against localPlayerIds (docs/directplay-design.md Decision 16) - this
                 // was previously unchecked, an inconsistency with the unicast path below now that
@@ -455,6 +505,26 @@ namespace {
                                 wireBuf.begin() + free_direct_directplay::kDirectPlayWireHeaderSize,
                                 wireBuf.begin() + receivedSize);
                             session_.messageQueue.Enqueue(std::move(packet));
+
+                            // Host-side broadcast relay (docs/directplay-design.md Decision 21):
+                            // a broadcast arriving from one connected peer (idTo ==
+                            // DPID_ALLPLAYERS) is re-sent, byte-for-byte unchanged, to every
+                            // OTHER connected peer - never back to the original sender
+                            // (header->idFrom). The host's own copy was already enqueued just
+                            // above - the host is itself a legitimate broadcast recipient when a
+                            // non-host peer is the sender, distinct from Decision 20's "broadcast
+                            // never reaches its own sender" rule, which is about the sender, not
+                            // the host acting as relay/recipient. A non-host peer's Receive()
+                            // never reaches this branch's effects (session_.isHost is false
+                            // there), so it just enqueues like any other Data packet, unchanged
+                            // from before this decision.
+                            if (session_.isHost && header->idTo == DPID_ALLPLAYERS) {
+                                for (const DPID remoteId : session_.remotePlayerIds) {
+                                    if (remoteId == header->idFrom) continue;
+                                    session_.transport->Send(remoteId, wireBuf.data(), receivedSize,
+                                                              /*reliable=*/true);
+                                }
+                            }
                             break;
                         }
                         case free_direct_directplay::DirectPlayWirePacketType::JoinAccept: {

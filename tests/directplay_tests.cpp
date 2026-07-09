@@ -901,6 +901,12 @@ void Test_LoopbackSendToSelf_ReturnsOk() {
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
+    // A host's first CreatePlayer() always returns DPID 0 (Decision 3), which now always means
+    // broadcast when used as Send()'s idTo (docs/directplay-design.md Decision 20) - a second
+    // player is created here so `player` is a real, non-zero, self-send-safe DPID, distinct from
+    // the DPID_ALLPLAYERS collision this test predates.
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     DPID player = 0;
     CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
 
@@ -923,6 +929,11 @@ void Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds() {
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
+    // A host's first CreatePlayer() always returns DPID 0 (Decision 3), which now always means
+    // broadcast when used as Send()'s idTo (docs/directplay-design.md Decision 20) - a second
+    // player is created here so `player` is a real, non-zero, self-send-safe DPID.
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     DPID player = 0;
     CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
 
@@ -949,6 +960,11 @@ void Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload() {
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
+    // A host's first CreatePlayer() always returns DPID 0 (Decision 3), which now always means
+    // broadcast when used as Send()'s idTo (docs/directplay-design.md Decision 20) - a second
+    // player is created here so `player` is a real, non-zero, self-send-safe DPID.
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     DPID player = 0;
     CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
 
@@ -1271,19 +1287,19 @@ void Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer() {
     CHECK(parsed->payloadLength == 2);
 }
 
-// 24-Hour Stabilization Backlog TASK-24H-0092 (plan.md), docs/audit-24h-free-direct.md §1/§6.
+// 24-Hour Stabilization Backlog TASK-24H-0148 (plan.md), docs/directplay-design.md Decisions
+// 20/21. Supersedes what was TASK-24H-0092's characterization test
+// (Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf) - that test locked in the *old*, since-fixed
+// collision (a host's broadcast call hit the self-send branch and never reached any remote
+// client) as a documented-but-not-endorsed bug. Decision 20/21 fixed exactly that: idTo == 0
+// (DPID_ALLPLAYERS) is now checked before the self-send branch and delivered as a real broadcast,
+// with the host relaying a non-host sender's broadcast to every other peer.
 //
-// Characterization test, not a correctness test: it locks in today's *actual* behavior so a
-// future change to broadcast semantics is a deliberate, visible diff here rather than a silent
-// behavior change. It does not assert this behavior is correct - it is arguably a real bug.
-//
-// docs/directplay-design.md Decision 3 assigns DPID 0 to the host's own first local player.
-// free-eggbert's only reachable Send() call pattern is Send(m_dpid, 0, ...) - a broadcast to
-// DPID 0. When the HOST makes that exact call, idTo (0) == idFrom (0), so DirectPlay2AImpl::Send()
-// takes the self-send branch (Decision 12: self-send bypasses the transport entirely) instead of
-// reaching any remote client. This test proves exactly that: the host's own Receive() gets the
-// message, but a connected remote client's Receive() does not.
-void Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf() {
+// free-eggbert's only reachable Send() call pattern is Send(m_dpid, 0, ...) - this test uses that
+// exact call shape from the host role (whose own DPID is always 0, Decision 3) and asserts the
+// new, correct behavior: the remote client receives it, and the host's own queue does not (a
+// broadcast never reaches its own sender, Decision 20).
+void Test_HostBroadcast_ReachesAllRemoteClientsNotSelf() {
     LPDIRECTPLAY hostDp = nullptr;
     CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
     LPDIRECTPLAY2A hostDp2 = nullptr;
@@ -1319,23 +1335,169 @@ void Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf() {
     const char msg[] = "broadcast-shaped";
     CHECK(hostDp2->Send(hostPlayer, 0, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
 
-    // Today's actual behavior: only the host itself receives it (self-send, Decision 12) ...
+    // The connected remote client receives it - real broadcast delivery (Decision 20/21).
+    char clientBuf[32] = {};
+    DWORD clientBufSize = sizeof(clientBuf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, clientBuf, &clientBufSize) == DP_OK);
+    CHECK(clientBufSize == sizeof(msg));
+    CHECK(from == hostPlayer);
+    CHECK(to == 0); // DPID_ALLPLAYERS - the wire marker, not resolved to any specific address
+    CHECK(std::memcmp(clientBuf, msg, sizeof(msg)) == 0);
+
+    // The host's own queue does not get a copy - broadcast never reaches its own sender
+    // (Decision 20).
+    char hostBuf[32] = {};
+    DWORD hostBufSize = sizeof(hostBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, hostBuf, &hostBufSize) == DPERR_NOMESSAGES);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0148 (plan.md), docs/directplay-design.md Decision 20:
+// a host's broadcast must fan out to *every* connected remote client, not just one - proves the
+// loop over remotePlayerIds in Send()'s broadcast branch actually iterates, not just addresses
+// the first entry.
+void Test_HostBroadcast_ReachesMultipleRemoteClients() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    auto openClient = [](LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2) {
+        CHECK(DirectPlayCreate(nullptr, outDp, nullptr) == DP_OK);
+        CHECK((*outDp)->QueryInterface(IID_IDirectPlay2A, (void**)outDp2) == DP_OK);
+        DPSESSIONDESC2 desc{};
+        std::memset(&desc, 0, sizeof(desc));
+        desc.dwSize = sizeof(DPSESSIONDESC2);
+        CHECK((*outDp2)->Open(&desc, DPOPEN_JOIN) == DP_OK);
+    };
+
+    LPDIRECTPLAY dpA = nullptr, dpB = nullptr;
+    LPDIRECTPLAY2A dp2A = nullptr, dp2B = nullptr;
+    openClient(&dpA, &dp2A);
+    openClient(&dpB, &dp2B);
+
+    // Drives the host's assignment loop for both pending connections.
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    pollSize = sizeof(pollBuf);
+    CHECK(dp2A->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    pollSize = sizeof(pollBuf);
+    CHECK(dp2B->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+
+    const char msg[] = "fan-out";
+    CHECK(hostDp2->Send(hostPlayer, 0, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
+
+    char bufA[32] = {};
+    DWORD sizeA = sizeof(bufA);
+    CHECK(dp2A->Receive(&from, &to, DPRECEIVE_ALL, bufA, &sizeA) == DP_OK);
+    CHECK(sizeA == sizeof(msg));
+    CHECK(std::memcmp(bufA, msg, sizeof(msg)) == 0);
+
+    char bufB[32] = {};
+    DWORD sizeB = sizeof(bufB);
+    CHECK(dp2B->Receive(&from, &to, DPRECEIVE_ALL, bufB, &sizeB) == DP_OK);
+    CHECK(sizeB == sizeof(msg));
+    CHECK(std::memcmp(bufB, msg, sizeof(msg)) == 0);
+
+    // Host's own queue still gets nothing - broadcast never reaches its own sender.
+    char hostBuf[8];
+    DWORD hostBufSize = sizeof(hostBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, hostBuf, &hostBufSize) == DPERR_NOMESSAGES);
+
+    dp2B->Release();
+    dpB->Release();
+    dp2A->Release();
+    dpA->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0148 (plan.md), docs/directplay-design.md Decision 21:
+// a non-host peer's broadcast has no direct connection to any other non-host peer - only the host
+// relays it. Proves the relay reaches the *other* client and the host itself, but never echoes
+// back to the original sender.
+void Test_ClientBroadcast_RelayedByHostToOtherClientAndHost() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    auto openClient = [](LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2) {
+        CHECK(DirectPlayCreate(nullptr, outDp, nullptr) == DP_OK);
+        CHECK((*outDp)->QueryInterface(IID_IDirectPlay2A, (void**)outDp2) == DP_OK);
+        DPSESSIONDESC2 desc{};
+        std::memset(&desc, 0, sizeof(desc));
+        desc.dwSize = sizeof(DPSESSIONDESC2);
+        CHECK((*outDp2)->Open(&desc, DPOPEN_JOIN) == DP_OK);
+    };
+
+    LPDIRECTPLAY dpA = nullptr, dpB = nullptr;
+    LPDIRECTPLAY2A dp2A = nullptr, dp2B = nullptr;
+    openClient(&dpA, &dp2A);
+    openClient(&dpB, &dp2B);
+
+    // Drives the host's assignment loop (both clients connect and are assigned DPIDs - 1 for A,
+    // 2 for B, deterministic connection order per LoopbackDirectPlayTransport's synchronous
+    // registry) and each client's own join-accept processing.
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    pollSize = sizeof(pollBuf);
+    CHECK(dp2A->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    pollSize = sizeof(pollBuf);
+    CHECK(dp2B->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+
+    const DPID clientAPlayer = 1;
+    const char msg[] = "relay-me";
+    CHECK(dp2A->Send(clientAPlayer, 0, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
+
+    // The host's own Receive() must run once to actually process/relay the incoming packet
+    // (Decision 6's polling model - nothing happens until something calls Receive() on the host).
     char hostBuf[32] = {};
     DWORD hostBufSize = sizeof(hostBuf);
     CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, hostBuf, &hostBufSize) == DP_OK);
     CHECK(hostBufSize == sizeof(msg));
-    CHECK(from == 0 && to == 0);
+    CHECK(from == clientAPlayer);
     CHECK(std::memcmp(hostBuf, msg, sizeof(msg)) == 0);
 
-    // ... the connected remote client never sees it, even though a real broadcast should have
-    // delivered it there too.
-    char clientBuf[32] = {};
-    DWORD clientBufSize = sizeof(clientBuf);
-    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, clientBuf, &clientBufSize) ==
-          DPERR_NOMESSAGES);
+    // Client B receives the relayed copy.
+    char bufB[32] = {};
+    DWORD sizeB = sizeof(bufB);
+    CHECK(dp2B->Receive(&from, &to, DPRECEIVE_ALL, bufB, &sizeB) == DP_OK);
+    CHECK(sizeB == sizeof(msg));
+    CHECK(from == clientAPlayer);
+    CHECK(std::memcmp(bufB, msg, sizeof(msg)) == 0);
 
-    clientDp2->Release();
-    clientDp->Release();
+    // Client A (the original sender) never gets its own broadcast echoed back.
+    char bufA[8];
+    DWORD sizeA = sizeof(bufA);
+    CHECK(dp2A->Receive(&from, &to, DPRECEIVE_ALL, bufA, &sizeA) == DPERR_NOMESSAGES);
+
+    dp2B->Release();
+    dpB->Release();
+    dp2A->Release();
+    dpA->Release();
     hostDp2->Release();
     hostDp->Release();
 }
@@ -1350,6 +1512,11 @@ void Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming() {
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
+    // A host's first CreatePlayer() always returns DPID 0 (Decision 3), which now always means
+    // broadcast when used as Send()'s idTo (docs/directplay-design.md Decision 20) - a second
+    // player is created here so `player` is a real, non-zero, self-send-safe DPID.
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     DPID player = 0;
     CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
 
@@ -1568,6 +1735,14 @@ void Test_SelfSend_OversizedPayload_ReturnsSendTooBig() {
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
+    // A host's first CreatePlayer() always returns DPID 0 (Decision 3), which now always means
+    // broadcast when used as Send()'s idTo (docs/directplay-design.md Decision 20) - a second
+    // player is created here so `player` is a real, non-zero, self-send-safe DPID. (The size
+    // limit is enforced identically on both paths, so this test's assertion would still have
+    // passed either way - fixed anyway so a test literally named "SelfSend" cannot silently
+    // become a broadcast test underneath its own name.)
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     DPID player = 0;
     CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
 
@@ -1604,6 +1779,11 @@ void Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk() {
     LPDIRECTPLAY2A dp2 = nullptr;
     OpenLoopbackSession(&dp, &dp2);
 
+    // A host's first CreatePlayer() always returns DPID 0 (Decision 3), which now always means
+    // broadcast when used as Send()'s idTo (docs/directplay-design.md Decision 20) - a second
+    // player is created here so `player` is a real, non-zero, self-send-safe DPID.
+    DPID unused = 0;
+    CHECK(dp2->CreatePlayer(&unused, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     DPID player = 0;
     CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
     CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, nullptr, 0) == DP_OK);
@@ -1694,7 +1874,9 @@ int main() {
     Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer();
     Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength();
     Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer();
-    Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf();
+    Test_HostBroadcast_ReachesAllRemoteClientsNotSelf();
+    Test_HostBroadcast_ReachesMultipleRemoteClients();
+    Test_ClientBroadcast_RelayedByHostToOtherClientAndHost();
     Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming();
     Test_Release_WithoutPriorClose_CleansUpTransportAndRegistry();
     Test_DirectPlayCreate_NullOutParam_ReturnsInvalidParams();

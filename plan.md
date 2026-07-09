@@ -4623,7 +4623,7 @@ cites Decision 3 and explains the direction of resolution in detail - confirmed 
 task's acceptance criteria exactly, no further edit needed.
 
 ### TASK-24H-0091: Add DPID_ALLPLAYERS and DPID_SYSMSG constants to include/dplay.h
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Implementation
@@ -4650,6 +4650,27 @@ Acceptance criteria:
 Out of scope:
 - Do not implement broadcast delivery using an assumed value for these constants before the design
   question is resolved. (Now resolved - see Decision 20.)
+
+Verified: `DPID_ALLPLAYERS`/`DPID_SYSMSG` added to `include/dplay.h` (both `0`, matching real
+DirectPlay per Decision 3's own citation), with a Doxygen comment explaining the three-way DPID-0
+overlap (real player / broadcast marker / unused system-message marker) and cross-referencing
+Decisions 3/17/20/26. Also fixed a now-stale comment on `DPSESSION_KEEPALIVE`/`MIGRATEHOST`
+(written during `TASK-24H-0022`, before Decision 21 existed) to distinguish host **migration**
+(still unimplemented, a separate feature) from host **message routing** (now implemented,
+Decision 21) - the old wording no longer accurately described the codebase after this session's
+decisions landed. `DirectPlay.cpp`'s broadcast branch uses `DPID_ALLPLAYERS` throughout, not a
+bare `0`. Folded into `TASK-24H-0148`'s commit (not split into a separate one) since the constants
+are meaningless without the code that uses them. See `TASK-24H-0148`'s own `Verified:` note for
+the full build/test matrix.
+
+**Retroactive note on TASK-24H-0092** (not a new task - see that task's own entry above, still
+`Status: DONE`): its characterization test, `Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf`, is
+superseded (not deleted) by `TASK-24H-0148` - see that task's `Verified:` note and
+`docs/directplay-design.md` Decision 21's "Implemented" section for the full detail.
+TASK-24H-0092's own `Verified:` note is left as-written (it accurately described the code at the
+time it was written, matching this project's established convention of not editing a Decision's
+own historical record after the fact - see Decision 9's own "Amendment" precedent for the
+identical pattern).
 
 ### TASK-24H-0092: Add a characterization test for the host DPID-0 self-send/broadcast collision
 Status: DONE
@@ -6097,7 +6118,7 @@ then should implementation proceed... a new task is added"), now that the user h
 underlying decisions (Decisions 20-23, `docs/directplay-design.md`).
 
 ### TASK-24H-0148: Implement real broadcast (idTo==0) delivery with host-side relay
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectPlay
 Type: Implementation
@@ -6137,6 +6158,32 @@ Out of scope:
   10-19 all did loopback before ENet) - only add it here if it falls out naturally from reusing
   Decision 14's existing per-DPID `Send()`, which already works for both backends; do not invent new
   ENet-specific relay code in this task if the shared `DirectPlay.cpp` logic already covers it.
+
+Verified: `DPID_ALLPLAYERS`/`DPID_SYSMSG` added to `include/dplay.h` (`TASK-24H-0091`). `Send()`
+gained a broadcast branch (checked before self-send, since both can match when `idFrom==idTo==0`
+for the host specifically) - host role iterates `remotePlayerIds` addressing each directly; joining
+role sends to its single `hostPeer_` with the wire header's `idTo` left at `DPID_ALLPLAYERS` as a
+relay marker. `Receive()`'s `Data` case now relays (byte-for-byte, reusing the exact received wire
+bytes, no re-serialization) to every other `remotePlayerIds` entry except the original sender when
+`session_.isHost && header->idTo == DPID_ALLPLAYERS`, after enqueueing its own copy.
+
+`TASK-24H-0092`'s test renamed/rewritten to `Test_HostBroadcast_ReachesAllRemoteClientsNotSelf`,
+asserting the new correct behavior. **Found and fixed a real, unanticipated consequence while
+implementing**: 5 more pre-existing tests used a host's first `CreatePlayer()` result (always DPID
+`0`) purely as a stand-in "some player ID" for generic self-send testing - `Send(0, 0, ...)` no
+longer means self-send for any caller now that broadcast is checked first, so these tests' own
+premise silently broke too (4 became real failures, 2 passed by coincidence but were fixed anyway
+since a test named "SelfSend" must not silently test broadcast instead). Fixed each by creating a
+second, throwaway player first so self-send testing uses a guaranteed-non-zero DPID. Full list and
+rationale in `docs/directplay-design.md` Decision 21's "Implemented" section.
+
+Added 2 new tests per the acceptance criteria: `Test_HostBroadcast_ReachesMultipleRemoteClients`
+(two-client fan-out) and `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost` (relay + host's
+own receipt + no echo-back to sender). **Verified for real**: 65/65 `directplay_tests` (was 63/63);
+full CMake build+`ctest` (7/7); ASan+UBSan build+`ctest` (7/7 clean, zero diagnostics, directly
+grepped raw output not just CTest's summary); ENet-enabled build+`ctest -L enet` (1/1, confirming
+the shared broadcast/relay logic needed zero ENet-specific code, exactly as anticipated);
+`header_hygiene` (clean); a full out-of-tree `../free-eggbert` rebuild (exit 0).
 
 ### TASK-24H-0149: Wire ENet joining Open() to a host address via FREE_DIRECT_ENET_HOST_ADDRESS
 Status: TODO

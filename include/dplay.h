@@ -100,11 +100,30 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 
 /** @brief Real call sites: free-eggbert's network.cpp sets both flags in DPSESSIONDESC2::dwFlags
  *  when hosting (`Open(DPOPEN_CREATE, ...)`). FreeDirect's `Open()` never reads
- *  `lpSessionDesc->dwFlags` - both are silently accepted and ignored today (no host-migration
- *  support exists at all, consistent with host routing/player-lost semantics being open BLOCKED
- *  design questions per CLAUDE.md). Tracked for docs/directplay-limitations.md (TASK-24H-0094). */
+ *  `lpSessionDesc->dwFlags` - both are silently accepted and ignored today. Host **migration**
+ *  (electing a new host if the original host leaves, what DPSESSION_MIGRATEHOST actually names) is
+ *  a distinct, still-unimplemented feature from host **message routing** (relaying a message
+ *  between two non-host peers, docs/directplay-design.md Decision 21, implemented) - resolving the
+ *  7 standing BLOCKED design questions did not include a migration decision. Tracked for
+ *  docs/directplay-limitations.md (TASK-24H-0094). */
 #define DPSESSION_KEEPALIVE   0x00000008L
 #define DPSESSION_MIGRATEHOST 0x00000004L
+/** @} */
+
+/**
+ * @name Broadcast and system-message DPID values
+ * @brief `idTo == DPID_ALLPLAYERS` means "send to every other player in the session, never the
+ *  sender itself" - `DirectPlay.cpp`'s `Send()` checks this before the self-send
+ *  (`idTo == idFrom`) branch, since both are `0` and the host's own DPID is also `0`
+ *  (`docs/directplay-design.md` Decision 3) - see Decision 20 for the full resolution of this
+ *  three-way overlap. `DPID_SYSMSG` is declared for API-shape completeness, matching real
+ *  DirectPlay, but nothing currently sends a system message with it as a `from` value - no
+ *  call site needs one (`docs/directplay-design.md` Decision 17/26).
+ * @note Status: PARTIAL
+ */
+/** @{ */
+#define DPID_ALLPLAYERS 0
+#define DPID_SYSMSG     0
 /** @} */
 
 /**

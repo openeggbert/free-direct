@@ -1762,12 +1762,33 @@ so leaving its assertion unchanged would make it fail; renamed and rewritten to
 `Test_HostBroadcast_ReachesAllRemoteClientsNotSelf`, asserting the new, correct behavior, with a
 comment explaining the supersession and citing this Decision.
 
-New committed tests (`tests/directplay_tests.cpp`): a host broadcasting reaches every connected
-remote client and not its own queue; a joining client broadcasting is relayed by the host to every
-*other* connected client (not back to the sender) and also reaches the host's own queue; a
-two-remote-client scenario proving relay fan-out to more than one recipient. **Verified for real**:
-full build+test matrix (default, ASan+UBSan, both target games) - see the commit history for exact
-pass counts at the time this landed.
+**A real, additional finding while implementing** (not anticipated when this Decision was first
+drafted): 5 more pre-existing tests used a host's first `CreatePlayer()` result (always DPID `0`,
+Decision 3) purely as a generic "some player ID" for exercising true self-send mechanics
+(`Test_LoopbackSendToSelf_ReturnsOk`, `Test_LoopbackSendWithoutGuaranteedFlag_StillSucceeds`,
+`Test_LoopbackReceiveAfterSelfSend_MatchesSentPayload`,
+`Test_Receive_BufferSizeQuery_ReportsRequiredSizeWithoutConsuming`,
+`Test_SelfSend_OversizedPayload_ReturnsSendTooBig`, `Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk`)
+- with `idTo == DPID_ALLPLAYERS` now checked before self-send, `Send(0, 0, ...)` no longer means
+self-send for any caller, so these tests' own premise silently broke too. Fixed by having each
+create a second, throwaway player first, so the DPID actually used for self-send testing is
+guaranteed non-zero. 4 of the 6 were outright test failures; 2 (`Test_LoopbackSendToSelf_ReturnsOk`,
+`Test_SelfSend_OversizedPayload_ReturnsSendTooBig`) still passed by coincidence (their assertions
+happened to hold under broadcast semantics too) but were fixed anyway so a test literally named
+"SelfSend" cannot silently test broadcast instead.
+
+New committed tests (`tests/directplay_tests.cpp`): `Test_HostBroadcast_ReachesMultipleRemoteClients`
+(a host broadcasting reaches *two* connected remote clients, not just one, and not its own queue)
+and `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost` (a non-host client's broadcast is
+relayed by the host to the *other* connected client and reaches the host's own queue, but never
+echoes back to the original sender). **Verified for real**: 65/65 `tests/directplay_tests.cpp`
+(was 63/63 before this decision - one test superseded/renamed, two new ones added); full CMake
+build+`ctest` (7/7), ASan+UBSan build+`ctest` (7/7 clean, zero sanitizer diagnostics - directly
+grepped the raw stdout/stderr, not just CTest's pass/fail summary), an ENet-enabled build+`ctest -L
+enet` (1/1, confirming the shared `DirectPlay.cpp` broadcast/relay logic works transparently over
+the ENet backend too, exactly as anticipated when this Decision was drafted - Decision 14's
+existing per-DPID `Send()` needed no ENet-specific changes), `header_hygiene` (clean), and a full
+out-of-tree `../free-eggbert` rebuild (exit 0).
 
 ---
 
