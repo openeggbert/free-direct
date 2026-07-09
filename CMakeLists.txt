@@ -128,7 +128,7 @@ target_include_directories(free-direct PRIVATE src)
 # compile time is more convenient than setting an environment variable at every invocation. OFF by
 # default, so default builds are unaffected. See README.md's "Debug logging and performance
 # options" section for the full list of underlying FREE_DIRECT_DEBUG_* flags.
-foreach(free_direct_debug_flag DDRAW PRESENTATION COLORKEY PERF PRIMARY_CLEAR DSOUND DSOUND_FORMAT)
+foreach(free_direct_debug_flag DDRAW PRESENTATION COLORKEY PERF PRIMARY_CLEAR DSOUND DSOUND_FORMAT DPLAY)
     option(FREE_DIRECT_FORCE_DEBUG_${free_direct_debug_flag}
             "Force-enable FREE_DIRECT_DEBUG_${free_direct_debug_flag} at compile time, regardless of the env var" OFF)
     if(FREE_DIRECT_FORCE_DEBUG_${free_direct_debug_flag})

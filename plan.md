@@ -7866,7 +7866,7 @@ task was written — both were approved as scoped, behavior-preserving exception
 policy changes.
 
 ### TASK-24H-0183: Add DirectPlay debug logging matching DirectDraw/DirectSound's FREE_DIRECT_DEBUG_* pattern
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Implementation
@@ -7908,6 +7908,38 @@ Out of scope:
   `DirectPlayDiscoveryService` beyond what's needed to observe `DirectPlay2AImpl`'s own
   `Open`/`Close`/`Send`/`Receive`/`CreatePlayer`/`EnumSessions` decision points — a full
   per-transport logging pass is a separate, larger task if ever wanted.
+
+Verified: added `IsDirectPlayDebugEnabled()`/`DirectPlayLog()` to `DirectPlay.cpp`'s anonymous
+namespace and `DirectPlayLog(...)` call sites at every specified decision point (constructor,
+`Release()`'s final-ref destruction, `Open()` entry+success, `CreatePlayer()` success+rejection,
+`Send()`'s three delivery paths, `Receive()`'s `Data`/`JoinAccept`/default packet-type dispatch,
+`Close()`). **Real design deviation from the task's own original plan, found and fixed during
+implementation**: mirroring `DirectDraw.cpp` literally (`SDL_getenv`/`SDL_strcasecmp`/
+`SDL_LogMessageV`) would have added `DirectPlay.cpp`'s first-ever *unconditional* SDL3 dependency -
+confirmed by actually trying it: `tests/directplay_tests.cpp`'s own documented "fast iteration" g++
+command (no `-lSDL3`, works today because `DirectPlay.cpp`'s SDL3 usage was previously confined to
+the `FREE_DIRECT_ENABLE_ENET`-only block) failed to link with an undefined-reference error. Fixed by
+reimplementing the same env-var-check/compile-time-override/formatted-log pattern using only
+`std::getenv`/a hand-written case-insensitive compare/`std::vfprintf(stderr, ...)` - zero new
+dependency, fast g++ loop confirmed still working (re-ran it after the fix: builds, links, `OK: all
+DirectPlay tests passed.`). Documented this tradeoff directly in the code comment so a future
+DirectPlay change doesn't accidentally reintroduce an SDL3 dependency here. Added `DPLAY` to
+`CMakeLists.txt`'s `FREE_DIRECT_FORCE_DEBUG_*` list and updated `README.md`. Two new tests
+(`Test_DirectPlayOperations_NoUnconditionalLogOutput_WhenDebugFlagUnset`/
+`_ProducesLogOutput_WhenDebugFlagSet`, `tests/directplay_tests.cpp`, 68→70) using a `dup`/`dup2`
+(POSIX)/`_dup`/`_dup2` (Windows) stderr-capture technique instead of
+`SDL_GetLogOutputFunction`/`SDL_SetLogOutputFunction` (DirectDraw/DirectSound's own equivalent
+tests' technique - not usable here for the same SDL3-dependency reason). Verified the flag-unset
+test genuinely has teeth, not just a vacuous pass: manually ran with `FREE_DIRECT_DEBUG_DPLAY=1`
+against the fast-loop binary and confirmed real log lines are produced (302 lines across the full
+suite, sampled and spot-checked for correct formatting), then confirmed the force-enable CMake
+option makes the zero-log test genuinely fail as expected (`-DFREE_DIRECT_FORCE_DEBUG_DPLAY=ON`
+build: `FAILED: bytes == 0`), matching `TASK-24H-0119`/`0120`'s own verification method. Verified
+across four configurations, all clean: default build `ctest` 9/9; `-DFREE_DIRECT_ENABLE_ENET=ON`
+build `ctest -L enet` 1/1; `-DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON` build
+`ctest` 9/9 clean (the `dup`/`dup2` fd manipulation in the new tests is exactly the kind of raw
+system-level code most likely to hide a sanitizer-catchable bug, checked deliberately); a full
+out-of-tree `../free-eggbert` rebuild (`CONFIGURE_EXIT=0`, `BUILD_EXIT=0`, zero `error:` matches).
 
 ### TASK-24H-0184: Extract Send()/Receive()'s delivery paths into private helper methods (behavior-preserving)
 Status: TODO

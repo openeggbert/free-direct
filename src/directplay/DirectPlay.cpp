@@ -12,11 +12,14 @@
 #include "EnetDirectPlayTransport.hpp"
 #include "DirectPlayDiscovery.hpp"
 #include <SDL3/SDL.h>
-#include <cstdlib>
 #include <string>
 #endif
+
 #include <algorithm>
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -25,6 +28,64 @@
 #include <vector>
 
 namespace {
+    // Deliberately std::getenv/std::fprintf, not SDL_getenv/SDL_Log: unlike DirectDraw.cpp/
+    // DirectSound.cpp (both unconditionally SDL3-backed already), DirectPlay.cpp's core logic
+    // (loopback transport, session state, message queue) has no SDL3 dependency outside the
+    // FREE_DIRECT_ENABLE_ENET-only block - tests/directplay_tests.cpp's own documented "fast
+    // iteration" build (a bare g++ command, no CMake, no -lSDL3) relies on that staying true.
+    // Adding an unconditional SDL3 requirement purely for optional debug logging would silently
+    // break that build path (confirmed: it does, with an undefined-reference link error, if
+    // SDL_getenv/SDL_Log are used here instead) - so this logging is standard-library-only.
+    bool IsEnvFlagEnabled(const char* envName)
+    {
+        const char* env = std::getenv(envName);
+        if (!env) {
+            return false;
+        }
+
+        // Manual case-insensitive ASCII compare, not strcasecmp (POSIX, not standard C++) or
+        // SDL_strcasecmp (the SDL3 dependency this function exists specifically to avoid).
+        auto equalsIgnoreCase = [](const char* a, const char* b) {
+            while (*a && *b) {
+                const char ca = (*a >= 'A' && *a <= 'Z') ? static_cast<char>(*a + 32) : *a;
+                const char cb = (*b >= 'A' && *b <= 'Z') ? static_cast<char>(*b + 32) : *b;
+                if (ca != cb) return false;
+                ++a; ++b;
+            }
+            return *a == '\0' && *b == '\0';
+        };
+        return equalsIgnoreCase(env, "1") || equalsIgnoreCase(env, "true")
+            || equalsIgnoreCase(env, "yes") || equalsIgnoreCase(env, "on");
+    }
+
+    // Mirrors DirectDraw.cpp's IsDirectDrawDebugEnabled()/DirectSound.cpp's dsDebugEnabled():
+    // the FREE_DIRECT_DEBUG_DPLAY env var is the primary/default mechanism; the #ifdef is an
+    // additive CMake-level force-on path (FREE_DIRECT_FORCE_DEBUG_DPLAY, TASK-24H-0183, following
+    // the existing FREE_DIRECT_FORCE_DEBUG_* convention from TASK-24H-0119) for a build-time
+    // override. DirectPlay previously had zero debug-logging infrastructure at all, unlike
+    // DirectDraw/DirectSound (found via a 2026-07-09 maintainability audit).
+    bool IsDirectPlayDebugEnabled()
+    {
+#ifdef FREE_DIRECT_DEBUG_DPLAY
+        return true;
+#else
+        return IsEnvFlagEnabled("FREE_DIRECT_DEBUG_DPLAY");
+#endif
+    }
+
+    void DirectPlayLog(const char* format, ...)
+    {
+        if (!IsDirectPlayDebugEnabled()) {
+            return;
+        }
+
+        va_list args;
+        va_start(args, format);
+        std::vfprintf(stderr, format, args);
+        std::fputc('\n', stderr);
+        va_end(args);
+    }
+
     bool IsEqualGuid(const GUID& a, const GUID& b) {
         return std::memcmp(&a, &b, sizeof(GUID)) == 0;
     }
@@ -113,7 +174,7 @@ namespace {
 
     class DirectPlay2AImpl final : public IDirectPlay2A {
     public:
-        DirectPlay2AImpl() : refCount_(1) {}
+        DirectPlay2AImpl() : refCount_(1) { DirectPlayLog("free-direct DirectPlay2AImpl: created"); }
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
             if (!ppvObject) return DPERR_INVALIDPARAMS;
@@ -133,6 +194,7 @@ namespace {
         ULONG WINAPI Release() override {
             ULONG val = --refCount_;
             if (val == 0) {
+                DirectPlayLog("free-direct DirectPlay2AImpl: destroying (refCount reached 0)");
                 // Covers the case where Release() is called without a prior Close() - Open()
                 // (Phase 4) now assigns a real LoopbackDirectPlayTransport, and Close() already
                 // shuts it down and clears session_.transport itself, so this is a no-op then.
@@ -247,6 +309,8 @@ namespace {
             // to proceed, matching this task's specific "already-open object" wording.
             if (session_.IsOpen()) return DPERR_ALREADYINITIALIZED;
 
+            DirectPlayLog("free-direct Open: dwFlags=0x%08lx role=%s", static_cast<unsigned long>(dwFlags),
+                          (dwFlags & DPOPEN_CREATE) ? "host" : "join");
             session_.isHost = (dwFlags & DPOPEN_CREATE) != 0;
             session_.applicationGuid = lpSessionDesc->guidApplication;
             // Only generate when hosting and the caller didn't already supply one -
@@ -349,6 +413,7 @@ namespace {
             }
 #endif
             session_.state = free_direct_directplay::DirectPlayObjectState::Open;
+            DirectPlayLog("free-direct Open: success, role=%s", session_.isHost ? "host" : "join");
             return DP_OK;
         }
 
@@ -363,6 +428,9 @@ namespace {
             // the same cap as remote assignment (Receive()'s assignment loop), since
             // dwMaxPlayers bounds the session's total player count, not just remote ones.
             if (session_.maxPlayers != 0 && session_.currentPlayers >= session_.maxPlayers) {
+                DirectPlayLog("free-direct CreatePlayer: rejected, currentPlayers=%lu maxPlayers=%lu",
+                              static_cast<unsigned long>(session_.currentPlayers),
+                              static_cast<unsigned long>(session_.maxPlayers));
                 return DPERR_CANTCREATEPLAYER;
             }
 
@@ -374,6 +442,7 @@ namespace {
             session_.localPlayerIds.push_back(newId);
             session_.currentPlayers++;
             if (lpidPlayer) *lpidPlayer = newId;
+            DirectPlayLog("free-direct CreatePlayer: assigned local DPID=%lu", static_cast<unsigned long>(newId));
             return DP_OK;
         }
 
@@ -393,6 +462,8 @@ namespace {
             // call shape for a hosting process - must mean broadcast, not self-send, even though
             // idFrom == idTo == 0 would otherwise satisfy the self-send check too.
             if (idTo == DPID_ALLPLAYERS) {
+                DirectPlayLog("free-direct Send: broadcast idFrom=%lu dwDataSize=%lu",
+                              static_cast<unsigned long>(idFrom), static_cast<unsigned long>(dwDataSize));
                 if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
                     session_.localPlayerIds.end()) {
                     return DPERR_INVALIDPLAYER;
@@ -437,6 +508,8 @@ namespace {
             }
 
             if (idTo == idFrom) {
+                DirectPlayLog("free-direct Send: self-send id=%lu dwDataSize=%lu",
+                              static_cast<unsigned long>(idFrom), static_cast<unsigned long>(dwDataSize));
                 // Validated against localPlayerIds (docs/directplay-design.md Decision 16) - this
                 // was previously unchecked, an inconsistency with the unicast path below now that
                 // one exists. Matters concretely for a joining session: its localPlayerIds only
@@ -486,6 +559,9 @@ namespace {
             // has no way to learn any remote DPID (including the host's own) before the
             // join-accepted handshake exists (blocked Phase 7 tasks) - so it always gets
             // DPERR_INVALIDPLAYER here too, an honest "not supported yet."
+            DirectPlayLog("free-direct Send: unicast idFrom=%lu idTo=%lu dwDataSize=%lu",
+                          static_cast<unsigned long>(idFrom), static_cast<unsigned long>(idTo),
+                          static_cast<unsigned long>(dwDataSize));
             if (std::find(session_.localPlayerIds.begin(), session_.localPlayerIds.end(), idFrom) ==
                 session_.localPlayerIds.end()) {
                 return DPERR_INVALIDPLAYER;
@@ -637,6 +713,10 @@ namespace {
 
                     switch (header->type) {
                         case free_direct_directplay::DirectPlayWirePacketType::Data: {
+                            DirectPlayLog("free-direct Receive: Data idFrom=%lu idTo=%lu payloadLength=%lu",
+                                          static_cast<unsigned long>(header->idFrom),
+                                          static_cast<unsigned long>(header->idTo),
+                                          static_cast<unsigned long>(header->payloadLength));
                             // A full messageQueue silently drops the packet (Enqueue()'s
                             // existing bounded-growth contract, unchanged) - there is no
                             // send-side acknowledgement/backpressure to report the drop to yet.
@@ -670,6 +750,8 @@ namespace {
                             break;
                         }
                         case free_direct_directplay::DirectPlayWirePacketType::JoinAccept: {
+                            DirectPlayLog("free-direct Receive: JoinAccept assignedId=%lu",
+                                          static_cast<unsigned long>(header->idTo));
                             // Adopts the host-assigned DPID as this session's own local player
                             // identity (docs/directplay-design.md Decision 16) - only meaningful
                             // for a joining role that hasn't already processed this. Not
@@ -691,6 +773,8 @@ namespace {
                             break;
                         }
                         default:
+                            DirectPlayLog("free-direct Receive: type=%u consumed and ignored",
+                                          static_cast<unsigned>(header->type));
                             // Join (host-side only meaningful, and assignment already happens
                             // independently of it - see the assignment loop above),
                             // JoinReject/Discovery/DiscoveryResponse (not implemented yet) -
@@ -718,6 +802,9 @@ namespace {
         }
 
         HRESULT WINAPI Close() override {
+            DirectPlayLog("free-direct Close: role=%s currentPlayers=%lu",
+                          session_.isHost ? "host" : "join",
+                          static_cast<unsigned long>(session_.currentPlayers));
             // Makes this session stop being discoverable via EnumSessions() (docs/
             // directplay-design.md Decision 18) - a no-op if it was never registered (joining
             // role, or hosting under FREE_DIRECT_ENABLE_ENET).

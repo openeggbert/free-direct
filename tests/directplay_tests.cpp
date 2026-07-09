@@ -38,8 +38,14 @@
 #include "LoopbackDirectPlayTransport.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -1886,6 +1892,104 @@ void Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown() {
     dp->Release();
 }
 
+// Redirects stderr to a temp file for the duration of `body`, then returns the byte count written
+// to it - portable via dup/dup2 (POSIX) / _dup/_dup2 (Windows), since ISO C++ has no portable
+// "query/swap the current stderr target" API. This is a different technique from
+// directdraw_tests.cpp's/directsound_tests.cpp's own zero-log tests (which use
+// SDL_GetLogOutputFunction/SDL_SetLogOutputFunction) because DirectPlayLog is deliberately plain
+// std::fprintf(stderr, ...), not SDL_Log - DirectPlay.cpp keeps no unconditional SDL3 dependency
+// (see DirectPlay.cpp's own comment on this exact tradeoff, TASK-24H-0183), so this test file
+// cannot rely on SDL's log-interception API either without reintroducing that same dependency.
+template <typename Func>
+long CaptureStderrByteCount(Func&& body) {
+    std::fflush(stderr);
+#ifdef _WIN32
+    const int savedFd = _dup(_fileno(stderr));
+#else
+    const int savedFd = dup(fileno(stderr));
+#endif
+    FILE* tmp = std::tmpfile();
+#ifdef _WIN32
+    _dup2(_fileno(tmp), _fileno(stderr));
+#else
+    dup2(fileno(tmp), fileno(stderr));
+#endif
+
+    body();
+
+    std::fflush(stderr);
+#ifdef _WIN32
+    _dup2(savedFd, _fileno(stderr));
+    _close(savedFd);
+#else
+    dup2(savedFd, fileno(stderr));
+    close(savedFd);
+#endif
+    const long size = std::ftell(tmp);
+    std::fclose(tmp);
+    return size;
+}
+
+// A representative sweep of Open/CreatePlayer/Send/Receive/Close - the exact decision points
+// TASK-24H-0183 added DirectPlayLog(...) calls at - run with FREE_DIRECT_DEBUG_DPLAY deliberately
+// unset (best-effort regardless of the invoking environment, matching
+// directdraw_tests.cpp/directsound_tests.cpp's own equivalent tests). No production code touched
+// by this test - it exercises only the real public IDirectPlay2A interface.
+void Test_DirectPlayOperations_NoUnconditionalLogOutput_WhenDebugFlagUnset() {
+#ifdef _WIN32
+    _putenv_s("FREE_DIRECT_DEBUG_DPLAY", "");
+#else
+    unsetenv("FREE_DIRECT_DEBUG_DPLAY");
+#endif
+
+    const long bytes = CaptureStderrByteCount([]() {
+        LPDIRECTPLAY dp = nullptr;
+        LPDIRECTPLAY2A dp2 = nullptr;
+        OpenLoopbackSession(&dp, &dp2);
+        DPID player = 0;
+        CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+        CHECK(dp2->Send(player, player, DPSEND_GUARANTEED, nullptr, 0) == DP_OK);
+        char buf[8] = {};
+        DPID from = 0, to = 0;
+        DWORD size = sizeof(buf);
+        dp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size);
+        CHECK(dp2->Close() == DP_OK);
+        dp2->Release();
+        dp->Release();
+    });
+
+    CHECK(bytes == 0);
+}
+
+// The other half of the same proof: the identical operation sweep, with the flag set, must
+// produce real output - confirming the test above passes because logging is correctly gated, not
+// because DirectPlayLog is silently broken/unreachable. Restores the env var afterward so test
+// execution order never affects the test above.
+void Test_DirectPlayOperations_ProducesLogOutput_WhenDebugFlagSet() {
+#ifdef _WIN32
+    _putenv_s("FREE_DIRECT_DEBUG_DPLAY", "1");
+#else
+    setenv("FREE_DIRECT_DEBUG_DPLAY", "1", 1);
+#endif
+
+    const long bytes = CaptureStderrByteCount([]() {
+        LPDIRECTPLAY dp = nullptr;
+        LPDIRECTPLAY2A dp2 = nullptr;
+        OpenLoopbackSession(&dp, &dp2);
+        dp2->Close();
+        dp2->Release();
+        dp->Release();
+    });
+
+#ifdef _WIN32
+    _putenv_s("FREE_DIRECT_DEBUG_DPLAY", "");
+#else
+    unsetenv("FREE_DIRECT_DEBUG_DPLAY");
+#endif
+
+    CHECK(bytes > 0);
+}
+
 } // namespace
 
 int main() {
@@ -1957,6 +2061,9 @@ int main() {
     Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams();
     Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk();
     Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown();
+
+    Test_DirectPlayOperations_NoUnconditionalLogOutput_WhenDebugFlagUnset();
+    Test_DirectPlayOperations_ProducesLogOutput_WhenDebugFlagSet();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectPlay tests passed.\n");
