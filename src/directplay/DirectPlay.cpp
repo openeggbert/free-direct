@@ -10,6 +10,7 @@
 #include "LoopbackDirectPlayTransport.hpp"
 #ifdef FREE_DIRECT_ENABLE_ENET
 #include "EnetDirectPlayTransport.hpp"
+#include "DirectPlayDiscovery.hpp"
 #include <SDL3/SDL.h>
 #include <cstdlib>
 #include <string>
@@ -185,8 +186,55 @@ namespace {
                 // password is only required at Open(DPOPEN_JOIN)/OPENSESSION) time.
                 desc.lpszPasswordA = nullptr;
 
-                if (!lpEnumSessionsCallback(&desc, &dwTimeout, dwFlags, lpContext)) break;
+                if (!lpEnumSessionsCallback(&desc, &dwTimeout, dwFlags, lpContext)) return DP_OK;
             }
+#ifdef FREE_DIRECT_ENABLE_ENET
+            // Real LAN discovery (docs/directplay-design.md Decision 23, TASK-24H-0150) -
+            // additive to the loopback registry lookup above, never a replacement (Decision 18
+            // is untouched). ensureEnetInit reuses EnetDirectPlayTransport's own process-wide
+            // enet_initialize()/enet_deinitialize() reference counting (its constructor/
+            // destructor already do this) rather than this method needing its own - see
+            // DirectPlayDiscovery.hpp's own documented precondition.
+            free_direct_directplay::EnetDirectPlayTransport ensureEnetInit;
+            if (ensureEnetInit.IsEnetReady()) {
+                const GUID filterGuid = hasGuidFilter ? lpEnumSessionsDesc->guidApplication : zeroGuid;
+                const auto discovered =
+                    free_direct_directplay::DirectPlayDiscoveryService::BroadcastAndCollect(
+                        filterGuid, dwTimeout);
+
+                std::vector<GUID> seenInstanceGuids;
+                for (const auto& info : discovered) {
+                    if (hasGuidFilter &&
+                        !IsEqualGuid(info.applicationGuid, lpEnumSessionsDesc->guidApplication)) {
+                        continue;
+                    }
+                    if (availableOnly && info.maxPlayers != 0 && info.currentPlayers >= info.maxPlayers) {
+                        continue;
+                    }
+                    // A single real session should only ever answer once, but dedupe by
+                    // sessionInstanceGuid anyway (e.g. a reply arriving via more than one local
+                    // network interface) so the callback never sees the same session twice.
+                    bool alreadySeen = false;
+                    for (const auto& seen : seenInstanceGuids) {
+                        if (IsEqualGuid(seen, info.sessionInstanceGuid)) { alreadySeen = true; break; }
+                    }
+                    if (alreadySeen) continue;
+                    seenInstanceGuids.push_back(info.sessionInstanceGuid);
+
+                    DPSESSIONDESC2 desc{};
+                    desc.dwSize = sizeof(DPSESSIONDESC2);
+                    desc.guidApplication = info.applicationGuid;
+                    desc.guidInstance = info.sessionInstanceGuid;
+                    desc.dwMaxPlayers = info.maxPlayers;
+                    desc.dwCurrentPlayers = info.currentPlayers;
+                    desc.lpszSessionNameA = info.sessionName.empty()
+                                                 ? nullptr
+                                                 : const_cast<char*>(info.sessionName.c_str());
+                    desc.lpszPasswordA = nullptr;
+                    if (!lpEnumSessionsCallback(&desc, &dwTimeout, dwFlags, lpContext)) break;
+                }
+            }
+#endif
             return DP_OK;
         }
 
@@ -227,6 +275,12 @@ namespace {
                     session_.transport.reset();
                     return DPERR_CANTCREATESESSION;
                 }
+                // LAN discovery (docs/directplay-design.md Decision 23, TASK-24H-0150) is
+                // additive and best-effort: a failure to bind the discovery port (e.g. another
+                // FreeDirect process's listener already holds it) does not fail Open() - the
+                // session still hosts normally over the main ENet port and is still reachable
+                // via FREE_DIRECT_ENET_HOST_ADDRESS (Decision 22), it just is not LAN-discoverable.
+                discoveryService_.StartListening();
             } else {
                 // DPOPEN_JOIN/DPOPEN_OPENSESSION over ENet (docs/directplay-design.md Decision
                 // 22): the host address is read from FREE_DIRECT_ENET_HOST_ADDRESS
@@ -469,6 +523,21 @@ namespace {
             // Service() is a no-op; EnetDirectPlayTransport's drains pending ENet events
             // (peer connect/disconnect bookkeeping) non-blockingly.
             if (session_.transport) session_.transport->Service();
+#ifdef FREE_DIRECT_ENABLE_ENET
+            // LAN discovery request/response servicing (docs/directplay-design.md Decision 23,
+            // TASK-24H-0150) - same piggyback-on-Receive() pattern as session_.transport->Service()
+            // just above (Decision 6), non-blocking, a no-op if StartListening() was never
+            // called or failed (Open()'s own best-effort handling).
+            if (session_.isHost) {
+                free_direct_directplay::DiscoveredSessionInfo info;
+                info.applicationGuid = session_.applicationGuid;
+                info.sessionInstanceGuid = session_.sessionInstanceGuid;
+                info.maxPlayers = session_.maxPlayers;
+                info.currentPlayers = session_.currentPlayers;
+                info.sessionName = session_.sessionName;
+                discoveryService_.RespondToPendingRequests(info);
+            }
+#endif
             // Process departures before admitting new arrivals (docs/directplay-design.md
             // Decision 8): remove each disconnected peer's DPID from remotePlayerIds and
             // decrement currentPlayers. Only an already-assigned peer's disconnect is ever
@@ -642,6 +711,11 @@ namespace {
                 session_.transport->Shutdown();
                 session_.transport.reset();
             }
+#ifdef FREE_DIRECT_ENABLE_ENET
+            // A no-op if StartListening() was never called (joining role) or failed
+            // (Open()'s best-effort handling, Decision 23).
+            discoveryService_.StopListening();
+#endif
             session_.messageQueue.Clear();
             session_.localPlayerIds.clear();
             session_.remotePlayerIds.clear();
@@ -660,6 +734,14 @@ namespace {
     private:
         std::atomic<ULONG> refCount_;
         free_direct_directplay::DirectPlaySession session_;
+#ifdef FREE_DIRECT_ENABLE_ENET
+        // Owned by this object (not DirectPlaySession, which stays backend-agnostic - the
+        // transport/discovery split mirrors CLAUDE.md's Internal Backend Policy) - real LAN
+        // discovery, only meaningful while hosting over ENet (docs/directplay-design.md
+        // Decision 23, TASK-24H-0150). Started in Open(DPOPEN_CREATE)'s ENet hosting branch,
+        // serviced from Receive()'s existing Service() piggyback, stopped in Close().
+        free_direct_directplay::DirectPlayDiscoveryService discoveryService_;
+#endif
     };
 
     class DirectPlayImpl final : public IDirectPlay {

@@ -6233,7 +6233,7 @@ enet` (1/1); ASan+UBSan+ENet combined build (7/7 clean, zero sanitizer diagnosti
 (clean); a full out-of-tree `../free-eggbert` rebuild (exit 0).
 
 ### TASK-24H-0150: Implement LAN UDP broadcast discovery for ENet-hosted sessions
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Implementation
@@ -6274,6 +6274,36 @@ Out of scope:
 - Real multi-interface/subnet detection - `INADDR_BROADCAST` only (Decision 23's own explicit
   scope boundary).
 - Any change to the loopback backend's existing `EnumSessions()` behavior (Decision 18, unaffected).
+
+Verified: New `src/directplay/DirectPlayDiscovery.hpp`/`.cpp` (private, `FREE_DIRECT_ENABLE_ENET`-
+gated, wired into `CMakeLists.txt` alongside `EnetDirectPlayTransport.cpp`), built on ENet's own
+portable `ENetSocket`/`enet_socket_*` primitives rather than hand-rolled per-platform sockets.
+`kDefaultDirectPlayDiscoveryPort = 51323` added. `Open()`/`Receive()`/`Close()`/`EnumSessions()`
+all wired per the Required Work above - see `docs/directplay-design.md` Decision 23's own
+"Implemented" section for the full detail, including a real dangling-pointer bug **found in this
+task's own test code** (not the implementation - `DPSESSIONDESC2::lpszSessionNameA` is only valid
+during the callback, exactly like the existing loopback `EnumSessions` tests already correctly
+handle) and a separate, also-real "wrote the tests but forgot to register them in `main()`"
+oversight, both caught and fixed before this task was marked done.
+
+Added `Test_EnumSessionsOverEnet_FindsRealHostedSession` and
+`Test_EnumSessionsOverEnet_FiltersByApplicationGuid` (4->8 `enet_directplay_tests`), using a new
+`BackgroundHostServicer` thread helper since `EnumSessions()` blocks internally for `dwTimeout`
+waiting for a reply only the host generates if serviced during that window - reasoned through as
+race-free by construction (the background thread and main thread touch two entirely separate
+`IDirectPlay2A` objects, no shared mutable state beyond the already-mutex-guarded ENet lifecycle
+counter), not sanitizer-proven (ASan/UBSan do not catch data races).
+
+**Verified for real**: full CMake build+`ctest` (7/7, entirely `#ifdef`-gated, default build
+provably unaffected); ENet-enabled `ctest -L enet` (1/1, 8/8 internal checks); ASan+UBSan+ENet
+combined build (8/8 clean, zero sanitizer diagnostics, directly grepped raw output);
+`header_hygiene` (clean); a full out-of-tree `../free-eggbert` rebuild (exit 0). `dwTimeout`
+handling confirmed bounded - the full test suite (including both new discovery tests, one with a
+1000ms and one with a 300ms `dwTimeout`) completes in ~6 seconds total, not hanging.
+
+This was the last remaining task in the entire 150-task backlog (all 7 previously-BLOCKED Track B
+design questions are now both decided *and* implemented, except the 3 explicitly-"not needed"
+decisions - player names/duplicate-player/player-lost-state - which required no code).
 
 ## Integration
 

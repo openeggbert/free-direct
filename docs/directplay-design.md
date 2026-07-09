@@ -1914,9 +1914,78 @@ network-interface-enumeration dependency for a narrow, single-purpose broadcast.
 
 ### Implemented
 
-See `TASK-24H-0150`'s own `plan.md` entry and `Verified:` note once landed - this Decision records
-the design; implementation follows as separate, trackable work per this project's "decide before
-implementing" pattern (Decisions 2-19 all followed the same split).
+New private files (never included from `include/`, `FREE_DIRECT_ENABLE_ENET`-gated at the CMake
+level exactly like `EnetDirectPlayTransport.cpp`): `src/directplay/DirectPlayDiscovery.hpp`/`.cpp`,
+a `DirectPlayDiscoveryService` class built on ENet's own portable `ENetSocket`/`enet_socket_*`
+primitives (`enet_socket_create`/`bind`/`send`/`receive`/`wait`/`set_option`/`destroy`) - this
+avoids FreeDirect hand-rolling any platform-specific raw-socket code (`<winsock2.h>` vs.
+`<sys/socket.h>`) itself, since ENet already solves that portability problem for its own internal
+use and exposes it publicly. Reuses `DirectPlayWireProtocol.hpp`'s existing header
+(de)serialization for the envelope (`applicationGuid`/`sessionGuid`/`type`); a small new
+payload-only (de)serialization pair handles `DiscoveryResponse`'s extra fields
+(`dwMaxPlayers`/`dwCurrentPlayers`/session name) that the header has no room for, mirroring the
+header's own flat, padding-free, per-field-`memcpy` style.
+
+`DirectPlayDiscoveryService` does not manage its own `enet_initialize()`/`enet_deinitialize()`
+lifecycle - it requires the caller to already have one alive, documented as a precondition. The
+hosting call site (`DirectPlay2AImpl`'s own `discoveryService_` member) is naturally covered by
+`session_.transport` (an `EnetDirectPlayTransport`) already being alive for the session's whole
+lifetime; `EnumSessions()`'s standalone call site constructs a throwaway `EnetDirectPlayTransport`
+purely as an RAII guard for the duration of the call, reusing the existing, already-tested
+reference-counting mechanism rather than duplicating a second independent one (which would risk
+that mechanism's own documented "exactly once per process" invariant).
+
+`Open(DPOPEN_CREATE)`'s ENet branch calls `discoveryService_.StartListening()` after a successful
+main-port `Listen()`, best-effort (a discovery-port bind failure does not fail `Open()` - the
+session still hosts normally, just is not LAN-discoverable). `Receive()`'s existing `Service()`
+piggyback (Decision 6) additionally calls `discoveryService_.RespondToPendingRequests()` when
+hosting. `Close()` calls `StopListening()`. `EnumSessions()` gained a second, additive block after
+the existing loopback-registry loop: broadcasts one `Discovery` packet, collects
+`DiscoveryResponse` replies for up to `dwTimeout` (`BroadcastAndCollect`'s first real use of that
+parameter anywhere in this codebase), applies the same `guidApplication`/`DPENUMSESSIONS_AVAILABLE`
+filters the loopback path already applies, dedupes by `sessionInstanceGuid`, and honors an early
+`FALSE` callback return - which now correctly stops enumeration entirely (a pre-existing `break`
+that only exited the loopback loop was changed to `return DP_OK` directly, since falling through
+into the new ENet block after an early stop would have been wrong).
+
+**A real bug found while writing this decision's own tests, not in the implementation**: the first
+test draft's `EnumSessions` callback stored the raw `DPSESSIONDESC2` struct as returned (including
+its `lpszSessionNameA` pointer) and read the session name back *after* `EnumSessions()` had already
+returned - `lpszSessionNameA` is only valid for the duration of the callback invocation (the same
+documented contract `EnumSessions()`'s loopback path already has, Decision 18), so this was a
+dangling-pointer read in the *test*, not a real implementation defect. Caught immediately: the
+`strcmp` check failed once the test was actually wired into `main()` (a separate, also-real
+oversight - the two new tests were written but never registered, so they silently never ran on the
+first pass). Fixed by copying the session name into an owned `std::string` field *during* the
+callback, matching `tests/directplay_tests.cpp`'s own already-correct
+`EnumSessionsResult::lastSessionName` pattern for the identical hazard.
+
+New tests in `tests/enet_directplay_tests.cpp`: `Test_EnumSessionsOverEnet_FindsRealHostedSession`
+(a real host `Open()`s, a separate object `EnumSessions()`s with a real `dwTimeout` and finds it
+with accurate `guidApplication`/`dwMaxPlayers`/session-name fields) and
+`Test_EnumSessionsOverEnet_FiltersByApplicationGuid` (a non-matching filter excludes a real, live,
+discoverable session). Both use a new `BackgroundHostServicer` test helper (a `std::thread` calling
+the host's `Receive()` in a loop) since `EnumSessions()` blocks internally for up to `dwTimeout`
+waiting for a UDP reply that only gets sent if something services the host *during* that exact
+window - mirroring how a real host process would run its own event loop independently of whatever
+process is enumerating, rather than trying to interleave single-threaded polling around a call this
+project's public API does not expose as non-blocking. Reasoned through (not sanitizer-verified,
+since ASan/UBSan do not catch data races): the background thread and the main thread operate on
+two entirely separate `IDirectPlay2A` objects with no shared mutable state between them beyond the
+already-mutex-guarded `EnetDirectPlayTransport` lifecycle counter, so this is race-free by
+construction, not merely by absence of a detected symptom.
+
+No separate whitebox test of `DirectPlayDiscoveryService` itself exists - the public-API round-trip
+tests above already exercise `RespondToPendingRequests()` and `BroadcastAndCollect()` together,
+more realistically than a whitebox test could, matching this decision's own "the public-API
+round-trip already proves the mechanism" reasoning.
+
+**Verified for real**: 4/4 -> 8/8 `enet_directplay_tests`; full CMake build+`ctest` (7/7, this
+decision's changes are entirely inside `#ifdef FREE_DIRECT_ENABLE_ENET`, default build provably
+unaffected); ENet-enabled `ctest -L enet` (1/1); ASan+UBSan+ENet combined build (8/8 internally,
+zero sanitizer diagnostics, directly grepped raw stdout/stderr not just the pass/fail summary);
+`header_hygiene` (clean, no `include/` changes); a full out-of-tree `../free-eggbert` rebuild
+(exit 0).
 
 ---
 

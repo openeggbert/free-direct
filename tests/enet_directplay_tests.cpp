@@ -41,8 +41,11 @@
 
 #include <SDL3/SDL.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -288,6 +291,161 @@ void Test_OpenAsJoinOverEnet_WithHostAddressEnvVar_JoinsSuccessfully() {
     hostDp->Release();
 }
 
+namespace {
+// DPSESSIONDESC2::lpszSessionNameA is only valid for the duration of the callback invocation
+// (matches Decision 18's own documented contract for the loopback path) - a caller that wants to
+// keep it must copy the string content itself, during the callback, into an owned std::string
+// (matching tests/directplay_tests.cpp's own EnumSessionsResult::lastSessionName pattern) rather
+// than retaining the raw DPSESSIONDESC2 (and its now-dangling-after-return pointer) as-is.
+struct DiscoveredEnumResult {
+    DPSESSIONDESC2 desc{};
+    std::string sessionName;
+};
+
+BOOL CollectingEnumSessionsCallback(LPDPSESSIONDESC2 lpThisSD, LPDWORD, DWORD, LPVOID lpContext) {
+    auto* results = static_cast<std::vector<DiscoveredEnumResult>*>(lpContext);
+    DiscoveredEnumResult result;
+    result.desc = *lpThisSD;
+    result.sessionName = lpThisSD->lpszSessionNameA ? lpThisSD->lpszSessionNameA : "";
+    results->push_back(std::move(result));
+    return TRUE;
+}
+
+// EnumSessions() (ENet-enabled builds) blocks internally for up to dwTimeout while collecting
+// real UDP DiscoveryResponse replies (docs/directplay-design.md Decision 23) - but nothing
+// generates a reply unless something calls the *host's* Receive() during that exact window
+// (Decision 6's polling model). Since a real application would run the host's own event loop on
+// its own thread/process independently of whatever process is enumerating, this helper spins up
+// a background thread doing exactly that for the duration of the enclosing test, mirroring that
+// real-world shape rather than trying to interleave single-threaded polling around a call this
+// project's public API does not expose as non-blocking.
+class BackgroundHostServicer {
+public:
+    explicit BackgroundHostServicer(LPDIRECTPLAY2A hostDp2)
+        : thread_([hostDp2, stop = &stop_]() {
+              while (!stop->load()) {
+                  DPID from = 0, to = 0;
+                  char buf[8];
+                  DWORD size = sizeof(buf);
+                  hostDp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size);
+                  SDL_Delay(5);
+              }
+          }) {}
+    ~BackgroundHostServicer() {
+        stop_.store(true);
+        thread_.join();
+    }
+    BackgroundHostServicer(const BackgroundHostServicer&) = delete;
+    BackgroundHostServicer& operator=(const BackgroundHostServicer&) = delete;
+
+private:
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
+};
+} // namespace
+
+// 24-Hour Stabilization Backlog TASK-24H-0150 (plan.md), docs/directplay-design.md Decision 23:
+// a real end-to-end LAN discovery round-trip through the public API - a host Open()s
+// (DPOPEN_CREATE, which also starts DirectPlayDiscoveryService::StartListening() per this
+// decision), a separate object EnumSessions()s with a real dwTimeout, and the host's real
+// DiscoveryResponse reply must be found with accurate fields. This exercises
+// DirectPlayDiscoveryService::RespondToPendingRequests() and ::BroadcastAndCollect() together -
+// there is no separate whitebox test of the class, since the public-API round-trip already
+// proves the full mechanism end-to-end more realistically than a whitebox test could.
+void Test_EnumSessionsOverEnet_FindsRealHostedSession() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+
+    GUID appGuid{};
+    appGuid.Data1 = 0x1150; // arbitrary, distinguishable application id for this test
+
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication = appGuid;
+    hostDesc.dwMaxPlayers = 4;
+    char sessionName[] = "discoverable-session";
+    hostDesc.lpszSessionNameA = sessionName;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    {
+        BackgroundHostServicer servicer(hostDp2);
+
+        LPDIRECTPLAY enumDp = nullptr;
+        CHECK(DirectPlayCreate(nullptr, &enumDp, nullptr) == DP_OK);
+        LPDIRECTPLAY2A enumDp2 = nullptr;
+        CHECK(enumDp->QueryInterface(IID_IDirectPlay2A, (void**)&enumDp2) == DP_OK);
+
+        std::vector<DiscoveredEnumResult> found;
+        DPSESSIONDESC2 filter{};
+        std::memset(&filter, 0, sizeof(filter));
+        filter.dwSize = sizeof(DPSESSIONDESC2);
+        filter.guidApplication = appGuid;
+        CHECK(enumDp2->EnumSessions(&filter, /*dwTimeout=*/1000, CollectingEnumSessionsCallback,
+                                     &found, 0) == DP_OK);
+
+        CHECK(found.size() == 1);
+        if (!found.empty()) {
+            CHECK(std::memcmp(&found[0].desc.guidApplication, &appGuid, sizeof(GUID)) == 0);
+            CHECK(found[0].desc.dwMaxPlayers == 4);
+            CHECK(found[0].sessionName == "discoverable-session");
+        }
+
+        enumDp2->Release();
+        enumDp->Release();
+    }
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// Same rationale as TASK-24H-0018/Decision 18's loopback filter test - a non-matching
+// guidApplication filter must exclude a real, live, discoverable session, not just an absent one.
+void Test_EnumSessionsOverEnet_FiltersByApplicationGuid() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+
+    GUID hostedAppGuid{};
+    hostedAppGuid.Data1 = 0x1151;
+    GUID differentAppGuid{};
+    differentAppGuid.Data1 = 0x1152;
+
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication = hostedAppGuid;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    {
+        BackgroundHostServicer servicer(hostDp2);
+
+        LPDIRECTPLAY enumDp = nullptr;
+        CHECK(DirectPlayCreate(nullptr, &enumDp, nullptr) == DP_OK);
+        LPDIRECTPLAY2A enumDp2 = nullptr;
+        CHECK(enumDp->QueryInterface(IID_IDirectPlay2A, (void**)&enumDp2) == DP_OK);
+
+        std::vector<DiscoveredEnumResult> found;
+        DPSESSIONDESC2 filter{};
+        std::memset(&filter, 0, sizeof(filter));
+        filter.dwSize = sizeof(DPSESSIONDESC2);
+        filter.guidApplication = differentAppGuid;
+        CHECK(enumDp2->EnumSessions(&filter, /*dwTimeout=*/300, CollectingEnumSessionsCallback,
+                                     &found, 0) == DP_OK);
+
+        CHECK(found.empty());
+
+        enumDp2->Release();
+        enumDp->Release();
+    }
+
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 int main() {
     Test_EnetTransport_ListenAndConnect_EstablishesConnection();
     Test_EnetTransport_ReliableSend_HostToClient_DeliversPayload();
@@ -295,6 +453,8 @@ int main() {
     Test_EnetTransport_Shutdown_ClosesConnectionCleanly();
     Test_OpenAsJoinOverEnet_WithNoHostAddressEnvVar_ReturnsNoSessions();
     Test_OpenAsJoinOverEnet_WithHostAddressEnvVar_JoinsSuccessfully();
+    Test_EnumSessionsOverEnet_FindsRealHostedSession();
+    Test_EnumSessionsOverEnet_FiltersByApplicationGuid();
 
     if (g_failures == 0) {
         std::printf("OK: all ENet DirectPlay transport tests passed.\n");
