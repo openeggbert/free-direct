@@ -6999,6 +6999,284 @@ call sites today — see `docs/audit_ddraw.md` §2 and §12 for the full reasoni
 
 ---
 
+## DirectSound audit hardening (2026-07-09)
+
+This section adds tasks derived from a fresh, evidence-based DirectSound-only audit recorded in
+`docs/audit_dsound.md` (2026-07-09), covering performance, memory safety, correctness, and edge
+cases under extreme situations, cross-checked against real call sites in both `../free-eggbert` and
+`../planetblupi`. Numbering continues from `TASK-24H-0163`. None of these are `BLOCKED`.
+
+### TASK-24H-0164: Bound CreateSoundBuffer's dwBufferBytes before allocating
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Implementation
+Evidence: docs/audit_dsound.md §6.1 (finding S1) — unbounded `dwBufferBytes` reaches an
+unguarded `std::vector::resize`; §4 traces both games reading this value, unvalidated, directly
+from an on-disk `.wav` file's own `dwDSize` header field
+Depends on: None
+
+Problem:
+`DirectSoundBufferImpl`'s constructor (`src/directsound/DirectSound.cpp:240-242`) does
+`bufferBytes_ = desc->dwBufferBytes; data_.resize(bufferBytes_, 0);` with no upper bound check. An
+unsatisfiable resize throws `std::length_error`/`std::bad_alloc`, uncaught, crossing the COM-style
+interface boundary `CLAUDE.md`'s Coding Style says must never be crossed by an exception. Unlike
+the analogous DirectDraw finding (`TASK-24H-0154`), this one has a concretely plausible trigger:
+both `../free-eggbert/src/sound.cpp` and `../planetblupi/src/sound.cpp` read `dwBufferBytes` (as
+`wavHdr.dwDSize`) straight from a `.wav` asset file on disk with zero validation before it reaches
+`CreateSoundBuffer` — a corrupted or truncated asset (disk corruption, an interrupted install, a
+hand-edited or fan-made content pack) is a realistic way to reach this path.
+
+Required work:
+- Add a sanity bound on `dwBufferBytes` in `CreateSoundBuffer`/`DirectSoundBufferImpl`'s constructor
+  (reject anything above a generous but finite ceiling) and return `DSERR_INVALIDPARAM` or
+  `DSERR_OUTOFMEMORY` for anything outside it, before attempting the allocation.
+
+Acceptance criteria:
+- New test: `CreateSoundBuffer` with `dwBufferBytes` near `0xFFFFFFFF` returns an error HRESULT and
+  the test process does not crash (docs/audit_dsound.md §9.4's suggested test shape).
+- Existing `Test_CreateSoundBuffer_*` tests in `tests/directsound_tests.cpp` still pass unchanged.
+
+Out of scope:
+- Do not add validation of any other `DSBUFFERDESC` field in this task — only `dwBufferBytes`.
+- Do not add `.wav` file-level validation to either target game's source — out of scope for this
+  project regardless (`CLAUDE.md`: never modify game source).
+
+### TASK-24H-0165: Document and regression-test the real SharedAudioDevice close/reopen cost
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Documentation
+Evidence: docs/audit_dsound.md §8.3 (finding S2) — measured ~51ms per full device close+reopen
+cycle (sole `IDirectSound` owner) vs. ~0.00006ms/cycle when another instance keeps the device open;
+§4 confirms neither target game's real code repeats this pattern (each calls `DirectSoundCreate`
+once, `Release()` once, for the process lifetime)
+Depends on: None
+
+Problem:
+Repeatedly creating and fully releasing the sole live `IDirectSound` is roughly 850,000x more
+expensive than the pure ref-count path (another instance already holding the device open), and
+costs more than 3 frames' worth of stall at 60fps per cycle. Nothing today hits this path more than
+once per process, but it's undocumented and untested, so a future contributor (a "restart audio"
+feature, device-hotplug handling, or test code looping over create/release) could hit it by
+surprise.
+
+Required work:
+- Add a note to `docs/directsound-limitations.md` recording the measured cost and that it is
+  confirmed not triggered by either target game today.
+- Add a regression test that a sole-owner `DirectSoundCreate`/`Release` cycle completes without
+  error (not asserting a specific timing bound — too environment-dependent for CI — just that nested
+  reopen/close doesn't fail or hang).
+
+Acceptance criteria:
+- `docs/directsound-limitations.md` has a new entry citing the measured cost.
+- New test passes; existing `Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks`
+  and other lifecycle tests in `tests/directsound_tests.cpp` still pass unchanged.
+
+Out of scope:
+- Do not attempt to reduce or hide the underlying cost in this task (it originates in SDL3's own
+  device open/close path, not FreeDirect's code) — this task is documentation plus a
+  correctness-only regression test.
+
+### TASK-24H-0166: Take mutex_ in SharedAudioDevice::id()
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Implementation
+Evidence: docs/audit_dsound.md §6.2 (finding S3) — `open()`/`release()` mutate `deviceId_` under
+`mutex_`; `id()` reads it without taking the same lock, a data race under the C++ memory model if
+ever called cross-thread; confirmed inert today (§4: no DirectSound call site in either target game
+is ever reached from a secondary thread)
+Depends on: None
+
+Problem:
+`SharedAudioDevice::id()` (`src/directsound/DirectSound.cpp:196`) returns `deviceId_` without
+taking `mutex_`, unlike every other method on the same class.
+
+Required work:
+- Take `mutex_` (a `std::lock_guard`) inside `id()` before reading `deviceId_`, matching
+  `open()`/`release()`'s existing pattern.
+
+Acceptance criteria:
+- Existing DirectSound test suite passes unchanged (pure internal-safety fix, no observable
+  behavior change).
+
+Out of scope:
+- Do not add any other synchronization to `SharedAudioDevice` in this task — only `id()`.
+
+### TASK-24H-0167: Document DirectSound's single-threaded usage assumption
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Documentation
+Evidence: docs/audit_dsound.md §6.3 (finding S4) — atomic ref-counting exists on
+`DirectSoundBufferImpl`/`DirectSoundImpl`, but no other mutable state (`data_`, `stream_`,
+`volume_`, `pan_`, `playCursor_`, `bufferBytes_`) is synchronized; matches both target games'
+actual single-threaded usage (confirmed by §4: no DirectSound call site is ever reached from a
+secondary thread in either game)
+Depends on: None
+
+Problem:
+Same shape as `TASK-24H-0162` (the equivalent DirectDraw task): atomic ref-counts on
+`DirectSoundBufferImpl`/`DirectSoundImpl` could be read as a thread-safety signal the rest of the
+classes don't back up.
+
+Required work:
+- Add a short header comment (`include/dsound.h`, near the top or on each class) stating
+  DirectSound objects are not thread-safe beyond reference counting, and that all calls on a given
+  object must come from a single thread.
+
+Acceptance criteria:
+- Comment added and reviewed for accuracy against the current implementation; no code change.
+
+Out of scope:
+- Do not add any actual locking/synchronization in this task beyond `TASK-24H-0166`'s narrower
+  `id()` fix — this is documentation-only, since neither target game needs multi-threaded
+  DirectSound access today.
+
+### TASK-24H-0168: Document Lock()'s offset clamp and Unlock()'s pointer-lifetime behavior as deliberate
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Documentation
+Evidence: docs/audit_dsound.md §6.4/§7.1 (finding S6) and §7.4 (finding S5) — both are real,
+shipped behaviors with no test-locked documentation yet
+Depends on: None
+
+Problem:
+Two related, already-shipped behaviors are not yet written down in `docs/directsound-limitations.md`:
+- `Lock()` (`src/directsound/DirectSound.cpp:412-413`) silently clamps an out-of-range `dwOffset` to
+  `0` instead of returning `DSERR_INVALIDPARAM`, matching this project's general clamp-don't-error
+  philosophy (e.g. DirectDraw's `ClampRect`) but not yet documented as a deliberate choice for
+  DirectSound specifically.
+- `Unlock()` (`DirectSound.cpp:454-461`) never invalidates the pointer `Lock()` returned — real
+  DirectSound documents that pointer as invalid after `Unlock()`; FreeDirect's stays valid and
+  writable for the buffer's entire lifetime. Not a safety bug, just undocumented semantic looseness
+  relative to the real API contract.
+
+Required work:
+- Add two entries to `docs/directsound-limitations.md`, matching its existing honest-labeling style,
+  covering both behaviors above. Explicitly note that returning `DSERR_INVALIDPARAM` for the
+  out-of-range-offset case was considered and deliberately not chosen, to keep this consistent with
+  the project's existing clamp-based precedent elsewhere — record this as a decision, not an
+  oversight.
+
+Acceptance criteria:
+- `docs/directsound-limitations.md` has both new entries; no code change in this task.
+
+Out of scope:
+- Do not change `Lock()`/`Unlock()`'s actual behavior in this task — if a future call site needs
+  `DSERR_INVALIDPARAM` semantics instead of clamping, that's a separate task with its own driving
+  need, not a speculative change here.
+
+### TASK-24H-0169: Clamp/validate nSamplesPerSec before it reaches SDL_CreateAudioStream
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Implementation
+Evidence: docs/audit_dsound.md §7.2 (finding S7) — an extreme `nSamplesPerSec` (near `DWORD` max)
+casts to a negative/nonsensical `int` and reaches `SDL_CreateAudioStream` unchecked; actual SDL3
+behavior in that case was not verified by this audit; confirmed not reachable by either target game
+today (both only ever pass a real WAV file's own valid sample rate)
+Depends on: None
+
+Problem:
+`DirectSoundBufferImpl`'s constructor (`src/directsound/DirectSound.cpp:261`) does
+`srcSpec_.freq = static_cast<int>(pcm->wf.nSamplesPerSec);` with no range check. This project does
+not currently know, and has not tested, what SDL3 does with a negative/absurd `freq`.
+
+Required work:
+- Add a sanity bound on `nSamplesPerSec` (e.g. reject anything above a generous ceiling like
+  192000 Hz, or non-positive after cast) and fall back to the existing safe default
+  (`DirectSound.cpp:541-546`'s S16LE/mono/22050 path) rather than passing an unchecked value to SDL.
+
+Acceptance criteria:
+- New test constructing a buffer with `nSamplesPerSec` near `0xFFFFFFFF` asserts some defined,
+  non-crashing outcome (e.g. falls back to the safe default, or `CreateSoundBuffer` returns an
+  error) — either is acceptable as long as it's defined and tested, per
+  docs/audit_dsound.md §9.4.
+- Existing format-parsing tests in `tests/directsound_tests.cpp` still pass unchanged.
+
+Out of scope:
+- Do not validate `nChannels`/`wBitsPerSample` in this task — only `nSamplesPerSec`, per this
+  audit's finding. Other fields would need their own evidence before their own task.
+
+### TASK-24H-0170: Fix near-zero nSamplesPerSec fallback to only replace the frequency field
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Implementation
+Evidence: docs/audit_dsound.md §7.3 (finding S8) — `ensureStream()`'s `srcSpec_.freq == 0`
+fallback overwrites `format`/`channels` too, not just `freq`, discarding a valid parsed
+channel/bit-depth even when only the sample rate was zero; confirmed not reachable by either target
+game today
+Depends on: None
+
+Problem:
+`ensureStream()` (`src/directsound/DirectSound.cpp:541-546`) triggers on `srcSpec_.freq == 0` and
+overwrites all three of `format`, `channels`, and `freq` with the safe-default triple
+(S16LE/mono/22050), even when only `freq` was actually invalid — a hypothetical stereo 8-bit buffer
+with a corrupted `nSamplesPerSec == 0` field would silently become mono 16-bit rather than just
+getting a default sample rate substituted.
+
+Required work:
+- Change the fallback to only substitute `freq` when it alone is zero, preserving `format`/
+  `channels` if they were validly parsed from the descriptor. Keep the existing all-three-field
+  fallback for the genuinely-no-format case (null `lpwfxFormat`, already covered by
+  `docs/directsound-limitations.md`'s "Missing PCM format falls back to a safe default" section).
+
+Acceptance criteria:
+- Existing `Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully` still passes unchanged (the
+  null-format case keeps its current all-three-field fallback).
+- New test: a descriptor with valid `nChannels`/`wBitsPerSample` but `nSamplesPerSec == 0` results
+  in a buffer that preserves the original channel count/bit depth and only substitutes the sample
+  rate.
+
+Out of scope:
+- Do not change the null-`lpwfxFormat` fallback path in this task.
+
+### TASK-24H-0171: Add a stress test for MAXSOUND (100) simultaneous DirectSoundBuffers
+Status: TODO
+Priority: P2
+Area: DirectSound
+Type: Test
+Evidence: docs/audit_dsound.md §4/§9.4 — both target games allow up to `MAXSOUND` = 100
+simultaneous `IDirectSoundBuffer` objects (`../free-eggbert/include/sound.hpp:15`); existing tests
+only exercise 2 simultaneous buffers
+Depends on: None
+
+Problem:
+No test exercises anywhere close to the real ceiling (100) either target game's own fixed-size
+buffer array allows. This audit found no evidence of an actual problem at that scale — this is a
+coverage gap, not a confirmed bug.
+
+Required work:
+- Add a test creating 100 `IDirectSoundBuffer` objects simultaneously (matching `MAXSOUND`) and
+  playing several of them at once, asserting no error and independent playing-status reporting,
+  extending the existing pattern from
+  `Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently`.
+
+Acceptance criteria:
+- New test passes under the default headless (`SDL_AUDIODRIVER=dummy`) CTest configuration.
+
+Out of scope:
+- Do not change any production code in this task unless the new test uncovers a real defect at
+  scale — if it does, that becomes its own separate, atomic follow-up task, not folded into this
+  one.
+
+---
+
+**Update (2026-07-09)**: 8 more atomic tasks added, `TASK-24H-0164` through `TASK-24H-0171`, from a
+fresh DirectSound-only audit (`docs/audit_dsound.md`), all `Status: TODO`, none `BLOCKED`. Highest
+priority: `TASK-24H-0164` (bound `CreateSoundBuffer`'s `dwBufferBytes`) is the only P1 — the sole
+finding in this audit with a concretely plausible real-world trigger (a corrupted/truncated `.wav`
+asset file, read unvalidated by both target games' own loading code). Everything else is P2:
+real-but-currently-latent fixes and documentation gaps, none reachable by either target game's
+actual call sites today. See `docs/audit_dsound.md` §2 and §10 for the full reasoning. New running
+total: **171 atomic tasks** (`TASK-24H-0001` through `TASK-24H-0171`).
+
+---
+
 ## Priority summary
 
 - **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,

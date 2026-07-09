@@ -16,16 +16,17 @@ charter).
   implementation can host/join/exchange messages with each other. This is explicitly **not**
   wire-compatible with real Microsoft DirectPlay — FreeDirect-to-FreeDirect only.
 - **Current development phase**: `plan.md`'s original Phases 0–18 and the 24-Hour Stabilization
-  Backlog are both effectively closed out for implementation, plus a **new DirectDraw-only audit**
-  (`docs/audit_ddraw.md`, 2026-07-09) added **13 more atomic tasks, `TASK-24H-0151`-`0163`, all
-  `TODO`** - not yet implemented, see Section 3. Backlog now carries **163 atomic `TASK-24H-XXXX`
-  tasks** total. As of this update (real count, `grep`-verified against `plan.md`, not estimated):
-  **149 DONE, 13 TODO, 1 PARTIAL, 0 BLOCKED**. Session 1 ended at 64 DONE. **All 7 of the project's
-  standing BLOCKED DirectPlay design questions (Track B) were asked of, answered by, and
-  implemented for the user in an earlier session** - never decided unilaterally (see Section 3 and
-  `docs/directplay-design.md` Decisions 20-26). `TASK-24H-0057` (`PARTIAL`) still needs a subprocess
-  test harness this project doesn't have; the 13 new `TODO` tasks are all freshly added, unstarted
-  DirectDraw hardening work (Section 8).
+  Backlog are both effectively closed out for implementation, plus two **new, audit-only additions**
+  this session: a DirectDraw-only audit (`docs/audit_ddraw.md`) added `TASK-24H-0151`-`0163` (13
+  tasks), and a DirectSound-only audit (`docs/audit_dsound.md`) added `TASK-24H-0164`-`0171` (8
+  tasks) - **21 new tasks total, all `TODO`**, none implemented, see Section 3. Backlog now carries
+  **171 atomic `TASK-24H-XXXX` tasks** total. As of this update (real count, `grep`-verified against
+  `plan.md`, not estimated): **149 DONE, 21 TODO, 1 PARTIAL, 0 BLOCKED**. Session 1 ended at 64
+  DONE. **All 7 of the project's standing BLOCKED DirectPlay design questions (Track B) were asked
+  of, answered by, and implemented for the user in an earlier session** - never decided unilaterally
+  (see Section 3 and `docs/directplay-design.md` Decisions 20-26). `TASK-24H-0057` (`PARTIAL`) still
+  needs a subprocess test harness this project doesn't have; the 21 new `TODO` tasks are all
+  freshly added, unstarted DirectDraw/DirectSound hardening work (Section 8).
 - **Important architectural decisions** (full narrative + rationale for the DirectPlay ones lives
   in `docs/directplay-design.md`, Decisions 1–19; deviation summary in
   `docs/directplay-limitations.md`, new this session):
@@ -135,11 +136,38 @@ changed):
      skipping the `MarkDirty()` call the 32-bit branch reaches.
    - Full findings table, severity/reachability grading, benchmark methodology, and a summary of
      what's *not* yet fixed are in `docs/audit_ddraw.md` - this audit changed no code.
-2. **13 new `plan.md` tasks added**, `TASK-24H-0151` through `TASK-24H-0163`, one per audit finding
-   worth fixing, following the existing `TASK-24H-XXXX` format exactly (Status/Priority/Area/Type/
-   Evidence/Problem/Required work/Acceptance criteria/Out of scope). All `Status: TODO` - **none
-   implemented yet**, this was explicitly a plan-then-stop session for this batch. See Section 8 for
-   the prioritized list.
+2. **13 new `plan.md` tasks added**, `TASK-24H-0151` through `TASK-24H-0163`, one per DirectDraw
+   audit finding worth fixing, following the existing `TASK-24H-XXXX` format exactly (Status/
+   Priority/Area/Type/Evidence/Problem/Required work/Acceptance criteria/Out of scope). All
+   `Status: TODO` - **none implemented yet**, this was explicitly a plan-then-stop session for this
+   batch.
+3. **Deep DirectSound-only audit** (`docs/audit_dsound.md`, new file), explicitly structured around
+   performance/correctness/memory/extreme-situation-edge-cases/risk-analysis, ending with a
+   proposed-tasks list, per an explicit user request for that exact structure. Also cross-checked
+   against real call sites in both target games. This audit did **not** find an algorithmic
+   hot-path defect like DirectDraw's `BlitFrom` - `Play()` was measured directly at 0.0016ms/call
+   for a realistic 2-second SFX buffer, ruling that class of finding out rather than assuming it.
+   The two headline findings instead:
+   - `CreateSoundBuffer`'s `dwBufferBytes` is never bounded before an unguarded
+     `std::vector::resize` - the same *class* of defect as `TASK-24H-0154` (DirectDraw's
+     `CreateSurface`), but **more concretely evidenced**: both target games read this value
+     directly from an on-disk `.wav` file's own header field (`wavHdr.dwDSize`) with zero
+     validation before it reaches FreeDirect, making a corrupted/truncated asset file a genuinely
+     plausible trigger, not just a hypothetical caller.
+   - A full `IDirectSound` device close+reopen cycle (the sole owner releasing, then a fresh
+     `DirectSoundCreate`) measured **~51ms per cycle**, vs. ~0.00006ms when another instance keeps
+     the device open (roughly 850,000x difference) - confirmed not triggered by either target
+     game's actual create-once/release-once lifecycle, but a real, dramatic, previously-unmeasured
+     cost worth knowing about.
+   - Smaller findings: an unsynchronized read in `SharedAudioDevice::id()` (confirmed inert - no
+     DirectSound call site in either game runs on a secondary thread), no documented
+     single-threaded-usage assumption (mirrors the DirectDraw audit's equivalent finding), `Lock()`
+     silently clamping an out-of-range offset instead of erroring, `Unlock()` never invalidating
+     the pointer `Lock()` returned, and an extreme `nSamplesPerSec` reaching SDL3 unchecked with
+     its actual consequence left honestly unverified (not overclaimed as a specific crash).
+4. **8 more `plan.md` tasks added**, `TASK-24H-0164` through `TASK-24H-0171`, one per DirectSound
+   audit finding worth fixing (same format as item 2). All `Status: TODO` - **none implemented
+   yet**. See Section 8 for the prioritized list covering both audits' new tasks together.
 
 **Prior session (3)** (2026-07-08, continuation implementation session - closed 74 more
 `TASK-24H-XXXX` tasks, from 64 to 138 DONE (every safe task in the backlog at the time); no new
@@ -309,9 +337,10 @@ were found and fixed in that session's own newly-written test code (a dangling-p
 callback's documented lifetime, and two tests that were written but never registered so they
 silently never ran) - both caught by actually running the tests, not assumed passing.
 
-**This session (2026-07-09) added 13 new TODO tasks** (`TASK-24H-0151`-`0163`) from a fresh
-DirectDraw-only audit (`docs/audit_ddraw.md`) - none implemented yet, see Section 8. The DirectPlay
-backlog itself remains fully closed (no new DirectPlay work this session).
+**This session (2026-07-09) added 21 new TODO tasks**: `TASK-24H-0151`-`0163` from a fresh
+DirectDraw-only audit (`docs/audit_ddraw.md`), and `TASK-24H-0164`-`0171` from a fresh
+DirectSound-only audit (`docs/audit_dsound.md`) - none implemented yet, see Section 8. The
+DirectPlay backlog itself remains fully closed (no new DirectPlay work this session).
 
 **Minor, unchanged**: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` still unexercised in this environment (no
 system `libenet` package) - the vendored `third_party/enet` path is the one actually verified.
@@ -379,12 +408,34 @@ system `libenet` package) - the vendored `third_party/enet` path is the one actu
     three code-quality items (`TASK-24H-0159`-`0163`) - all confirmed unreachable by either game
     today, all documented in full in `docs/audit_ddraw.md`.
 
-**DirectSound** (unchanged this session):
-- `CreateSoundBuffer` performs no `dwSize` validation - documented, not a confirmed bug.
+**DirectSound** (deep audit done 2026-07-09, `docs/audit_dsound.md` - no code fixed yet, 8 new
+`TODO` tasks tracked as `TASK-24H-0164`-`0171`):
+- `CreateSoundBuffer` performs no `dwSize` validation - documented, not a confirmed bug (pre-existing
+  finding, unchanged).
 - `DirectSoundCreate`'s `DSERR_NODRIVER` path remains untested (`TASK-24H-0057`, `PARTIAL`) -
   genuinely hard to force in-process given `SharedAudioDevice`'s process-lifetime-sticky driver
   selection.
 - Mono-only `SetPan`, non-seekable `SetCurrentPosition`, no-looping - all pre-existing, documented.
+- **No algorithmic hot-path defect found** - `Play()` measured at 0.0016ms/call for a realistic
+  2-second SFX buffer; this audit deliberately checked for a `BlitFrom`-style missing fast path and
+  ruled it out empirically rather than assuming DirectSound was fine.
+- **New this session, from `docs/audit_dsound.md`, none fixed yet**:
+  - `CreateSoundBuffer`'s `dwBufferBytes` is never bounded before an unguarded
+    `vector::resize` - concretely evidenced: both target games read this value unvalidated from an
+    on-disk `.wav` file's own header field, making a corrupted/truncated asset a plausible trigger
+    for an uncaught allocation exception (`TASK-24H-0164`, the only P1 among the DirectSound tasks).
+  - A full `IDirectSound` device close+reopen cycle measured ~51ms/cycle (vs. ~0.00006ms when
+    another instance keeps the device open) - confirmed not triggered by either game's real
+    create-once/release-once lifecycle, documented not yet fixed (`TASK-24H-0165`).
+  - `SharedAudioDevice::id()` reads outside its own class's mutex (`TASK-24H-0166`), no documented
+    single-threaded-usage assumption (`TASK-24H-0167`), `Lock()`'s offset-clamp and `Unlock()`'s
+    pointer-lifetime behavior undocumented as deliberate (`TASK-24H-0168`), an extreme
+    `nSamplesPerSec` reaching SDL3 unchecked with unverified consequences (`TASK-24H-0169`), a
+    near-zero `nSamplesPerSec` silently discarding channel/bit-depth info too
+    (`TASK-24H-0170`) - all confirmed unreachable by either game today, all documented in full in
+    `docs/audit_dsound.md`.
+  - Test-coverage gap: neither existing test approaches `MAXSOUND` (100) simultaneous buffers, the
+    real ceiling both games allow (`TASK-24H-0171`) - no confirmed bug at that scale, just untested.
 
 **Unchanged**: `../free-eggbert`'s own DirectPlay lobby UI is unwired in the game's current source
 (not a FreeDirect bug, game source must never be modified). The `FREE_DIRECT` demo executable's
@@ -481,23 +532,35 @@ No lint/format tooling is configured in this repository.
 
 ## 8. Next smallest tasks
 
-**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **13**, all
-from the 2026-07-09 DirectDraw audit, `TASK-24H-0151`-`0163`, none `BLOCKED`, none implemented
-yet). Recommended order, per `docs/audit_ddraw.md` §2/§12's own severity×reachability ranking:
+**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **21**: 13
+from the 2026-07-09 DirectDraw audit, `TASK-24H-0151`-`0163`, plus 8 from the same-day DirectSound
+audit, `TASK-24H-0164`-`0171`. None `BLOCKED`, none implemented yet). Recommended order, merging
+both audits' own severity×reachability rankings (`docs/audit_ddraw.md` §2/§12,
+`docs/audit_dsound.md` §2/§10):
 
 1. `TASK-24H-0151` (P0, Area: Build) - default `CMAKE_BUILD_TYPE` to `Release` when unset. Highest
    leverage, lowest risk: one `CMakeLists.txt` change, no behavior risk, and it changes the
-   baseline for every other performance number in the whole project.
+   baseline for every other performance number in the whole project (benefits DirectSound too, per
+   `docs/audit_dsound.md` §5.2 - no separate build-type task was added for DirectSound, this one
+   already covers it).
 2. `TASK-24H-0152` (P0, Area: DirectDraw) - add a runtime 1:1 fast path to `BlitFrom`. The only
    other High-impact finding confirmed reachable by both games' real, everyday code paths (every
    present, every sprite draw). Must keep the scaling path for `CPixmap::Display()`'s primary
    present blit, which can genuinely scale - see the task's own text and `docs/audit_ddraw.md` §8.3.
-3. `TASK-24H-0154`/`0155` (P1, Area: DirectDraw) - `CreateSurface` size validation and the
+3. `TASK-24H-0164` (P1, Area: DirectSound) - bound `CreateSoundBuffer`'s `dwBufferBytes`. The
+   DirectSound audit's own highest-priority finding, and arguably the single most concretely
+   evidenced robustness gap across *both* audits: both target games read this value, unvalidated,
+   straight from an on-disk `.wav` file's own header field, so a corrupted/truncated asset is a
+   real, not just hypothetical, way to trigger an uncaught allocation exception.
+4. `TASK-24H-0154`/`0155` (P1, Area: DirectDraw) - `CreateSurface` size validation and the
    `Palette::GetEntries`/`SetEntries` integer-overflow bounds-check fix. Both are real API-boundary
    hardening gaps (one can crash the process, one is an out-of-bounds write), currently unreachable
    by either target game but cheap, low-risk, self-contained fixes with tests already sketched.
-4. `TASK-24H-0153`, `0156`-`0163` (P2) - remaining latent-defect fixes and code-quality cleanups,
-   opportunistic, no urgency (all confirmed unreachable by either target game today).
+5. `TASK-24H-0153`, `0156`-`0163` (P2, DirectDraw) and `TASK-24H-0165`-`0171` (P2, DirectSound) -
+   remaining latent-defect fixes, documentation gaps, and code-quality cleanups, opportunistic, no
+   urgency (all confirmed unreachable by either target game today). Within this group,
+   `TASK-24H-0165` (documenting the ~51ms device close/reopen cost) is worth doing early relative to
+   its siblings since it's pure documentation plus one non-timing-sensitive test, not a code change.
 
 Also still open, unchanged: `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not
 closeable without a subprocess test harness this project doesn't have yet (see Section 5).
@@ -513,11 +576,10 @@ framing and is now somewhat superseded by the Decisions themselves for these 7 i
 (not yet re-reconciled - a small follow-up documentation task, not tracked as its own
 `TASK-24H-XXXX` yet).
 
-A future session's path to further progress: work through the 13 new Track A tasks above in
+A future session's path to further progress: work through the 21 new Track A tasks above in
 priority order, build the subprocess harness for `TASK-24H-0057`, or identify genuinely new work (a
-fresh call-site audit of either target game, a new user-driven feature request such as the
-DirectSound audit requested immediately after this batch - see the top of Section 3 for whichever
-is most recent - or revisiting a "not needed" Decision if a concrete consumer need is later found).
+fresh call-site audit of either target game, a new user-driven feature request, or revisiting a
+"not needed" Decision if a concrete consumer need is later found).
 
 ## 9. Do not do yet
 
@@ -552,18 +614,21 @@ is most recent - or revisiting a "not needed" Decision if a concrete consumer ne
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first (this file), especially Sections 4 and 8, then docs/audit_ddraw.md (the 2026-07-09
-DirectDraw audit) and plan.md's "24-Hour Autonomous Stabilization Backlog" section, especially its
-"DirectDraw audit hardening (2026-07-09)" subsection, for full task detail. 149 of 163
-TASK-24H-XXXX tasks are DONE, 1 PARTIAL, 13 TODO (TASK-24H-0151-0163, DirectDraw audit hardening,
-none BLOCKED, none implemented yet), 0 BLOCKED - all 7 of the project's former BLOCKED DirectPlay
-design questions were resolved in an earlier session (docs/directplay-design.md Decisions 20-26).
+Read NEXT.md first (this file), especially Sections 4 and 8, then docs/audit_ddraw.md and
+docs/audit_dsound.md (both from 2026-07-09) and plan.md's "24-Hour Autonomous Stabilization
+Backlog" section, especially its "DirectDraw audit hardening (2026-07-09)" and "DirectSound audit
+hardening (2026-07-09)" subsections, for full task detail. 149 of 171 TASK-24H-XXXX tasks are DONE,
+1 PARTIAL, 21 TODO (TASK-24H-0151-0171: 13 DirectDraw + 8 DirectSound audit-hardening tasks, none
+BLOCKED, none implemented yet), 0 BLOCKED - all 7 of the project's former BLOCKED DirectPlay design
+questions were resolved in an earlier session (docs/directplay-design.md Decisions 20-26).
 DirectDraw (53 tests), DirectSound (30 tests), DirectPlay (65 tests + 8 opt-in ENet transport
 tests) all have solid coverage; real memory-safety/UB bugs found in earlier sessions were fixed and
-verified via ASan/UBSan. The 13 new TODO tasks are the next concrete work: TASK-24H-0151 (default
-CMAKE_BUILD_TYPE to Release - highest leverage, one CMakeLists.txt line) and TASK-24H-0152 (BlitFrom
-1:1 fast path - the only other High-impact finding confirmed reachable by both target games' real
-call paths today) first, per Section 8's priority order. Standalone build:
+verified via ASan/UBSan. The 21 new TODO tasks are the next concrete work, in priority order per
+Section 8: TASK-24H-0151 (default CMAKE_BUILD_TYPE to Release - highest leverage, one
+CMakeLists.txt line, benefits both subsystems), TASK-24H-0152 (BlitFrom 1:1 fast path - reachable
+by both target games' real call paths every frame), then TASK-24H-0164 (bound
+CreateSoundBuffer's dwBufferBytes - the most concretely evidenced robustness gap in either audit,
+since both games read this value unvalidated from an on-disk .wav file). Standalone build:
 `cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
 not touch ../free-eggbert or ../planetblupi source. Do not resolve any DirectPlay design question
 unilaterally if a new one ever comes up.
