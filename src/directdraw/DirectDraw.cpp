@@ -740,7 +740,13 @@ namespace {
     {
         FREE_DIRECT_DIAG_INC(bltCallsThisWindow);
         FREE_DIRECT_DIAG_INC_TOTAL(bltCallsTotal);
-        auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
+        // A plain static_cast is safe here (docs/audit_ddraw.md §3.4, TASK-24H-0163, replacing a
+        // former RTTI-based downcast): DirectDrawSurfaceImpl is the only concrete
+        // IDirectDrawSurface in this codebase and is declared final, so there is no other type a
+        // non-null lpDDSrcSurface could actually be - that RTTI lookup was pure overhead on every
+        // blit call. A null lpDDSrcSurface still casts
+        // to nullptr either way, so the null check right after this is unaffected.
+        auto* sourceSurface = static_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
         const bool requestSrcColorKey = (dwFlags & DDBLT_KEYSRC) != 0;
         DirectDrawLog("free-direct Blt: dstId=%llu dstType=%s srcId=%llu src=%p flags=0x%08lx hasPalette=%s hasSrcColorKey=%s", 
                 static_cast<unsigned long long>(debugId_),
@@ -857,7 +863,13 @@ namespace {
             DirectDrawLog("free-direct BltFast: null source surface");
             return DDERR_INVALIDPARAMS;
         }
-        auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
+        // A plain static_cast is safe here (docs/audit_ddraw.md §3.4, TASK-24H-0163, replacing a
+        // former RTTI-based downcast): DirectDrawSurfaceImpl is the only concrete
+        // IDirectDrawSurface in this codebase and is declared final, so there is no other type a
+        // non-null lpDDSrcSurface could actually be - that RTTI lookup was pure overhead on every
+        // blit call. A null lpDDSrcSurface still casts
+        // to nullptr either way, so the null check right after this is unaffected.
+        auto* sourceSurface = static_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
         if (!sourceSurface) {
             DirectDrawLog("free-direct BltFast: source surface type mismatch");
             return DDERR_INVALIDPARAMS;
