@@ -7801,15 +7801,16 @@ run above includes `directsound_tests` (which needs a real, working `dummy` driv
 immediately before `directsound_nodriver_test` runs in the same `ctest` invocation.
 
 ### TASK-24H-0182: Update NEXT.md — FREE_DIRECT demo confirmed running correctly, not just compiling
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
 Evidence: follow-up gap analysis (2026-07-09) — ran `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
-./build/FREE_DIRECT` fresh from current source; observed a stable ~52 FPS render loop, zero
-errors/warnings, clean behavior for the full observation window (exits only on external timeout, as
-expected for a demo with no self-exit condition). `NEXT.md` has stated for multiple sessions that
-the demo's on-screen/runtime behavior was "still unverified" — true until now.
+./build/FREE_DIRECT` fresh from current source; observed a stable ~52-53 FPS render loop (own
+`FREE_DIRECT_PERF` counter), clean behavior for the full observation window (exits only on external
+timeout, as expected for a demo with no self-exit condition), independently re-confirmed a second
+time before closing this task. `NEXT.md` has stated for multiple sessions that the demo's
+on-screen/runtime behavior was "still unverified" — true until now.
 Depends on: None
 
 Problem:
@@ -7828,6 +7829,22 @@ Acceptance criteria:
 Out of scope:
 - Does not claim real-display (non-dummy-driver) visual correctness was checked — only the headless
   run described above. Real-display verification, if ever wanted, is separate, new work.
+
+Verified: independently re-ran the demo myself (fresh `/tmp` scratch build, not reusing the
+follow-up analysis's own run) before writing this up, per this project's practice of re-verifying a
+sub-agent's claim rather than trusting its summary at face value: `timeout 3 env
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./FREE_DIRECT`, exit code 124 (timeout, expected). The
+demo's own `FREE_DIRECT_PERF` log line confirms `present_count` climbing steadily
+(54 → 107 over the run) at a stable `FPS=52.4`-`53.3`, `tex_recreated=no`, `build=Release`
+(confirming `TASK-24H-0151`'s default-build-type fix is in effect for the demo too). **Correction to
+this task's own Evidence line above**: the original follow-up analysis reported "zero
+errors/warnings," but my own direct re-run found two non-fatal warnings at startup - "Failed to load
+image: player.png" / "Failed to load fallback image: cmake-build-debug/player.png"
+(`src/Main.cpp:140` tries to load a demo sprite asset that isn't present in this environment's
+working directory). This is a missing test-fixture asset, not a FreeDirect DirectDraw/DirectSound
+defect - the render loop starts and continues running normally afterward regardless, proven by the
+climbing `present_count`/stable `FPS` above. `NEXT.md` Sections 2 and 4 updated accordingly, with
+this nuance included rather than the more sweeping "zero errors" claim.
 
 **Update (2026-07-09, follow-up analysis)**: 3 more atomic tasks added, `TASK-24H-0180` through
 `TASK-24H-0182`, from a cross-cutting analysis pass distinct from the three per-subsystem audits
