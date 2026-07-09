@@ -7648,6 +7648,146 @@ genuinely unaffected by free-eggbert's decompilation status. New running total: 
 
 ---
 
+## Cross-cutting hardening (2026-07-09, follow-up analysis)
+
+The three per-subsystem audits above were each explicitly scoped to exactly one subsystem
+(`CLAUDE.md`'s atomicity rule). A follow-up analysis pass looked specifically for real,
+evidence-based issues that scoping could not have caught — cross-subsystem interaction, the demo's
+actual runtime behavior, and whether `TASK-24H-0057` (the sole remaining non-`DONE` item) had a
+newly-viable path to closure. Two independent research passes (a ground-truth build/test/regression
+re-verification, and a fresh-eyes gap analysis) ran in parallel; the first found zero regressions
+and reconfirmed `free-eggbert`'s `CDecor::TreatNetData()` call site is still commented out
+(`event.cpp:2045`), so DirectPlay reachability is unchanged. The second produced the three tasks
+below.
+
+### TASK-24H-0180: Add test coverage for DirectDraw+DirectSound running together in one process
+Status: TODO
+Priority: P1
+Area: Integration
+Type: Implementation
+Evidence: follow-up gap analysis (2026-07-09) — both `free-eggbert` (`pixmap.cpp:178`
+`DirectDrawCreate`; `sound.cpp:373` `DirectSoundCreate`) and `planetblupi` call both
+`DirectDrawCreate` and `DirectSoundCreate` unconditionally at startup, so both subsystems are
+simultaneously live in every real game session — but `tests/directdraw_tests.cpp`,
+`tests/directsound_tests.cpp`, and `tests/directplay_tests.cpp` are three fully isolated binaries
+(`tests/CMakeLists.txt`), and `src/Main.cpp` (the demo) only ever calls `DirectDrawCreate`, never
+`DirectSoundCreate`. The one scenario that's true 100% of the time in real usage has zero test
+coverage anywhere in this repo.
+Depends on: None
+
+Problem:
+No test or demo exercises DirectDraw and DirectSound initialized and live in the same process at
+once, even though this is not a hypothetical edge case — it is the normal, unconditional startup
+behavior of both target games. Neither the three per-subsystem audits nor the existing test suites
+could have caught a combined-usage issue by construction. No evidence of an actual bug exists
+today — this closes a coverage gap, not a known defect.
+
+Required work:
+- Add a new test (either a new small test binary, e.g. `tests/integration_tests.cpp`, or extend the
+  existing demo `src/Main.cpp` to also open a `DirectSoundBuffer`) that calls `DirectDrawCreate` and
+  `DirectSoundCreate` in the same process, performs at least one real operation on each (e.g. a
+  `BltFast`/present on the DirectDraw side, a `Play()` on the DirectSound side), and confirms both
+  work correctly together and neither's `Release()`/shutdown interferes with the other.
+- If a new test binary is added, wire it into `tests/CMakeLists.txt` following the existing pattern
+  (headless-friendly, `SDL_VIDEODRIVER=dummy`/`SDL_AUDIODRIVER=dummy`).
+
+Acceptance criteria:
+- New test demonstrates DirectDraw and DirectSound both initialized, both performing a real
+  operation, and both cleanly released, in one process, with no crash/error and no incorrect
+  behavior in either subsystem attributable to the other's presence.
+- Existing test suites (directdraw_tests, directsound_tests, directplay_tests) remain unaffected/
+  unchanged.
+
+Out of scope:
+- Do not add DirectPlay to this combined test — DirectPlay's gameplay-loop entry point is confirmed
+  unreachable by free-eggbert's actual running code today (`docs/audit_dplay.md` D1), so a
+  DirectDraw+DirectSound+DirectPlay triple-combination test would not reflect any real, currently-
+  reachable game behavior. Revisit only if free-eggbert's decompilation reconnects
+  `CDecor::TreatNetData()`.
+- Do not restructure the existing three test binaries into one combined binary — this task only
+  adds new, additive coverage for the untested combination, it does not change existing test
+  architecture.
+
+### TASK-24H-0181: Close TASK-24H-0057 via a dedicated fresh-process CTest binary for DSERR_NODRIVER
+Status: TODO
+Priority: P1
+Area: DirectSound
+Type: Implementation
+Evidence: follow-up gap analysis (2026-07-09) — a standalone SDL3 probe confirmed that once
+`SDL_InitSubSystem(SDL_INIT_AUDIO)` is attempted with a given `SDL_AUDIODRIVER` value (success or
+failure), that outcome is sticky for the rest of the process, even across an explicit
+`SDL_QuitSubSystem`+re-`SDL_InitSubSystem` cycle with a *different* driver value afterward — ruling
+out any in-process mechanism for `TASK-24H-0057` with hard evidence (not just the previously-
+documented suspicion), and confirming a genuinely fresh process is required, exactly as
+`enet_directplay_tests` already is for its own, unrelated reasons.
+Depends on: None
+
+Problem:
+`DirectSoundCreate`'s `DSERR_NODRIVER` graceful-failure path (`SharedAudioDevice`) has never been
+exercised by a test, because `SDL_AUDIODRIVER`'s effect is sticky per-process and every existing
+test binary's process may already have initialized audio successfully before the relevant test
+runs, with no reliable way to force the no-driver condition after the fact. `TASK-24H-0057` has sat
+`PARTIAL` — the only non-`DONE` item in the entire backlog — for exactly this reason.
+
+Required work:
+- Add a new, minimal CTest binary/test target (e.g. `tests/directsound_nodriver_test.cpp`) whose
+  entire body is: call `DirectSoundCreate` once, assert it returns `DSERR_NODRIVER`, exit.
+- Register it via `add_test` + `set_tests_properties(... PROPERTIES ENVIRONMENT
+  "SDL_AUDIODRIVER=<a-deliberately-bogus-driver-name>")` so CTest launches it as a genuinely fresh
+  process with a driver name SDL3 cannot resolve.
+- Follow the existing `enet_directplay_tests` pattern for how a dedicated small test binary is wired
+  into `tests/CMakeLists.txt`.
+
+Acceptance criteria:
+- New test passes: `DirectSoundCreate` returns `DSERR_NODRIVER` in the forced-bogus-driver fresh
+  process, with no crash.
+- The new test does not affect the default `ctest` run's other 7 tests (must not share a process or
+  leak the bogus `SDL_AUDIODRIVER` env var into siblings — CTest's per-test `ENVIRONMENT` property
+  is process-scoped, so this should hold structurally, but verify).
+- `TASK-24H-0057` updated from `PARTIAL` to `DONE`.
+
+Out of scope:
+- Do not add a general-purpose subprocess-testing harness/framework — this is one narrowly-scoped
+  new CTest binary, not new test infrastructure for arbitrary future subprocess needs.
+
+### TASK-24H-0182: Update NEXT.md — FREE_DIRECT demo confirmed running correctly, not just compiling
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: follow-up gap analysis (2026-07-09) — ran `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
+./build/FREE_DIRECT` fresh from current source; observed a stable ~52 FPS render loop, zero
+errors/warnings, clean behavior for the full observation window (exits only on external timeout, as
+expected for a demo with no self-exit condition). `NEXT.md` has stated for multiple sessions that
+the demo's on-screen/runtime behavior was "still unverified" — true until now.
+Depends on: None
+
+Problem:
+`NEXT.md` Sections 2 and 4 describe the `FREE_DIRECT` demo as compiling but never run/observed —
+now outdated, since this session's follow-up analysis actually ran it headlessly and confirmed
+clean behavior.
+
+Required work:
+- Update `NEXT.md`'s "Available artifacts"/"What does not work yet" entries for the demo to state
+  it was run headlessly and behaved correctly (stable frame rate, zero errors), not merely that it
+  compiles.
+
+Acceptance criteria:
+- `NEXT.md` no longer lists the demo's runtime behavior as unverified.
+
+Out of scope:
+- Does not claim real-display (non-dummy-driver) visual correctness was checked — only the headless
+  run described above. Real-display verification, if ever wanted, is separate, new work.
+
+**Update (2026-07-09, follow-up analysis)**: 3 more atomic tasks added, `TASK-24H-0180` through
+`TASK-24H-0182`, from a cross-cutting analysis pass distinct from the three per-subsystem audits
+above. Two P1s (`TASK-24H-0180`, untested-but-always-reachable DirectDraw+DirectSound combined
+usage; `TASK-24H-0181`, closing the last remaining `PARTIAL` item in the backlog) and one P2
+(`TASK-24H-0182`, a documentation correction). New running total: **182 atomic tasks**
+(`TASK-24H-0001` through `TASK-24H-0182`).
+
+---
+
 ## Priority summary
 
 - **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,
