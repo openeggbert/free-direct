@@ -14,6 +14,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <vector>
@@ -576,6 +577,46 @@ namespace {
 
         uint64_t copied = 0;
         uint64_t skipped = 0;
+
+        // Fast path: an unscaled (1:1) copy with no active source color key is done as a
+        // straight per-row memcpy instead of the general per-pixel loop below - measured ~29x
+        // faster than the per-pixel path for a 640x480 copy at -O3, ~206x at this project's
+        // unoptimized default (docs/audit_ddraw.md §3.2/§7, TASK-24H-0152). Must stay a runtime
+        // size check, not an assumption based on which method (Blt/BltFast) called this -
+        // CPixmap::Display()'s primary-present Blt can genuinely scale when the window size
+        // doesn't match the game's logical resolution (docs/audit_ddraw.md §8.3), and must keep
+        // taking the general scaling path below in that case.
+        const bool isUnscaled = (srcWidth == dstWidth) && (srcHeight == dstHeight);
+        const bool colorKeyActive = useSrcColorKey && source.hasSrcColorKey_;
+        if (isUnscaled && !colorKeyActive && bpp_ == source.GetBPP() && (bpp_ == 8 || bpp_ == 32)) {
+            const size_t bytesPerPixel = static_cast<size_t>(bpp_ / 8);
+            const size_t rowBytes = static_cast<size_t>(dstWidth) * bytesPerPixel;
+            for (int y = 0; y < dstHeight; ++y) {
+                const size_t srcRowBase = (static_cast<size_t>(sourceClamped.top + y) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(sourceClamped.left)) * bytesPerPixel;
+                const size_t dstRowBase = (static_cast<size_t>(destClamped.top + y) * static_cast<size_t>(width_) + static_cast<size_t>(destClamped.left)) * bytesPerPixel;
+                std::memcpy(pixels_.data() + dstRowBase, source.GetPixels().data() + srcRowBase, rowBytes);
+                if (bpp_ == 32) {
+                    // Force alpha opaque, matching the general path's per-pixel behavior below
+                    // (DirectDraw blits are opaque by default) - the memcpy above copied the
+                    // source's real, possibly-undefined alpha bytes verbatim, so fix them up.
+                    for (int x = 0; x < dstWidth; ++x) {
+                        pixels_[dstRowBase + static_cast<size_t>(x) * 4u + 3u] = 255;
+                    }
+                }
+            }
+            copied = static_cast<uint64_t>(dstWidth) * static_cast<uint64_t>(dstHeight);
+
+            if (copiedPixelCount) {
+                *copiedPixelCount = copied;
+            }
+            if (skippedPixelCount) {
+                *skippedPixelCount = skipped;
+            }
+            if (type_ == SurfaceType::Primary) {
+                MarkDirty();
+            }
+            return DD_OK;
+        }
 
         for (int y = 0; y < dstHeight; ++y) {
             const int srcY = sourceClamped.top + (y * srcHeight) / dstHeight;

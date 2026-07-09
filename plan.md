@@ -6624,7 +6624,7 @@ out-of-tree `../free-eggbert` configure still succeeds and its own `CMAKE_BUILD_
 game) configure still fails with the same actionable SDL3-missing error, unchanged.
 
 ### TASK-24H-0152: Add a 1:1 fast path to BlitFrom
-Status: TODO
+Status: DONE
 Priority: P0
 Area: DirectDraw
 Type: Implementation
@@ -6662,6 +6662,24 @@ Acceptance criteria:
 
 Out of scope:
 - Do not touch the scaling (non-1:1) code path's algorithm in this task.
+
+Verified: added a runtime `isUnscaled && !colorKeyActive && bpp_ == source.GetBPP()` guard
+(`DirectDraw.cpp:589-591`) routing to a per-row `std::memcpy`, with a separate simple loop forcing
+alpha to 255 on the 32bpp path only (the general path always forces opaque alpha regardless of the
+source's real alpha byte, so a raw whole-pixel memcpy alone would have been a behavior change - this
+fixup preserves it exactly). Falls through to the untouched general per-pixel path for scaling,
+active color-key, or mixed/unsupported bpp. Full `directdraw_tests` suite (53/53, including the
+color-key and scaling tests, which correctly bypass the fast path) passes unchanged - pixel-exact
+behavior confirmed by the existing opaque-copy tests, which now exercise the fast path directly, no
+new test needed. Re-ran `docs/audit_ddraw.md` §7 Benchmark 2's exact methodology against the fixed
+library at `-O3`: `BltFast` (1:1, 640x480, 32-bit) improved from 0.715ms/call (29.4x slower than
+`memcpy`) to **0.466ms/call (14.8x slower than `memcpy`)** - a real, measured ~35% latency
+reduction and roughly half the relative overhead. Remaining gap is attributable to the per-pixel
+alpha-fixup loop (still O(pixels), though branch-free and read-free, unlike the original loop); a
+`uint32_t`-based OR could likely close more of that gap but was not pursued here since it would
+introduce a new native-endianness assumption this codebase doesn't already rely on elsewhere for
+this exact byte layout, for marginal additional gain beyond what this task's acceptance criteria
+required.
 
 ### TASK-24H-0153: Optimize ReleaseDC's 8-bit palette-match from O(n*256) to a faster lookup
 Status: TODO
