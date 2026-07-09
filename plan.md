@@ -7529,12 +7529,20 @@ discovery remain open") to no longer point at a section that no longer says that
 no code change.
 
 ### TASK-24H-0175: Remove or justify DirectPlayPlayer's dead scaffolding
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Status: DONE | Priority: P2 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §6.3 (D5) — `DirectPlayPlayer.{hpp,cpp}` has zero members, zero
 call sites anywhere in `src/directplay/`; player state already lives on `DirectPlaySession` as
 plain `DPID` vectors. Depends on: None.
 Delete both files if nothing near-term needs them, or add a comment explaining why they're kept
 despite being unused, per this project's policy against unexplained unused surface.
+
+Verified: chose deletion (no near-term task needs the scaffolding). Fresh repo-wide `grep` before
+deleting confirmed the only references were the two files themselves and their
+`CMakeLists.txt` `target_sources()` entry (plus a stale, gitignored `cmake-build-debug/` build
+artifact, untouched - it regenerates on next build). Deleted both files, removed the
+`target_sources()` line. Verified both the default and `-DFREE_DIRECT_ENABLE_ENET=ON`
+configurations still configure and build cleanly, and both test suites pass
+(`ctest` 7/7 default; `ctest -L enet` 1/1).
 
 ### TASK-24H-0176: Decide whether to validate wire-header magic/version on receive
 Status: DONE | Priority: P1 | Area: DirectPlay | Type: Implementation

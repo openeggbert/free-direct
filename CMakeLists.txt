@@ -107,7 +107,6 @@ target_sources(free-direct
         src/directsound/DirectSound.cpp
         src/directplay/DirectPlay.cpp
         src/directplay/DirectPlaySession.cpp
-        src/directplay/DirectPlayPlayer.cpp
         src/directplay/DirectPlayMessageQueue.cpp
         src/directplay/DirectPlayWireProtocol.cpp
         src/directplay/LoopbackDirectPlayTransport.cpp
