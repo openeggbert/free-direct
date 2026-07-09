@@ -7222,7 +7222,7 @@ correctness (`DS_OK`/non-null/refcount-0), no timing bound. Full suite passes 7/
 ~150ms for 3 real device cycles, consistent with the measured per-cycle cost).
 
 ### TASK-24H-0166: Take mutex_ in SharedAudioDevice::id()
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Implementation
@@ -7246,6 +7246,12 @@ Acceptance criteria:
 
 Out of scope:
 - Do not add any other synchronization to `SharedAudioDevice` in this task — only `id()`.
+
+Verified: `id()` now takes a `std::lock_guard<std::mutex>` matching `open()`/`release()`
+(`DirectSound.cpp:205-210`). Required marking `mutex_` itself `mutable` (`DirectSound.cpp:223`),
+since `id()` is `const` and locking a non-`mutable` mutex from a `const` method doesn't compile -
+the standard idiom for this exact case. No observable behavior change. Full suite passes 7/7
+unchanged (`directsound_tests` 32/32).
 
 ### TASK-24H-0167: Document DirectSound's single-threaded usage assumption
 Status: TODO

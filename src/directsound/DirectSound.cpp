@@ -202,7 +202,14 @@ public:
         }
     }
 
-    SDL_AudioDeviceID id() const { return deviceId_; }
+    // Takes mutex_ like open()/release() (docs/audit_dsound.md §6.2, S3, TASK-24H-0166) - deviceId_
+    // was previously read here without it, a data race under the C++ memory model if ever called
+    // from a different thread than open()/release(). Confirmed inert today: id()'s one caller,
+    // ensureStream(), always runs on the same thread as every other DirectSound call.
+    SDL_AudioDeviceID id() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return deviceId_;
+    }
 
 private:
     SharedAudioDevice() = default;
@@ -213,7 +220,7 @@ private:
         }
     }
 
-    std::mutex          mutex_;
+    mutable std::mutex  mutex_; // mutable: id() (TASK-24H-0166) locks it from a const method
     SDL_AudioDeviceID   deviceId_ = 0;
     unsigned            refCount_ = 0;
 };
