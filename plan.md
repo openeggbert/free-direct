@@ -6714,7 +6714,7 @@ Out of scope:
   improves the algorithm for whenever the path is exercised.
 
 ### TASK-24H-0154: Validate CreateSurface's dwWidth/dwHeight before allocating
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Implementation
@@ -6749,6 +6749,15 @@ Out of scope:
 - Do not add general-purpose input validation to every `DDSURFACEDESC` field in this task — only
   `dwWidth`/`dwHeight`, per docs/audit_ddraw.md §10's note that other fields (`Lock`'s rect,
   `BltFast`'s `lpSrcRect`, etc.) would need their own separate audit pass before their own tasks.
+
+Verified: added a `kMaxSurfaceDimension = 4096` bound (`DirectDraw.cpp`, right before the
+`DirectDrawSurfaceImpl` constructor call, after `primary`/offscreen` branches converge so it
+covers both the offscreen path's direct caller values and the primary path's `displayModeWidth_`/
+`displayModeHeight_`, indirectly caller-supplied via `SetDisplayMode`) - `width <= 0` also catches
+a huge `DWORD` that went negative once cast to `int`. Returns `DDERR_INVALIDPARAMS` before
+constructing the surface. New test `Test_CreateSurface_HugeWidthHeight_ReturnsInvalidParams`
+(`tests/directdraw_tests.cpp`) passes `dwWidth`/`dwHeight = 0xFFFFFFFF` and confirms
+`DDERR_INVALIDPARAMS` with no crash. Full suite passes 7/7 (`directdraw_tests` 54/54, up from 53).
 
 ### TASK-24H-0155: Fix integer-overflow bypass in Palette GetEntries/SetEntries bounds check
 Status: TODO

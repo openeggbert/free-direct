@@ -1399,6 +1399,21 @@ namespace {
 
         if (bpp != 8 && bpp != 32) bpp = 32;
 
+        // Bound width/height before ever constructing DirectDrawSurfaceImpl, which otherwise
+        // resizes its pixel buffer unconditionally (docs/audit_ddraw.md §4.4, F4,
+        // TASK-24H-0154) - an unsatisfiable resize throws uncaught, crossing the COM-style
+        // interface boundary CLAUDE.md's Coding Style says must never be crossed by an
+        // exception. Also catches a huge DWORD (near 0xFFFFFFFF) that went negative once cast
+        // to int above (width/height <= 0 fails this check too). 4096 per dimension is a
+        // generous ceiling - both target games only ever request 640x480 or smaller
+        // icon-sized sub-images - bounding worst-case allocation to 4096*4096*4 = 64MiB.
+        constexpr int kMaxSurfaceDimension = 4096;
+        if (width <= 0 || width > kMaxSurfaceDimension || height <= 0 || height > kMaxSurfaceDimension) {
+            SDL_Log("free-direct CreateSurface: invalid size %dx%d (max %dx%d)", width, height,
+                    kMaxSurfaceDimension, kMaxSurfaceDimension);
+            return DDERR_INVALIDPARAMS;
+        }
+
         auto* surface = new (std::nothrow) DirectDrawSurfaceImpl(this,
                                                                   primary ? DirectDrawSurfaceImpl::SurfaceType::Primary
                                                                           : DirectDrawSurfaceImpl::SurfaceType::Offscreen,

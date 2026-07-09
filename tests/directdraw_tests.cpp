@@ -286,6 +286,24 @@ void Test_CreateSurface_OffscreenMissingWidthHeightFlags_ReturnsInvalidParams() 
     dd->Release();
 }
 
+// docs/audit_ddraw.md §4.4 (F4), TASK-24H-0154: dwWidth/dwHeight must be bounded before they
+// reach an unguarded std::vector::resize inside DirectDrawSurfaceImpl's constructor - a value
+// near DWORD max must be rejected, not attempted (which would otherwise throw uncaught, crashing
+// the test process).
+void Test_CreateSurface_HugeWidthHeight_ReturnsInvalidParams() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+    desc.dwWidth = 0xFFFFFFFFu;
+    desc.dwHeight = 0xFFFFFFFFu;
+    LPDIRECTDRAWSURFACE surface = nullptr;
+    CHECK(dd->CreateSurface(&desc, &surface, nullptr) == DDERR_INVALIDPARAMS);
+    dd->Release();
+}
+
 void Test_GetSurfaceDesc_MatchesCreatedDimensions() {
     LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
     LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 100, 50, 32);
@@ -1259,6 +1277,7 @@ int main() {
     Test_CreateSurface_MalformedDwSize_ReturnsInvalidParams();
     Test_CreateSurface_InvalidCapsCombination_ReturnsInvalidParams();
     Test_CreateSurface_OffscreenMissingWidthHeightFlags_ReturnsInvalidParams();
+    Test_CreateSurface_HugeWidthHeight_ReturnsInvalidParams();
     Test_GetSurfaceDesc_MatchesCreatedDimensions();
     Test_GetSurfaceDesc_NullDescriptor_ReturnsInvalidParams();
     Test_GetSurfaceDesc_MalformedDwSize_ReturnsInvalidParams();
