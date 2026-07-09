@@ -777,6 +777,64 @@ LPDIRECTDRAW CreateDirectDrawWithTargetFps(const char* fps) {
     return dd;
 }
 
+// Verifies PresentPrimary's 8-bit palette path produces the correct final RGB color at the
+// presented pixel, regardless of which internal strategy is compiled in for the primary's
+// texture upload - the default CPU-side per-pixel index->RGBA32 conversion, or
+// FREE_DIRECT_ENABLE_INDEXED_TEXTURES's GPU-side SDL_PIXELFORMAT_INDEX8 texture + SDL_Palette
+// (renderer backend performs the lookup during sampling instead). Both must produce the same
+// observable output - this test passes unchanged under either compile-time configuration.
+void Test_Flip_8BitPrimaryWithPalette_PresentsCorrectColor() {
+    HWND hwnd = CreateTestWindow();
+    // SetDisplayMode's bpp argument is not consulted by CreateSurface for the primary surface
+    // (DirectDraw.cpp only reads displayModeWidth_/displayModeHeight_ from it) - an 8-bit
+    // primary must be requested via explicit DDSD_PIXELFORMAT, matching
+    // Test_FillColor_8BitPrimary_MarksDirty's already-established pattern below. Also use a high
+    // target FPS so this test's second present (the explicit Flip() below, right after Blt's own
+    // internal auto-present) isn't skipped by the normal ~60Hz throttle window.
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1000");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    desc.dwFlags = DDSD_CAPS | DDSD_PIXELFORMAT;
+    desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    desc.ddpfPixelFormat.dwFlags = DDPF_PALETTEINDEXED8;
+    desc.ddpfPixelFormat.dwRGBBitCount = 8;
+    LPDIRECTDRAWSURFACE primary = nullptr;
+    CHECK(dd->CreateSurface(&desc, &primary, nullptr) == DD_OK);
+
+    PALETTEENTRY entries[256] = {};
+    entries[42] = {10, 20, 30, 0};
+    LPDIRECTDRAWPALETTE palette = nullptr;
+    CHECK(dd->CreatePalette(DDPCAPS_8BIT, entries, &palette, nullptr) == DD_OK);
+    CHECK(primary->SetPalette(palette) == DD_OK);
+
+    // GetSurfaceDesc only exposes lpSurface/lPitch for offscreen surfaces, not the primary
+    // (DirectDraw.cpp's GetSurfaceDesc), so a primary surface's raw pixels are written via
+    // Blt/DDBLT_COLORFILL instead of Lock -- for an 8-bit surface, dwFillColor's low byte is
+    // the palette index to fill with (DirectDraw.cpp's FillColor), matching FillPrimaryWithColor's
+    // RGB-fill convention for the 32-bit case above.
+    DDBLTFX fx{};
+    std::memset(&fx, 0, sizeof(fx));
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = 42; // whole surface = palette index 42
+    CHECK(primary->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 10);         // R
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 20);  // G
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 30); // B
+
+    palette->Release();
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
 // README's documented throttle behavior: "skips upload+present if called within the frame
 // interval." FREE_DIRECT_TARGET_FPS=1 gives a 1-second throttle window, making "two presents
 // issued microseconds apart" reliably fall inside it regardless of test/CI execution speed. The
@@ -1351,6 +1409,7 @@ int main() {
 
     // Group 4b: Flip / presentation throttle+dirty-flag / clipper
     Test_Flip_PresentsPrimarySurface();
+    Test_Flip_8BitPrimaryWithPalette_PresentsCorrectColor();
     Test_Flip_OnOffscreenSurface_ReturnsUnsupported();
     Test_Flip_WithoutCooperativeLevel_ReturnsUnsupported();
     Test_Presentation_ThrottlesSecondPresentWithinInterval();

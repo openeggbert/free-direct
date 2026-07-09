@@ -119,6 +119,17 @@ option(FREE_DIRECT_DIAGNOSTICS "Enable Free Direct diagnostic counters" OFF)
 if(FREE_DIRECT_DIAGNOSTICS)
     target_compile_definitions(free-direct PRIVATE FREE_DIRECT_DIAGNOSTICS=1)
 endif()
+
+# Present 8-bit DirectDraw surfaces as native SDL3 SDL_PIXELFORMAT_INDEX8 textures
+# with an attached SDL_Palette instead of converting index->RGBA32 on the CPU every
+# present. Lets the renderer backend's own texture sampling perform the palette
+# lookup (supported by every SDL3 renderer backend: OpenGL, OpenGLES2, Direct3D
+# 9/11/12, Metal, Vulkan, and the software renderer). ON by default; set to OFF to
+# fall back to the original CPU-side per-pixel conversion path if ever needed.
+option(FREE_DIRECT_ENABLE_INDEXED_TEXTURES "Use GPU-side palette lookup (SDL_PIXELFORMAT_INDEX8) instead of CPU-side palette conversion for 8-bit DirectDraw surfaces" ON)
+if(FREE_DIRECT_ENABLE_INDEXED_TEXTURES)
+    target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_INDEXED_TEXTURES=1)
+endif()
 target_include_directories(free-direct PRIVATE src)
 
 # Optional CMake-level force-enable for the FREE_DIRECT_DEBUG_* runtime env-var flags

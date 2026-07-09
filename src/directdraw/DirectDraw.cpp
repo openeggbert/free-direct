@@ -347,6 +347,10 @@ namespace {
         std::vector<uint8_t> dcTempBuffer_;
         /// Cached RGBA32 conversion buffer for 8-bit palette surfaces — reused every frame to avoid per-frame heap allocation.
         std::vector<uint32_t> paletteConvertBuffer_;
+        /// SDL_Palette attached to texture_ when FREE_DIRECT_ENABLE_INDEXED_TEXTURES is on and
+        /// texture_ was created as SDL_PIXELFORMAT_INDEX8 (null otherwise). Owned 1:1 with
+        /// texture_: created/destroyed alongside it (see PresentPrimary and SetCooperativeLevel).
+        SDL_Palette* texturePalette_ = nullptr;
         size_t diagPixelCapacityBytes_ = 0;
         size_t diagDcTempCapacityBytes_ = 0;
     };
@@ -507,6 +511,10 @@ namespace {
             SDL_DestroyTexture(texture_);
             FREE_DIRECT_DIAG_DEC(sdlTextures);
             FREE_DIRECT_DIAG_INC_TOTAL(sdlTexturesDestroyed);
+        }
+        if (texturePalette_) {
+            SDL_DestroyPalette(texturePalette_);
+            texturePalette_ = nullptr;
         }
         if (palette_) palette_->Release();
         if (clipper_) clipper_->Release();
@@ -1354,6 +1362,10 @@ namespace {
                     FREE_DIRECT_DIAG_DEC(sdlTextures);
                     FREE_DIRECT_DIAG_INC_TOTAL(sdlTexturesDestroyed);
                 }
+                if (surface->texturePalette_) {
+                    SDL_DestroyPalette(surface->texturePalette_);
+                    surface->texturePalette_ = nullptr;
+                }
             }
             DirectDrawLog("free-direct SetCooperativeLevel: destroyed previous renderer=%p", static_cast<void*>(renderer_));
             SDL_DestroyRenderer(renderer_);
@@ -1624,9 +1636,47 @@ namespace {
         if (!primary.texture_) {
             PresentLog("free-direct PresentPrimary: creating streaming texture %dx%d",
                     primary.GetWidth(), primary.GetHeight());
+#ifdef FREE_DIRECT_ENABLE_INDEXED_TEXTURES
+            // GPU path: an 8-bit surface gets a native indexed texture, so the renderer
+            // backend's own texture sampling performs the index->color lookup instead of a
+            // CPU-side per-pixel conversion (see step 2 below).
+            //
+            // The palette MUST be attached via SDL_CreateTextureWithProperties'
+            // SDL_PROP_TEXTURE_CREATE_PALETTE_POINTER property at creation time -- confirmed
+            // by testing that SDL_SetTexturePalette() (attaching a palette to an
+            // already-created texture) is silently ignored by at least the software renderer
+            // backend, even though the call itself reports success. Once attached this way,
+            // later color changes to the same SDL_Palette object (SDL_SetPaletteColors, done
+            // every dirty present in step 2) DO take effect without recreating the texture --
+            // confirmed by testing too.
+            if (primary.GetBPP() == 8) {
+                primary.texturePalette_ = SDL_CreatePalette(256);
+                if (primary.texturePalette_) {
+                    SDL_PropertiesID props = SDL_CreateProperties();
+                    SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_FORMAT_NUMBER, SDL_PIXELFORMAT_INDEX8);
+                    SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_ACCESS_NUMBER, SDL_TEXTUREACCESS_STREAMING);
+                    SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_WIDTH_NUMBER, primary.GetWidth());
+                    SDL_SetNumberProperty(props, SDL_PROP_TEXTURE_CREATE_HEIGHT_NUMBER, primary.GetHeight());
+                    SDL_SetPointerProperty(props, SDL_PROP_TEXTURE_CREATE_PALETTE_POINTER, primary.texturePalette_);
+                    primary.texture_ = SDL_CreateTextureWithProperties(renderer_, props);
+                    SDL_DestroyProperties(props);
+                    if (!primary.texture_) {
+                        SDL_DestroyPalette(primary.texturePalette_);
+                        primary.texturePalette_ = nullptr;
+                    }
+                } else {
+                    DirectDrawLog("free-direct PresentPrimary: SDL_CreatePalette failed: %s", SDL_GetError());
+                }
+            } else {
+                primary.texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32,
+                                                      SDL_TEXTUREACCESS_STREAMING,
+                                                      primary.GetWidth(), primary.GetHeight());
+            }
+#else
             primary.texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32,
                                                   SDL_TEXTUREACCESS_STREAMING,
                                                   primary.GetWidth(), primary.GetHeight());
+#endif
             if (primary.texture_) {
                 FREE_DIRECT_DIAG_INC(sdlTextures);
                 FREE_DIRECT_DIAG_INC_EVER(sdlTexturesEver, "tex");
@@ -1639,35 +1689,66 @@ namespace {
 
         // 2. Upload CPU pixel buffer to texture.
         if (primary.GetBPP() == 8) {
-            const size_t pixelCount = static_cast<size_t>(primary.GetWidth()) * static_cast<size_t>(primary.GetHeight());
-            // Reuse cached buffer to avoid per-frame heap allocation (was: std::vector<uint32_t> temp(pixelCount)).
-            primary.paletteConvertBuffer_.resize(pixelCount);
-            PALETTEENTRY entries[256];
-            bool hasPalette = false;
-            if (primary.palette_) {
-                primary.palette_->GetEntries(0, 0, 256, entries);
-                hasPalette = true;
-            } else {
-                GetDefault332Palette(entries);
-                hasPalette = true;
-            }
-            for (size_t i = 0; i < pixelCount; ++i) {
-                const uint8_t index = primary.GetPixels()[i];
-                if (hasPalette) {
-                    primary.paletteConvertBuffer_[i] = (static_cast<uint32_t>(entries[index].peRed))
-                            | (static_cast<uint32_t>(entries[index].peGreen) << 8)
-                            | (static_cast<uint32_t>(entries[index].peBlue) << 16)
-                            | 0xFF000000u;
+#ifdef FREE_DIRECT_ENABLE_INDEXED_TEXTURES
+            if (primary.texturePalette_) {
+                // GPU path: upload the raw 8-bit indices as-is (no per-pixel CPU conversion);
+                // refresh the attached SDL_Palette's colors every dirty present, mirroring the
+                // CPU path's own fresh GetEntries() read below.
+                PALETTEENTRY entries[256];
+                if (primary.palette_) {
+                    primary.palette_->GetEntries(0, 0, 256, entries);
                 } else {
-                    primary.paletteConvertBuffer_[i] = static_cast<uint32_t>(index)
-                            | (static_cast<uint32_t>(index) << 8)
-                            | (static_cast<uint32_t>(index) << 16)
-                            | 0xFF000000u;
+                    GetDefault332Palette(entries);
                 }
+                SDL_Color colors[256];
+                for (int i = 0; i < 256; ++i) {
+                    colors[i].r = entries[i].peRed;
+                    colors[i].g = entries[i].peGreen;
+                    colors[i].b = entries[i].peBlue;
+                    colors[i].a = 255;
+                }
+                if (!SDL_SetPaletteColors(primary.texturePalette_, colors, 0, 256)) {
+                    DirectDrawLog("free-direct PresentPrimary: SDL_SetPaletteColors failed: %s", SDL_GetError());
+                }
+
+                PresentLog("free-direct PresentPrimary: uploading 8-bit indices (GPU palette lookup)");
+                if (!SDL_UpdateTexture(primary.texture_, NULL, primary.GetPixels().data(), primary.GetWidth())) {
+                    DirectDrawLog("free-direct PresentPrimary: SDL_UpdateTexture (INDEX8) failed: %s", SDL_GetError());
+                }
+                FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
+            } else
+#endif
+            {
+                const size_t pixelCount = static_cast<size_t>(primary.GetWidth()) * static_cast<size_t>(primary.GetHeight());
+                // Reuse cached buffer to avoid per-frame heap allocation (was: std::vector<uint32_t> temp(pixelCount)).
+                primary.paletteConvertBuffer_.resize(pixelCount);
+                PALETTEENTRY entries[256];
+                bool hasPalette = false;
+                if (primary.palette_) {
+                    primary.palette_->GetEntries(0, 0, 256, entries);
+                    hasPalette = true;
+                } else {
+                    GetDefault332Palette(entries);
+                    hasPalette = true;
+                }
+                for (size_t i = 0; i < pixelCount; ++i) {
+                    const uint8_t index = primary.GetPixels()[i];
+                    if (hasPalette) {
+                        primary.paletteConvertBuffer_[i] = (static_cast<uint32_t>(entries[index].peRed))
+                                | (static_cast<uint32_t>(entries[index].peGreen) << 8)
+                                | (static_cast<uint32_t>(entries[index].peBlue) << 16)
+                                | 0xFF000000u;
+                    } else {
+                        primary.paletteConvertBuffer_[i] = static_cast<uint32_t>(index)
+                                | (static_cast<uint32_t>(index) << 8)
+                                | (static_cast<uint32_t>(index) << 16)
+                                | 0xFF000000u;
+                    }
+                }
+                PresentLog("free-direct PresentPrimary: uploading 8-bit→RGBA32 hasPalette=%s", BoolToText(hasPalette));
+                SDL_UpdateTexture(primary.texture_, NULL, primary.paletteConvertBuffer_.data(), primary.GetWidth() * 4);
+                FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
             }
-            PresentLog("free-direct PresentPrimary: uploading 8-bit→RGBA32 hasPalette=%s", BoolToText(hasPalette));
-            SDL_UpdateTexture(primary.texture_, NULL, primary.paletteConvertBuffer_.data(), primary.GetWidth() * 4);
-            FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
         } else {
             PresentLog("free-direct PresentPrimary: uploading 32-bit RGBA");
             SDL_UpdateTexture(primary.texture_, NULL, primary.GetPixels().data(), primary.GetWidth() * 4);
