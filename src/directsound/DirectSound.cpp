@@ -566,10 +566,18 @@ private:
 
         // Source spec from PCMWAVEFORMAT stored at construction.
         if (srcSpec_.freq == 0) {
-            // No format provided; use a sensible default so we don't crash.
-            srcSpec_.format   = SDL_AUDIO_S16LE;
-            srcSpec_.channels = 1;
-            srcSpec_.freq     = 22050;
+            // srcSpec_.channels == 0 only happens when lpwfxFormat was null at construction (no
+            // format provided at all - both fields are default-zero together in that case,
+            // "docs/directsound-limitations.md"'s "Missing PCM format falls back to a safe
+            // default"). If channels is nonzero, format/channels were validly parsed and only
+            // the sample rate was invalid/missing (TASK-24H-0169) - only substitute freq, don't
+            // discard the real format/channels too (docs/audit_dsound.md §7.3, S8,
+            // TASK-24H-0170).
+            if (srcSpec_.channels == 0) {
+                srcSpec_.format   = SDL_AUDIO_S16LE;
+                srcSpec_.channels = 1;
+            }
+            srcSpec_.freq = 22050;
         }
 
         stream_ = SDL_CreateAudioStream(&srcSpec_, &dstSpec);

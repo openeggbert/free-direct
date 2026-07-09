@@ -232,6 +232,26 @@ void Test_CreateSoundBuffer_HugeSampleRate_FallsBackGracefully() {
     ds->Release();
 }
 
+// docs/audit_dsound.md §7.3 (S8), TASK-24H-0170: a near-zero nSamplesPerSec used to discard the
+// whole parsed format (channels/bit-depth too, not just freq) via ensureStream()'s all-or-nothing
+// fallback. This test constructs a valid stereo 8-bit descriptor with nSamplesPerSec == 0 and
+// confirms it still plays successfully with the fix in place. It does not independently prove
+// channels/format were specifically *preserved* (as opposed to silently reset) - there is no
+// public-API-observable way to query a buffer's internal SDL_AudioSpec, matching this project's
+// established testing-honesty convention (e.g. docs/audit_ddraw.md's dirty-flag testability
+// note) - only that the fix doesn't crash and produces a playable buffer.
+void Test_CreateSoundBuffer_ZeroSampleRateWithValidFormat_PlaysSuccessfully() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 1000, 8, 2, 0); // valid 8-bit stereo, freq=0
+    CHECK(buf->Play(0, 0, 0) == DS_OK);
+    DWORD status = 0;
+    CHECK(buf->GetStatus(&status) == DS_OK);
+    CHECK((status & DSBSTATUS_PLAYING) != 0);
+
+    buf->Release();
+    ds->Release();
+}
+
 // ===== Lock / Unlock =====
 
 void Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion() {
@@ -575,6 +595,7 @@ int main() {
     Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully();
     Test_CreateSoundBuffer_HugeBufferBytes_ReturnsInvalidParam();
     Test_CreateSoundBuffer_HugeSampleRate_FallsBackGracefully();
+    Test_CreateSoundBuffer_ZeroSampleRateWithValidFormat_PlaysSuccessfully();
 
     Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion();
     Test_Lock_WraparoundRegion_ReturnsTwoValidRegions();

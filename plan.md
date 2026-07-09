@@ -7367,7 +7367,7 @@ default rather than passing an unchecked value to SDL. New test
 suite passes 7/7 (`directsound_tests` 33/33, up from 32).
 
 ### TASK-24H-0170: Fix near-zero nSamplesPerSec fallback to only replace the frequency field
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Implementation
@@ -7399,6 +7399,17 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change the null-`lpwfxFormat` fallback path in this task.
+
+Verified: `ensureStream()`'s fallback (`DirectSound.cpp:568-580`) now distinguishes the two cases
+via `srcSpec_.channels == 0` (only true when `lpwfxFormat` was null at construction, since
+`channels`/`freq` are default-zero together in that case) - full three-field fallback only fires
+then; otherwise only `freq` is substituted. New test
+`Test_CreateSoundBuffer_ZeroSampleRateWithValidFormat_PlaysSuccessfully` constructs a valid 8-bit
+stereo descriptor with `nSamplesPerSec = 0` and confirms it plays - honestly scoped in its own
+comment to what's black-box-observable (no public API exposes a buffer's internal
+`SDL_AudioSpec`), matching this project's established testing-honesty convention. Existing
+`Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully` (the null-format case) still passes
+unchanged. Full suite passes 7/7 (`directsound_tests` 34/34, up from 33).
 
 ### TASK-24H-0171: Add a stress test for MAXSOUND (100) simultaneous DirectSoundBuffers
 Status: TODO
