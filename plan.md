@@ -7277,6 +7277,102 @@ total: **171 atomic tasks** (`TASK-24H-0001` through `TASK-24H-0171`).
 
 ---
 
+## DirectPlay audit hardening (2026-07-09, condensed)
+
+From a fresh DirectPlay-only audit, `docs/audit_dplay.md`. DirectPlay already has 26 resolved
+design Decisions and extensive prior documentation, so this batch is narrower than the DirectDraw/
+DirectSound ones and written more tersely per explicit request. **Every item below is confirmed
+unreachable by free-eggbert's actual running code today** (`docs/audit_dplay.md` §4:
+`CDecor::TreatNetData()`, the only call site that would drive `Send()`/`Receive()` during a session,
+is commented out in `event.cpp:2045`) — real defects, none urgent. Numbering continues from
+`TASK-24H-0171`.
+
+### TASK-24H-0172: Validate dwDataSize before reading lpData in Send()'s self-send path
+Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
+Evidence: docs/audit_dplay.md §6.5 (D2) — self-send does `packet.payload.assign(bytes, bytes +
+dwDataSize)` (`DirectPlay.cpp:465`) before any size check; broadcast/unicast both check
+`dwDataSize > kMaxPayloadBytes` first. Depends on: None.
+`Send()`'s `idTo == idFrom` branch is the only one of its three delivery paths that reads `lpData`
+before validating `dwDataSize` — an OOB read if `dwDataSize` overstates the caller's real buffer.
+Move the existing `kMaxPayloadBytes` check (already written twice elsewhere in the same function)
+above the `.assign()` call. Add a test with a `dwDataSize` larger than its real backing buffer
+(the existing `Test_SelfSend_OversizedPayload_ReturnsSendTooBig` uses an honestly-sized buffer and
+doesn't catch this). Not reachable by free-eggbert today (its one `Send()` call site always passes
+`idTo=0`, routing through broadcast, never self-send) — real defect regardless, since self-send is
+a first-class, directly-testable public API path.
+
+### TASK-24H-0173: Fix dplay.h's stale top-of-file broadcast-status comment
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
+Evidence: docs/audit_dplay.md §6.1 (D3) — `include/dplay.h:9-11` says broadcast "does not work
+correctly yet"; `Send()`'s own doc comment 270 lines below (`dplay.h:281-282`) says it's real,
+correctly. Depends on: None.
+Update or remove the stale file-level paragraph so it doesn't contradict the accurate, more
+specific method doc in the same file.
+
+### TASK-24H-0174: Update networking-backends.md's stale ENet section
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
+Evidence: docs/audit_dplay.md §6.2 (D4) — doc claims ENet joining/discovery "does not work
+today," contradicted by already-implemented Decisions 22/23. Depends on: None.
+Update the Backend-2 (ENet) section to reflect `Connect()` being wired
+(`FREE_DIRECT_ENET_HOST_ADDRESS`) and real LAN discovery (`DirectPlayDiscoveryService`).
+
+### TASK-24H-0175: Remove or justify DirectPlayPlayer's dead scaffolding
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Evidence: docs/audit_dplay.md §6.3 (D5) — `DirectPlayPlayer.{hpp,cpp}` has zero members, zero
+call sites anywhere in `src/directplay/`; player state already lives on `DirectPlaySession` as
+plain `DPID` vectors. Depends on: None.
+Delete both files if nothing near-term needs them, or add a comment explaining why they're kept
+despite being unused, per this project's policy against unexplained unused surface.
+
+### TASK-24H-0176: Decide whether to validate wire-header magic/version on receive
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Evidence: docs/audit_dplay.md §6.4 (D6) — `TryDeserializeDirectPlayWireHeader`'s magic/version
+skip was deliberately deferred "once a real transport actually receives packets"
+(`DirectPlayWireProtocol.hpp:10-16`); `EnetDirectPlayTransport` now is that real transport.
+Depends on: None.
+Either add the check (with a `DPERR_*` mapping for a rejected packet) or record a fresh, current
+rationale for continuing to defer it — the original comment's own precondition has been met and
+deserves a decision either way, not silence.
+
+### TASK-24H-0177: Document the LAN discovery responder's reflection-primitive characteristic
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
+Evidence: docs/audit_dplay.md §7.3 (D7) — `DirectPlayDiscoveryService`'s raw-socket responder
+validates only size/type (no magic/version, no auth) and unicasts a real reply to whatever source
+address a request claims; a structurally-present, low-amplification UDP reflection primitive,
+LAN-only intended scope. Depends on: None.
+Add an entry to `docs/directplay-limitations.md`. No code change proposed — this project's scope
+is explicitly LAN-only casual discovery, not an internet-facing service.
+
+### TASK-24H-0178: Cap Service()'s and RespondToPendingRequests()'s drain-loop iterations
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Evidence: docs/audit_dplay.md §7.4 (D8) — `EnetDirectPlayTransport::Service()`
+(`EnetDirectPlayTransport.cpp:165`) and `DirectPlayDiscoveryService::RespondToPendingRequests()`
+(`DirectPlayDiscovery.cpp:108`) both drain "everything pending" with no per-call cap; a high
+incoming-packet rate has no bound on how long one call can take. Depends on: None.
+Add a bounded iteration count per call, leaving any remainder to be drained on a subsequent call
+(both are already called repeatedly from `Receive()`'s polling pattern, so nothing is lost by
+spreading a large drain across multiple calls).
+
+### TASK-24H-0179: Reuse a persistent wireBuf member in Receive() instead of allocating per call
+Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Evidence: docs/audit_dplay.md §5.2 (D10) — `DirectPlay.cpp:616` allocates a fresh ~4.1KB vector
+every `Receive()` call; measured at 228.7ns/call, empirically negligible. Depends on: None.
+Lowest priority in this batch — proposed purely for consistency with this project's established
+buffer-reuse pattern elsewhere (e.g. `docs/audit_ddraw.md`'s `PresentPrimary`), not a measured
+performance need.
+
+---
+
+**Update (2026-07-09)**: 8 more atomic tasks added, `TASK-24H-0172` through `TASK-24H-0179`, from a
+fresh DirectPlay-only audit (`docs/audit_dplay.md`), all `Status: TODO`, none `BLOCKED`. Highest
+priority: `TASK-24H-0172` (self-send size-check ordering) is the only P1 — the sole genuinely novel
+correctness gap this audit found; everything else is P2 documentation fixes and low-urgency
+robustness/cleanup items, all confirmed unreachable by free-eggbert's current code (its multiplayer
+packet pump, `CDecor::TreatNetData()`, is commented out — see `docs/audit_dplay.md` §4). New running
+total: **179 atomic tasks** (`TASK-24H-0001` through `TASK-24H-0179`).
+
+---
+
 ## Priority summary
 
 - **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,

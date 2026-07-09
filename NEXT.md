@@ -16,17 +16,20 @@ charter).
   implementation can host/join/exchange messages with each other. This is explicitly **not**
   wire-compatible with real Microsoft DirectPlay — FreeDirect-to-FreeDirect only.
 - **Current development phase**: `plan.md`'s original Phases 0–18 and the 24-Hour Stabilization
-  Backlog are both effectively closed out for implementation, plus two **new, audit-only additions**
-  this session: a DirectDraw-only audit (`docs/audit_ddraw.md`) added `TASK-24H-0151`-`0163` (13
-  tasks), and a DirectSound-only audit (`docs/audit_dsound.md`) added `TASK-24H-0164`-`0171` (8
-  tasks) - **21 new tasks total, all `TODO`**, none implemented, see Section 3. Backlog now carries
-  **171 atomic `TASK-24H-XXXX` tasks** total. As of this update (real count, `grep`-verified against
-  `plan.md`, not estimated): **149 DONE, 21 TODO, 1 PARTIAL, 0 BLOCKED**. Session 1 ended at 64
-  DONE. **All 7 of the project's standing BLOCKED DirectPlay design questions (Track B) were asked
-  of, answered by, and implemented for the user in an earlier session** - never decided unilaterally
-  (see Section 3 and `docs/directplay-design.md` Decisions 20-26). `TASK-24H-0057` (`PARTIAL`) still
-  needs a subprocess test harness this project doesn't have; the 21 new `TODO` tasks are all
-  freshly added, unstarted DirectDraw/DirectSound hardening work (Section 8).
+  Backlog are both effectively closed out for implementation, plus three **new, audit-only
+  additions** this session: a DirectDraw-only audit (`docs/audit_ddraw.md`) added
+  `TASK-24H-0151`-`0163` (13 tasks), a DirectSound-only audit (`docs/audit_dsound.md`) added
+  `TASK-24H-0164`-`0171` (8 tasks), and a DirectPlay-only audit (`docs/audit_dplay.md`) added
+  `TASK-24H-0172`-`0179` (8 tasks) - **29 new tasks total, all `TODO`**, none implemented, see
+  Section 3. Backlog now carries **179 atomic `TASK-24H-XXXX` tasks** total. As of this update (real
+  count, `grep`-verified against `plan.md`, not estimated): **149 DONE, 29 TODO, 1 PARTIAL, 0
+  BLOCKED**. Session 1 ended at 64 DONE. **All 7 of the project's standing BLOCKED DirectPlay design
+  questions (Track B) were asked of, answered by, and implemented for the user in an earlier
+  session** - never decided unilaterally (see Section 3 and `docs/directplay-design.md` Decisions
+  20-26); the new DirectPlay audit did not reopen or contradict any of those 26 Decisions, and found
+  no new BLOCKED question. `TASK-24H-0057` (`PARTIAL`) still needs a subprocess test harness this
+  project doesn't have; the 29 new `TODO` tasks are all freshly added, unstarted DirectDraw/
+  DirectSound/DirectPlay hardening work (Section 8).
 - **Important architectural decisions** (full narrative + rationale for the DirectPlay ones lives
   in `docs/directplay-design.md`, Decisions 1–19; deviation summary in
   `docs/directplay-limitations.md`, new this session):
@@ -167,7 +170,57 @@ changed):
      its actual consequence left honestly unverified (not overclaimed as a specific crash).
 4. **8 more `plan.md` tasks added**, `TASK-24H-0164` through `TASK-24H-0171`, one per DirectSound
    audit finding worth fixing (same format as item 2). All `Status: TODO` - **none implemented
-   yet**. See Section 8 for the prioritized list covering both audits' new tasks together.
+   yet**.
+5. **Deep DirectPlay-only audit** (`docs/audit_dplay.md`, new file). DirectPlay already had 26
+   resolved design Decisions and extensive prior documentation
+   (`docs/directplay-design.md`/`-limitations.md`/`-protocol.md`/`networking-backends.md`/
+   `-callsite-audit.md`) before this audit started - a background research pass digested all of it
+   first specifically so this audit doesn't re-derive settled ground; none of the 26 Decisions were
+   reopened or contradicted. The single most important finding is a **framing fact, not a defect**:
+   `CDecor::TreatNetData()` (`../free-eggbert/src/decnet.cpp:87`) - the per-frame packet pump that
+   would actually invoke `Send()`/`Receive()` during an open session - has its one call site
+   commented out (`event.cpp:2045`). This sharpens the already-known fact that free-eggbert's
+   DirectPlay UI entry points are unreachable: it's not just that a session can never be *opened*
+   via the UI, the gameplay-loop mechanics that would *drive* an already-open session don't run
+   either. Every other finding in this audit is therefore confirmed unreachable by any currently-
+   running free-eggbert code path, not merely "unreachable via specific menus." Findings, all
+   graded with that context:
+   - `Send()`'s self-send path (`idTo == idFrom`) reads `dwDataSize` bytes from the caller's buffer
+     via `.assign()` *before* checking it against `kMaxPayloadBytes` - unlike the broadcast and
+     unicast paths, both of which check first. A real, precisely-located inconsistency (an
+     out-of-bounds read if `dwDataSize` overstates the real buffer) - not reachable via
+     free-eggbert's real traffic (its one `Send()` call site always passes `idTo=0`, routing
+     through broadcast, never self-send) and not caught by the existing
+     `Test_SelfSend_OversizedPayload_ReturnsSendTooBig` test (which happens to use an
+     honestly-sized oversized buffer, so it never exercises the ordering issue).
+   - Two stale-documentation findings: `include/dplay.h`'s top-of-file comment says broadcast
+     "does not work correctly yet," directly contradicting the `Send()` method's own, correct doc
+     comment 270 lines below it in the same file; `docs/networking-backends.md` still claims ENet
+     joining/discovery "does not work today," contradicted by the already-implemented Decisions
+     22/23.
+   - `DirectPlayPlayer` (`.hpp`+`.cpp`) reconfirmed as genuinely dead, zero-member scaffolding,
+     superseded early on by `DirectPlaySession`'s simpler plain-`DPID`-vector design.
+   - The wire header's deliberate `magic`/`version` validation skip was originally deferred "until
+     a real transport exists" - `EnetDirectPlayTransport` now is that real transport and receives
+     real UDP packets, so this deferral's own precondition has been met and deserves a fresh
+     decision either way.
+   - `DirectPlayDiscoveryService`'s raw-socket LAN discovery responder (a deliberate Decision-23
+     design choice, bypassing `ENetHost`/`ENetPeer`'s protocol-level gating for a stateless
+     announce/reply exchange) validates only packet size/type, not magic/version or any
+     authentication, and unicasts a real reply to whatever source address a request claims - a
+     structurally-present, low-amplification UDP reflection primitive. Low real-world stakes given
+     the feature's explicit LAN-only scope, but undocumented until now.
+   - `EnetDirectPlayTransport::Service()` and the discovery responder both have unbounded
+     "drain everything pending" loops with no per-call iteration cap - a real robustness gap under
+     a high incoming-packet rate, the one part of this codebase genuinely exposed to arbitrary
+     network input volume.
+   - Two items checked and found *not* to be problems, empirically: `Receive()`'s per-call ~4.1KB
+     buffer allocation measured at 228.7ns/call (negligible at any realistic frequency); a
+     `Send()`+`Receive()` self-send round trip measured at 0.5µs/cycle.
+6. **8 more `plan.md` tasks added**, `TASK-24H-0172` through `TASK-24H-0179`, one per DirectPlay
+   audit finding worth fixing, written more tersely than items 2/4's tasks per explicit request for
+   condensed entries this round. All `Status: TODO` - **none implemented yet**. See Section 8 for
+   the prioritized list covering all three audits' new tasks together.
 
 **Prior session (3)** (2026-07-08, continuation implementation session - closed 74 more
 `TASK-24H-XXXX` tasks, from 64 to 138 DONE (every safe task in the backlog at the time); no new
@@ -337,10 +390,15 @@ were found and fixed in that session's own newly-written test code (a dangling-p
 callback's documented lifetime, and two tests that were written but never registered so they
 silently never ran) - both caught by actually running the tests, not assumed passing.
 
-**This session (2026-07-09) added 21 new TODO tasks**: `TASK-24H-0151`-`0163` from a fresh
-DirectDraw-only audit (`docs/audit_ddraw.md`), and `TASK-24H-0164`-`0171` from a fresh
-DirectSound-only audit (`docs/audit_dsound.md`) - none implemented yet, see Section 8. The
-DirectPlay backlog itself remains fully closed (no new DirectPlay work this session).
+**This session (2026-07-09) added 29 new TODO tasks**: `TASK-24H-0151`-`0163` from a fresh
+DirectDraw-only audit (`docs/audit_ddraw.md`), `TASK-24H-0164`-`0171` from a fresh DirectSound-only
+audit (`docs/audit_dsound.md`), and `TASK-24H-0172`-`0179` from a fresh DirectPlay-only audit
+(`docs/audit_dplay.md`) - none implemented yet, see Section 8. The DirectPlay *implementation*
+backlog (the 26 design Decisions and their `TASK-24H-0001`-`0150`-range tasks) remains fully closed
+- the new DirectPlay audit found real but low-urgency gaps, reopened nothing, and (per
+`docs/audit_dplay.md` §4) confirmed every one of its findings is currently unreachable by
+free-eggbert's actual running code, since the game's own multiplayer packet pump
+(`CDecor::TreatNetData()`) has its call site commented out.
 
 **Minor, unchanged**: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` still unexercised in this environment (no
 system `libenet` package) - the vendored `third_party/enet` path is the one actually verified.
@@ -378,6 +436,22 @@ system `libenet` package) - the vendored `third_party/enet` path is the one actu
   lifetime, found in this session's own new LAN-discovery test code (not the implementation) -
   fixed by copying the string content during the callback, matching the existing correct pattern
   already used by the loopback `EnumSessions` tests.
+- **New this session, from `docs/audit_dplay.md` (2026-07-09), none fixed yet, 8 new `TODO`
+  tasks tracked as `TASK-24H-0172`-`0179`**: the framing fact that `CDecor::TreatNetData()`
+  (`../free-eggbert/src/decnet.cpp:87`) - the per-frame pump that would call `Send()`/`Receive()`
+  during an open session - has its call site commented out (`event.cpp:2045`), confirming every
+  finding below is currently unreachable by free-eggbert's actual running code; `Send()`'s
+  self-send path reads the caller's buffer before validating its claimed size, unlike the
+  broadcast/unicast paths (`TASK-24H-0172`, the only P1 in this batch); two stale-documentation
+  contradictions (`include/dplay.h`'s own top-of-file comment vs. its `Send()` method doc,
+  `TASK-24H-0173`; `docs/networking-backends.md` vs. the already-implemented Decisions 22/23,
+  `TASK-24H-0174`); confirmed-dead `DirectPlayPlayer` scaffolding (`TASK-24H-0175`); a
+  now-worth-revisiting deferred wire-header magic/version validation decision
+  (`TASK-24H-0176`); an undocumented, low-stakes UDP reflection characteristic in the LAN
+  discovery responder (`TASK-24H-0177`); unbounded drain loops in `Service()`/the discovery
+  responder (`TASK-24H-0178`); and a negligible-but-inconsistent per-call allocation in
+  `Receive()` (`TASK-24H-0179`, measured at 228.7ns/call - checked, not assumed, to be
+  low-priority).
 
 **DirectDraw** (deep audit done 2026-07-09, `docs/audit_ddraw.md` - no code fixed yet, 13 new
 `TODO` tasks tracked as `TASK-24H-0151`-`0163`):
@@ -532,35 +606,42 @@ No lint/format tooling is configured in this repository.
 
 ## 8. Next smallest tasks
 
-**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **21**: 13
-from the 2026-07-09 DirectDraw audit, `TASK-24H-0151`-`0163`, plus 8 from the same-day DirectSound
-audit, `TASK-24H-0164`-`0171`. None `BLOCKED`, none implemented yet). Recommended order, merging
-both audits' own severity×reachability rankings (`docs/audit_ddraw.md` §2/§12,
-`docs/audit_dsound.md` §2/§10):
+**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **29**: 13
+from the 2026-07-09 DirectDraw audit (`TASK-24H-0151`-`0163`), 8 from the same-day DirectSound
+audit (`TASK-24H-0164`-`0171`), and 8 from the same-day DirectPlay audit (`TASK-24H-0172`-`0179`).
+None `BLOCKED`, none implemented yet). Recommended order, merging all three audits' own
+severity×reachability rankings (`docs/audit_ddraw.md` §2/§12, `docs/audit_dsound.md` §2/§10,
+`docs/audit_dplay.md` §2/§9):
 
 1. `TASK-24H-0151` (P0, Area: Build) - default `CMAKE_BUILD_TYPE` to `Release` when unset. Highest
    leverage, lowest risk: one `CMakeLists.txt` change, no behavior risk, and it changes the
-   baseline for every other performance number in the whole project (benefits DirectSound too, per
-   `docs/audit_dsound.md` §5.2 - no separate build-type task was added for DirectSound, this one
-   already covers it).
+   baseline for every other performance number in the whole project (benefits DirectSound/
+   DirectPlay too - no separate build-type task was added for either, this one already covers them).
 2. `TASK-24H-0152` (P0, Area: DirectDraw) - add a runtime 1:1 fast path to `BlitFrom`. The only
    other High-impact finding confirmed reachable by both games' real, everyday code paths (every
    present, every sprite draw). Must keep the scaling path for `CPixmap::Display()`'s primary
    present blit, which can genuinely scale - see the task's own text and `docs/audit_ddraw.md` §8.3.
 3. `TASK-24H-0164` (P1, Area: DirectSound) - bound `CreateSoundBuffer`'s `dwBufferBytes`. The
    DirectSound audit's own highest-priority finding, and arguably the single most concretely
-   evidenced robustness gap across *both* audits: both target games read this value, unvalidated,
+   evidenced robustness gap across all three audits: both target games read this value, unvalidated,
    straight from an on-disk `.wav` file's own header field, so a corrupted/truncated asset is a
    real, not just hypothetical, way to trigger an uncaught allocation exception.
 4. `TASK-24H-0154`/`0155` (P1, Area: DirectDraw) - `CreateSurface` size validation and the
    `Palette::GetEntries`/`SetEntries` integer-overflow bounds-check fix. Both are real API-boundary
    hardening gaps (one can crash the process, one is an out-of-bounds write), currently unreachable
    by either target game but cheap, low-risk, self-contained fixes with tests already sketched.
-5. `TASK-24H-0153`, `0156`-`0163` (P2, DirectDraw) and `TASK-24H-0165`-`0171` (P2, DirectSound) -
-   remaining latent-defect fixes, documentation gaps, and code-quality cleanups, opportunistic, no
-   urgency (all confirmed unreachable by either target game today). Within this group,
-   `TASK-24H-0165` (documenting the ~51ms device close/reopen cost) is worth doing early relative to
-   its siblings since it's pure documentation plus one non-timing-sensitive test, not a code change.
+5. `TASK-24H-0172` (P1, Area: DirectPlay) - fix `Send()`'s self-send path reading the caller's
+   buffer before validating its claimed size. The DirectPlay audit's only P1: a real, precisely-
+   located inconsistency with the other two `Send()` delivery paths, though confirmed unreachable
+   by free-eggbert's own call pattern and not exercised by the existing oversized-payload test.
+6. `TASK-24H-0153`, `0156`-`0163` (P2, DirectDraw), `TASK-24H-0165`-`0171` (P2, DirectSound), and
+   `TASK-24H-0173`-`0179` (P2, DirectPlay) - remaining latent-defect fixes, documentation gaps, and
+   code-quality cleanups, opportunistic, no urgency (all confirmed unreachable today - DirectPlay's
+   whole batch doubly so, per `docs/audit_dplay.md` §4's finding that free-eggbert's multiplayer
+   packet pump never runs at all). Within this group, `TASK-24H-0165` (documenting the ~51ms device
+   close/reopen cost) and `TASK-24H-0173`/`0174` (fixing two stale-documentation contradictions) are
+   worth doing early relative to their siblings since they're pure documentation (plus one
+   non-timing-sensitive test for 0165), not code changes.
 
 Also still open, unchanged: `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not
 closeable without a subprocess test harness this project doesn't have yet (see Section 5).
@@ -576,7 +657,7 @@ framing and is now somewhat superseded by the Decisions themselves for these 7 i
 (not yet re-reconciled - a small follow-up documentation task, not tracked as its own
 `TASK-24H-XXXX` yet).
 
-A future session's path to further progress: work through the 21 new Track A tasks above in
+A future session's path to further progress: work through the 29 new Track A tasks above in
 priority order, build the subprocess harness for `TASK-24H-0057`, or identify genuinely new work (a
 fresh call-site audit of either target game, a new user-driven feature request, or revisiting a
 "not needed" Decision if a concrete consumer need is later found).
@@ -614,22 +695,27 @@ fresh call-site audit of either target game, a new user-driven feature request, 
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first (this file), especially Sections 4 and 8, then docs/audit_ddraw.md and
-docs/audit_dsound.md (both from 2026-07-09) and plan.md's "24-Hour Autonomous Stabilization
-Backlog" section, especially its "DirectDraw audit hardening (2026-07-09)" and "DirectSound audit
-hardening (2026-07-09)" subsections, for full task detail. 149 of 171 TASK-24H-XXXX tasks are DONE,
-1 PARTIAL, 21 TODO (TASK-24H-0151-0171: 13 DirectDraw + 8 DirectSound audit-hardening tasks, none
-BLOCKED, none implemented yet), 0 BLOCKED - all 7 of the project's former BLOCKED DirectPlay design
-questions were resolved in an earlier session (docs/directplay-design.md Decisions 20-26).
+Read NEXT.md first (this file), especially Sections 4 and 8, then docs/audit_ddraw.md,
+docs/audit_dsound.md, and docs/audit_dplay.md (all from 2026-07-09) and plan.md's "24-Hour
+Autonomous Stabilization Backlog" section, especially its "DirectDraw audit hardening", "DirectSound
+audit hardening", and "DirectPlay audit hardening" (2026-07-09) subsections, for full task detail.
+149 of 179 TASK-24H-XXXX tasks are DONE, 1 PARTIAL, 29 TODO (TASK-24H-0151-0179: 13 DirectDraw + 8
+DirectSound + 8 DirectPlay audit-hardening tasks, none BLOCKED, none implemented yet), 0 BLOCKED -
+all 7 of the project's former BLOCKED DirectPlay design questions were resolved in an earlier
+session (docs/directplay-design.md Decisions 20-26); the new DirectPlay audit reopened none of them.
 DirectDraw (53 tests), DirectSound (30 tests), DirectPlay (65 tests + 8 opt-in ENet transport
 tests) all have solid coverage; real memory-safety/UB bugs found in earlier sessions were fixed and
-verified via ASan/UBSan. The 21 new TODO tasks are the next concrete work, in priority order per
+verified via ASan/UBSan. The 29 new TODO tasks are the next concrete work, in priority order per
 Section 8: TASK-24H-0151 (default CMAKE_BUILD_TYPE to Release - highest leverage, one
-CMakeLists.txt line, benefits both subsystems), TASK-24H-0152 (BlitFrom 1:1 fast path - reachable
-by both target games' real call paths every frame), then TASK-24H-0164 (bound
-CreateSoundBuffer's dwBufferBytes - the most concretely evidenced robustness gap in either audit,
-since both games read this value unvalidated from an on-disk .wav file). Standalone build:
-`cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
+CMakeLists.txt line, benefits all three subsystems), TASK-24H-0152 (BlitFrom 1:1 fast path -
+reachable by both target games' real call paths every frame), TASK-24H-0164 (bound
+CreateSoundBuffer's dwBufferBytes - the most concretely evidenced robustness gap across all three
+audits, since both games read this value unvalidated from an on-disk .wav file), then
+TASK-24H-0172 (Send()'s self-send path validation order). Note: every DirectPlay audit finding is
+confirmed unreachable by free-eggbert's actual running code today - its multiplayer packet pump,
+CDecor::TreatNetData(), has its one call site commented out (docs/audit_dplay.md §4) - so that
+whole batch is real-but-low-urgency by construction, not just by individual-finding assessment.
+Standalone build: `cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
 not touch ../free-eggbert or ../planetblupi source. Do not resolve any DirectPlay design question
 unilaterally if a new one ever comes up.
 ```
