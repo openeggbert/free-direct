@@ -8060,7 +8060,7 @@ correctly also counts against `TASK-24H-0186`'s own heading; not a data problem 
 This is a documentation-only change - no code or test files touched, no build/test run needed.
 
 ### TASK-24H-0187: Consolidate NEXT.md's duplicated task-count status fact to one source of truth
-Status: TODO
+Status: DONE
 Priority: P1
 Area: Docs
 Type: Documentation
@@ -8094,6 +8094,21 @@ Out of scope:
 - Do not apply the same restructuring to `plan.md`'s per-task `Status:`/`Priority:` fields — those
   are not duplicated (each task has exactly one `Status:` line), this task is specifically about
   the cross-section-duplicated summary counts in `NEXT.md` only.
+
+Verified: added a one-paragraph "At a glance" block between `NEXT.md`'s H1 title and its "## 1.
+Project summary" heading - even more prominent than the task's own "near the top of Section 1"
+suggestion - stating the exact current count once, explicitly labeled the single authoritative
+source, with an instruction to update only that line. Replaced every other exact-count restatement
+(Sections 1, 4, 8, 10 - Section 2's own test-count breakdown was left alone, since that's a
+different, non-duplicated fact from the task-count summary this task is about) with a
+cross-reference back to the top. Distinguished this from legitimate historical narrative describing
+a past point-in-time milestone (e.g. Section 3 item 8's "closing the backlog to 182/182" describing
+what happened after that specific batch, not asserting it as the current state) - those were left
+as accurate history, not treated as duplication to eliminate. `grep -n "DONE, [0-9]* TODO"
+NEXT.md` confirms exactly one live/current-state match (the new top-of-file line) plus the one
+historical-narrative match, which is intentional, not a miss. Documentation-only change - no code
+or test files touched, no build/test run needed. This task's own completion is reflected in the
+same edit that updated the top-of-file count from 184/4 to 185/3.
 
 ### TASK-24H-0188: Reconcile docs/directplay-limitations.md's deviation table with Decisions 20-27
 Status: DONE
