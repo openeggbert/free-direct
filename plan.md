@@ -7050,7 +7050,7 @@ upheld by both target games' real usage (surfaces always released before their `
 not independently enforced by this code, and documents its new real use by `TASK-24H-0156`.
 
 ### TASK-24H-0162: Document DirectDraw's single-threaded usage assumption
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Documentation
@@ -7076,6 +7076,9 @@ Acceptance criteria:
 Out of scope:
 - Do not add any actual locking/synchronization in this task — this is a documentation-only task,
   since neither target game needs multi-threaded DirectDraw access today.
+
+Verified: added a `@note Thread safety:` paragraph to `ddraw.h`'s top-of-file doc comment,
+covering all four public interfaces at once. No code change. Full suite passes 7/7 unchanged.
 
 ### TASK-24H-0163: Replace dynamic_cast with static_cast in Blt/BltFast surface downcast
 Status: TODO
