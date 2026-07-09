@@ -8,12 +8,14 @@
  * installed.
  *
  * This header defines the packet *header* fields, their flat (de)serialization, and
- * defensive size validation for an untrusted receive buffer
- * (`TryDeserializeDirectPlayWireHeader`). That validation deliberately does not check
- * `magic`/`version` - a wrong-protocol/wrong-version packet is a different rejection
- * reason than a malformed/truncated buffer, with its own `DPERR_*` mapping to be decided
- * once a real transport (`EnetDirectPlayTransport`, still to be added in this same
- * phase) actually receives packets.
+ * defensive validation for an untrusted receive buffer (`TryDeserializeDirectPlayWireHeader`),
+ * which checks size, `magic`/`version`, and `payloadLength` consistency, rejecting anything that
+ * fails any of those the same way (`std::nullopt`; the caller already silently drops a malformed
+ * packet, so a wrong-protocol/wrong-version packet needs no separate `DPERR_*` mapping of its
+ * own). `magic`/`version` validation was deliberately deferred until a real transport
+ * (`EnetDirectPlayTransport`) existed to receive real UDP packets - see
+ * `docs/audit_dplay.md` §6.4/§9 (D6, TASK-24H-0176) for the fresh 2026-07-09 decision to add it
+ * now that this precondition has been met.
  *
  * The `idFrom`/`idTo` fields are serialized using the local `sizeof(DPID)` as-is
  * (whatever `include/dplay.h` currently typedefs `DPID` to). This is tied to the open
@@ -140,15 +142,21 @@ inline DirectPlayWirePacketHeader DeserializeDirectPlayWireHeader(const std::uin
 /// parses it. Rejects (returns `std::nullopt`, without reading past `dataSize` bytes):
 ///  - a buffer smaller than `kDirectPlayWireHeaderSize` (too small to even hold a
 ///    header);
+///  - a parsed `magic`/`version` that doesn't match `kDirectPlayWireMagic`/
+///    `kDirectPlayWireProtocolVersion` (docs/audit_dplay.md §6.4/§9, D6, TASK-24H-0176) - every
+///    real FreeDirect sender writes these via `SerializeDirectPlayWireHeader`, so this never
+///    rejects legitimate FreeDirect-to-FreeDirect traffic;
 ///  - a buffer whose parsed `payloadLength` disagrees with the actual trailing byte
 ///    count (`dataSize - kDirectPlayWireHeaderSize`) - i.e. the header claims a payload
 ///    size that does not match what was actually received.
-/// Does not check `magic`/`version` - see the file-level comment above.
 inline std::optional<DirectPlayWirePacketHeader> TryDeserializeDirectPlayWireHeader(
     const std::uint8_t* data, std::size_t dataSize) {
     if (dataSize < kDirectPlayWireHeaderSize) return std::nullopt;
 
     const DirectPlayWirePacketHeader header = DeserializeDirectPlayWireHeader(data);
+    if (header.magic != kDirectPlayWireMagic || header.version != kDirectPlayWireProtocolVersion) {
+        return std::nullopt;
+    }
     const std::size_t actualPayloadSize = dataSize - kDirectPlayWireHeaderSize;
     if (static_cast<std::size_t>(header.payloadLength) != actualPayloadSize) return std::nullopt;
 

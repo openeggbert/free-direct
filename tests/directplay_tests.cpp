@@ -1266,6 +1266,37 @@ void Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength() {
     CHECK(!TryDeserializeDirectPlayWireHeader(wire.data(), wire.size()).has_value());
 }
 
+// docs/audit_dplay.md §6.4/§9 (D6), TASK-24H-0176: magic/version validation was deliberately
+// deferred until a real transport existed to receive real UDP packets - EnetDirectPlayTransport
+// now is that real transport, so a wrong magic or wrong version must now be rejected the same way
+// as any other malformed buffer, not silently accepted and parsed as if it were a real FreeDirect
+// packet.
+void Test_WireHeaderTryDeserialize_RejectsWrongMagic() {
+    using namespace free_direct_directplay;
+
+    DirectPlayWirePacketHeader header; // correct version, wrong magic
+    header.magic = kDirectPlayWireMagic ^ 0xFFFFFFFFu;
+    header.payloadLength = 0;
+
+    std::vector<std::uint8_t> wire;
+    SerializeDirectPlayWireHeader(header, wire);
+
+    CHECK(!TryDeserializeDirectPlayWireHeader(wire.data(), wire.size()).has_value());
+}
+
+void Test_WireHeaderTryDeserialize_RejectsWrongVersion() {
+    using namespace free_direct_directplay;
+
+    DirectPlayWirePacketHeader header; // correct magic, wrong version
+    header.version = kDirectPlayWireProtocolVersion + 1;
+    header.payloadLength = 0;
+
+    std::vector<std::uint8_t> wire;
+    SerializeDirectPlayWireHeader(header, wire);
+
+    CHECK(!TryDeserializeDirectPlayWireHeader(wire.data(), wire.size()).has_value());
+}
+
 void Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer() {
     using namespace free_direct_directplay;
 
@@ -1903,6 +1934,8 @@ int main() {
     Test_WireHeaderRoundTrip_PreservesAllFields();
     Test_WireHeaderTryDeserialize_RejectsTruncatedBuffer();
     Test_WireHeaderTryDeserialize_RejectsMismatchedPayloadLength();
+    Test_WireHeaderTryDeserialize_RejectsWrongMagic();
+    Test_WireHeaderTryDeserialize_RejectsWrongVersion();
     Test_WireHeaderTryDeserialize_AcceptsConsistentBuffer();
     Test_HostBroadcast_ReachesAllRemoteClientsNotSelf();
     Test_HostBroadcast_ReachesMultipleRemoteClients();

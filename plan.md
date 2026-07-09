@@ -7393,7 +7393,7 @@ Delete both files if nothing near-term needs them, or add a comment explaining w
 despite being unused, per this project's policy against unexplained unused surface.
 
 ### TASK-24H-0176: Decide whether to validate wire-header magic/version on receive
-Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
+Status: DONE | Priority: P1 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §6.4 (D6) — `TryDeserializeDirectPlayWireHeader`'s magic/version
 skip was deliberately deferred "once a real transport actually receives packets"
 (`DirectPlayWireProtocol.hpp:10-16`); `EnetDirectPlayTransport` now is that real transport.
@@ -7404,6 +7404,23 @@ deserves a decision either way, not silence. Raised to P1: this is a real protoc
 that will matter for actual peer traffic once free-eggbert's decompilation reconnects
 `TreatNetData()` (docs/audit_dplay.md §2's decompilation-in-progress caveat) - not indefinitely
 deferrable cleanup.
+
+Verified: asked the user (`AskUserQuestion`, not decided unilaterally, matching this project's
+standing DirectPlay-decision policy) - answer: add the check. Implemented in
+`TryDeserializeDirectPlayWireHeader` (`DirectPlayWireProtocol.hpp`) using the function's existing
+`std::nullopt` rejection path, so no new `DPERR_*` code was needed - a wrong magic/version is now
+rejected exactly like any other malformed buffer, silently dropped by the existing caller in
+`DirectPlay.cpp`'s `Receive()`. Updated the file-level comment (stale since Phase 5) to record this
+decision. Two new tests (`Test_WireHeaderTryDeserialize_RejectsWrongMagic`/`_RejectsWrongVersion`)
+confirm rejection; the existing round-trip/accepts-consistent-buffer tests are unaffected since
+`DirectPlayWirePacketHeader`'s default member initializers already use the correct
+magic/version. Verified across three configurations: default build `ctest` 7/7; ENet-enabled build
+`ctest -L enet` 1/1 (the real target of this change - `DirectPlayDiscoveryService` calls the same
+shared function); ENet-enabled unfiltered `ctest` still shows the exact same pre-existing,
+already-documented `directplay_tests` failure (that binary's hardcoded loopback assumptions don't
+work against a real ENet transport, unrelated to this change - confirmed the specific failing
+assertions are all `Open(..., DPOPEN_JOIN) == DP_OK`-rooted connection failures, not anything
+magic/version-related).
 
 ### TASK-24H-0177: Document the LAN discovery responder's reflection-primitive characteristic
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
