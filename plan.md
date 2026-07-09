@@ -6945,7 +6945,7 @@ that a subsequent `GetDC()` after a real `ReleaseDC()` succeeds again (not a per
 Full suite passes 7/7 (`directdraw_tests` 59/59, up from 58).
 
 ### TASK-24H-0159: Replace GetSurfaceDesc's magic pixel-format numbers with named constants
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Implementation
@@ -6968,6 +6968,10 @@ Acceptance criteria:
 
 Out of scope:
 - Do not touch any other magic number in this file in this task.
+
+Verified: replaced both hex literals with `DDPF_PALETTEINDEXED8`/`DDPF_RGB`
+(`DirectDraw.cpp:1112`). Pure refactor, no behavior change. Full suite passes 7/7 unchanged
+(`directdraw_tests` 59/59).
 
 ### TASK-24H-0160: Remove the file-scope #define SDL_Log shadowing
 Status: TODO

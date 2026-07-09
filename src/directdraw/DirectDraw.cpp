@@ -1109,7 +1109,7 @@ namespace {
         lpDDSurfaceDesc->ddsCaps.dwCaps = (type_ == SurfaceType::Primary) ? DDSCAPS_PRIMARYSURFACE : DDSCAPS_OFFSCREENPLAIN;
         
         lpDDSurfaceDesc->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
-        lpDDSurfaceDesc->ddpfPixelFormat.dwFlags = (bpp_ == 8) ? 0x00000020L : 0x00000040L; // DDPF_PALETTEINDEXED8 : DDPF_RGB
+        lpDDSurfaceDesc->ddpfPixelFormat.dwFlags = (bpp_ == 8) ? DDPF_PALETTEINDEXED8 : DDPF_RGB;
         lpDDSurfaceDesc->ddpfPixelFormat.dwRGBBitCount = static_cast<DWORD>(bpp_);
         if (bpp_ == 32) {
             lpDDSurfaceDesc->ddpfPixelFormat.dwRBitMask = 0x00FF0000;
