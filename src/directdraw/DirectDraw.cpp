@@ -112,8 +112,6 @@ namespace {
         }
     }
 
-#define SDL_Log DirectDrawLog
-
     const char* BoolToText(const bool value)
     {
         return value ? "yes" : "no";
@@ -475,7 +473,7 @@ namespace {
         // registered with no matching destructor call to unregister it.
         if (owner_) owner_->liveSurfaces_.push_back(this);
 
-        SDL_Log("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s",
+        DirectDrawLog("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s",
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 width_,
@@ -487,7 +485,7 @@ namespace {
 
     DirectDrawSurfaceImpl::~DirectDrawSurfaceImpl()
     {
-        SDL_Log("free-direct surface destroy: id=%llu type=%s texture=%p palette=%s",
+        DirectDrawLog("free-direct surface destroy: id=%llu type=%s texture=%p palette=%s",
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 static_cast<void*>(texture_),
@@ -744,7 +742,7 @@ namespace {
         FREE_DIRECT_DIAG_INC_TOTAL(bltCallsTotal);
         auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
         const bool requestSrcColorKey = (dwFlags & DDBLT_KEYSRC) != 0;
-        SDL_Log("free-direct Blt: dstId=%llu dstType=%s srcId=%llu src=%p flags=0x%08lx hasPalette=%s hasSrcColorKey=%s", 
+        DirectDrawLog("free-direct Blt: dstId=%llu dstType=%s srcId=%llu src=%p flags=0x%08lx hasPalette=%s hasSrcColorKey=%s", 
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 sourceSurface ? static_cast<unsigned long long>(sourceSurface->GetDebugId()) : 0ULL,
@@ -760,14 +758,14 @@ namespace {
                     BoolToText(sourceSurface && sourceSurface->hasSrcColorKey_));
 
         if (lpDestRect) {
-            SDL_Log("free-direct Blt: dstRect=[%ld,%ld,%ld,%ld]", 
+            DirectDrawLog("free-direct Blt: dstRect=[%ld,%ld,%ld,%ld]", 
                     static_cast<long>(lpDestRect->left),
                     static_cast<long>(lpDestRect->top),
                     static_cast<long>(lpDestRect->right),
                     static_cast<long>(lpDestRect->bottom));
         }
         if (lpSrcRect) {
-            SDL_Log("free-direct Blt: srcRect=[%ld,%ld,%ld,%ld]", 
+            DirectDrawLog("free-direct Blt: srcRect=[%ld,%ld,%ld,%ld]", 
                     static_cast<long>(lpSrcRect->left),
                     static_cast<long>(lpSrcRect->top),
                     static_cast<long>(lpSrcRect->right),
@@ -790,7 +788,7 @@ namespace {
             adjustedDestRect.right  = lpDestRect->right  - static_cast<LONG>(winX);
             adjustedDestRect.bottom = lpDestRect->bottom - static_cast<LONG>(winY);
             effectiveDestRect = &adjustedDestRect;
-            SDL_Log("free-direct Blt: adjusted dstRect from screen [%ld,%ld,%ld,%ld] to client [%ld,%ld,%ld,%ld] (winPos=%d,%d)",
+            DirectDrawLog("free-direct Blt: adjusted dstRect from screen [%ld,%ld,%ld,%ld] to client [%ld,%ld,%ld,%ld] (winPos=%d,%d)",
                     static_cast<long>(lpDestRect->left), static_cast<long>(lpDestRect->top),
                     static_cast<long>(lpDestRect->right), static_cast<long>(lpDestRect->bottom),
                     static_cast<long>(adjustedDestRect.left), static_cast<long>(adjustedDestRect.top),
@@ -803,7 +801,7 @@ namespace {
         // (e.g. Speedy Blupi) still get visible output.
         if ((dwFlags & DDBLT_COLORFILL) != 0) {
             if (!lpDDBltFx) {
-                SDL_Log("free-direct Blt: COLORFILL requested without DDBLTFX");
+                DirectDrawLog("free-direct Blt: COLORFILL requested without DDBLTFX");
                 return DDERR_INVALIDPARAMS;
             }
             PresentLog("free-direct Blt COLORFILL: dstId=%llu type=%s color=0x%08lx",
@@ -819,7 +817,7 @@ namespace {
 
         if (lpDDSrcSurface) {
             if (!sourceSurface) {
-                SDL_Log("free-direct Blt: source surface type mismatch");
+                DirectDrawLog("free-direct Blt: source surface type mismatch");
                 return DDERR_INVALIDPARAMS;
             }
             uint64_t copiedPixels = 0;
@@ -847,7 +845,7 @@ namespace {
             return hr;
         }
 
-        SDL_Log("free-direct Blt: unsupported flag combination 0x%08lx", static_cast<unsigned long>(dwFlags));
+        DirectDrawLog("free-direct Blt: unsupported flag combination 0x%08lx", static_cast<unsigned long>(dwFlags));
         return DDERR_UNSUPPORTED;
     }
 
@@ -856,12 +854,12 @@ namespace {
         FREE_DIRECT_DIAG_INC(bltCallsThisWindow);
         FREE_DIRECT_DIAG_INC_TOTAL(bltFastCallsTotal);
         if (!lpDDSrcSurface) {
-            SDL_Log("free-direct BltFast: null source surface");
+            DirectDrawLog("free-direct BltFast: null source surface");
             return DDERR_INVALIDPARAMS;
         }
         auto* sourceSurface = dynamic_cast<DirectDrawSurfaceImpl*>(lpDDSrcSurface);
         if (!sourceSurface) {
-            SDL_Log("free-direct BltFast: source surface type mismatch");
+            DirectDrawLog("free-direct BltFast: source surface type mismatch");
             return DDERR_INVALIDPARAMS;
         }
 
@@ -877,7 +875,7 @@ namespace {
         }
 
         const bool useKey = (dwTrans & DDBLTFAST_SRCCOLORKEY) != 0;
-        SDL_Log("free-direct BltFast: dstId=%llu srcId=%llu xy=(%lu,%lu) trans=0x%08lx useSrcColorKey=%s", 
+        DirectDrawLog("free-direct BltFast: dstId=%llu srcId=%llu xy=(%lu,%lu) trans=0x%08lx useSrcColorKey=%s", 
                 static_cast<unsigned long long>(debugId_),
                 static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                 static_cast<unsigned long>(dwX),
@@ -899,7 +897,7 @@ namespace {
                     static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                     static_cast<unsigned long long>(copiedPixels),
                     static_cast<unsigned long long>(skippedPixels));
-        SDL_Log("free-direct BltFast result: dstId=%llu srcId=%llu hr=0x%08lx", 
+        DirectDrawLog("free-direct BltFast result: dstId=%llu srcId=%llu hr=0x%08lx", 
                 static_cast<unsigned long long>(debugId_),
                 static_cast<unsigned long long>(sourceSurface->GetDebugId()),
                 static_cast<unsigned long>(hr));
@@ -923,7 +921,7 @@ namespace {
         if (palette_) palette_->Release();
         palette_ = lpDDPalette;
         if (palette_) palette_->AddRef();
-        SDL_Log("free-direct SetPalette: surfaceId=%llu type=%s palette=%p hasPalette=%s", 
+        DirectDrawLog("free-direct SetPalette: surfaceId=%llu type=%s palette=%p hasPalette=%s", 
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 static_cast<void*>(lpDDPalette),
@@ -963,7 +961,7 @@ namespace {
 
         if (pixels_.empty()) {
             *lphDC = nullptr;
-            SDL_Log("free-direct GetDC: no pixel buffer surfaceId=%llu", static_cast<unsigned long long>(debugId_));
+            DirectDrawLog("free-direct GetDC: no pixel buffer surfaceId=%llu", static_cast<unsigned long long>(debugId_));
             return DDERR_UNSUPPORTED;
         }
 
@@ -972,7 +970,7 @@ namespace {
         // TASK-24H-0158) - DDERR_DCALREADYCREATED is already defined in include/ddraw.h but was
         // never returned anywhere.
         if (attachedDc_) {
-            SDL_Log("free-direct GetDC: DC already created surfaceId=%llu dc=%p",
+            DirectDrawLog("free-direct GetDC: DC already created surfaceId=%llu dc=%p",
                     static_cast<unsigned long long>(debugId_), reinterpret_cast<void*>(attachedDc_));
             return DDERR_DCALREADYCREATED;
         }
@@ -1010,13 +1008,13 @@ namespace {
             if (!attachedDc_) {
                 *lphDC = nullptr;
                 dcTempBuffer_.clear();
-                SDL_Log("free-direct GetDC: FreeApiCreateSurfaceDC failed for surfaceId=%llu", static_cast<unsigned long long>(debugId_));
+                DirectDrawLog("free-direct GetDC: FreeApiCreateSurfaceDC failed for surfaceId=%llu", static_cast<unsigned long long>(debugId_));
                 return DDERR_GENERIC;
             }
         }
 
         *lphDC = attachedDc_;
-        SDL_Log("free-direct GetDC: surfaceId=%llu dc=%p size=%dx%d pitch=%ld bpp=%d", 
+        DirectDrawLog("free-direct GetDC: surfaceId=%llu dc=%p size=%dx%d pitch=%ld bpp=%d", 
                 static_cast<unsigned long long>(debugId_),
                 reinterpret_cast<void*>(attachedDc_),
                 width_,
@@ -1038,7 +1036,7 @@ namespace {
     HRESULT WINAPI DirectDrawSurfaceImpl::ReleaseDC(HDC hDC)
     {
         if (hDC != attachedDc_) {
-            SDL_Log("free-direct ReleaseDC: unexpected dc=%p for surfaceId=%llu expected=%p", 
+            DirectDrawLog("free-direct ReleaseDC: unexpected dc=%p for surfaceId=%llu expected=%p", 
                     reinterpret_cast<void*>(hDC),
                     static_cast<unsigned long long>(debugId_),
                     reinterpret_cast<void*>(attachedDc_));
@@ -1091,7 +1089,7 @@ namespace {
         FreeApiDestroySurfaceDC(attachedDc_);
         attachedDc_ = nullptr;
 
-        SDL_Log("free-direct ReleaseDC: surfaceId=%llu dc=%p bpp=%d", 
+        DirectDrawLog("free-direct ReleaseDC: surfaceId=%llu dc=%p bpp=%d", 
                 static_cast<unsigned long long>(debugId_),
                 reinterpret_cast<void*>(hDC),
                 bpp_);
@@ -1132,7 +1130,7 @@ namespace {
         FREE_DIRECT_DIAG_INC_TOTAL(lockCallsTotal);
 
         const HRESULT hr = GetSurfaceDesc(lpDDSurfaceDesc);
-        SDL_Log("free-direct Lock: surfaceId=%llu type=%s flags=0x%08lx hr=0x%08lx pitch=%ld bpp=%d size=%dx%d hasPalette=%s", 
+        DirectDrawLog("free-direct Lock: surfaceId=%llu type=%s flags=0x%08lx hr=0x%08lx pitch=%ld bpp=%d size=%dx%d hasPalette=%s", 
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 static_cast<unsigned long>(dwFlags),
@@ -1144,7 +1142,7 @@ namespace {
                 BoolToText(HasPalette()));
 
         if (lpDestRect) {
-            SDL_Log("free-direct Lock: lockRect=[%ld,%ld,%ld,%ld]", 
+            DirectDrawLog("free-direct Lock: lockRect=[%ld,%ld,%ld,%ld]", 
                     static_cast<long>(lpDestRect->left),
                     static_cast<long>(lpDestRect->top),
                     static_cast<long>(lpDestRect->right),
@@ -1157,7 +1155,7 @@ namespace {
     HRESULT WINAPI DirectDrawSurfaceImpl::Unlock(LPVOID lpSurfaceData)
     {
         FREE_DIRECT_DIAG_INC_TOTAL(unlockCallsTotal);
-        SDL_Log("free-direct Unlock: surfaceId=%llu type=%s data=%p", 
+        DirectDrawLog("free-direct Unlock: surfaceId=%llu type=%s data=%p", 
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 lpSurfaceData);
@@ -1183,7 +1181,7 @@ namespace {
             } else {
                 hasSrcColorKey_ = false;
             }
-            SDL_Log("free-direct SetColorKey: surfaceId=%llu type=%s flags=0x%08lx enabled=%s low=0x%08lx high=0x%08lx", 
+            DirectDrawLog("free-direct SetColorKey: surfaceId=%llu type=%s flags=0x%08lx enabled=%s low=0x%08lx high=0x%08lx", 
                     static_cast<unsigned long long>(debugId_),
                     (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                     static_cast<unsigned long>(dwFlags),
@@ -1198,7 +1196,7 @@ namespace {
                         static_cast<unsigned long>(hasSrcColorKey_ ? colorKey_.dwColorSpaceHighValue : 0));
             return DD_OK;
         }
-        SDL_Log("free-direct SetColorKey: unsupported flags=0x%08lx on surfaceId=%llu", 
+        DirectDrawLog("free-direct SetColorKey: unsupported flags=0x%08lx on surfaceId=%llu", 
                 static_cast<unsigned long>(dwFlags),
                 static_cast<unsigned long long>(debugId_));
         return DDERR_UNSUPPORTED;
@@ -1231,7 +1229,7 @@ namespace {
         }
 
         if (type_ != SurfaceType::Primary || !owner_ || !owner_->renderer_) {
-            SDL_Log("free-direct Flip: unsupported state (type=%s owner=%p renderer=%p)",
+            DirectDrawLog("free-direct Flip: unsupported state (type=%s owner=%p renderer=%p)",
                     (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                     static_cast<void*>(owner_),
                     owner_ ? static_cast<void*>(owner_->renderer_) : nullptr);
@@ -1261,12 +1259,12 @@ namespace {
             }
         }
         perfWindowStart_ = SDL_GetTicksNS();
-        SDL_Log("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s", BoolToText(debugPrimaryClearEnabled_));
+        DirectDrawLog("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s", BoolToText(debugPrimaryClearEnabled_));
     }
 
     DirectDrawImpl::~DirectDrawImpl()
     {
-        SDL_Log("free-direct DirectDrawImpl dtor: primaryPresented=%s presentCalls=%llu renderer=%p window=%p", 
+        DirectDrawLog("free-direct DirectDrawImpl dtor: primaryPresented=%s presentCalls=%llu renderer=%p window=%p", 
                 BoolToText(primaryPresented_),
                 static_cast<unsigned long long>(presentCallCount_),
                 static_cast<void*>(renderer_),
@@ -1301,10 +1299,10 @@ namespace {
 
     HRESULT WINAPI DirectDrawImpl::SetCooperativeLevel(HWND hWnd, DWORD dwFlags)
     {
-        SDL_Log("free-direct SetCooperativeLevel: hWnd=%p flags=0x%08lx", hWnd, static_cast<unsigned long>(dwFlags));
+        DirectDrawLog("free-direct SetCooperativeLevel: hWnd=%p flags=0x%08lx", hWnd, static_cast<unsigned long>(dwFlags));
 
         if (!hWnd) {
-            SDL_Log("free-direct SetCooperativeLevel: invalid null HWND");
+            DirectDrawLog("free-direct SetCooperativeLevel: invalid null HWND");
             return DDERR_INVALIDPARAMS;
         }
 
@@ -1323,7 +1321,7 @@ namespace {
             // during cache/bootstrap. Ensure renderer recreation does not fail due
             // to an already attached renderer on the SDL window.
             SDL_DestroyRenderer(windowRenderer);
-            SDL_Log("free-direct SetCooperativeLevel: destroyed pre-existing SDL renderer=%p", static_cast<void*>(windowRenderer));
+            DirectDrawLog("free-direct SetCooperativeLevel: destroyed pre-existing SDL renderer=%p", static_cast<void*>(windowRenderer));
         }
 
         if (renderer_) {
@@ -1345,7 +1343,7 @@ namespace {
                     FREE_DIRECT_DIAG_INC_TOTAL(sdlTexturesDestroyed);
                 }
             }
-            SDL_Log("free-direct SetCooperativeLevel: destroyed previous renderer=%p", static_cast<void*>(renderer_));
+            DirectDrawLog("free-direct SetCooperativeLevel: destroyed previous renderer=%p", static_cast<void*>(renderer_));
             SDL_DestroyRenderer(renderer_);
             renderer_ = nullptr;
         }
@@ -1359,25 +1357,25 @@ namespace {
             if (enableVsync) {
                 SDL_SetRenderVSync(renderer_, 1);
             }
-            SDL_Log("free-direct SDL_CreateRenderer: window=%p renderer=%p backend=default vsync=%s", static_cast<void*>(sdlWindow_), static_cast<void*>(renderer_), BoolToText(enableVsync));
+            DirectDrawLog("free-direct SDL_CreateRenderer: window=%p renderer=%p backend=default vsync=%s", static_cast<void*>(sdlWindow_), static_cast<void*>(renderer_), BoolToText(enableVsync));
         }
         if (!renderer_) {
             // PARTIAL: Legacy compatibility fallback for environments where
             // the default renderer cannot be created for the existing window.
             renderer_ = SDL_CreateRenderer(sdlWindow_, "software");
             if (renderer_) {
-                SDL_Log("free-direct SDL_CreateRenderer: fallback backend=software renderer=%p", static_cast<void*>(renderer_));
+                DirectDrawLog("free-direct SDL_CreateRenderer: fallback backend=software renderer=%p", static_cast<void*>(renderer_));
             }
         }
         if (!renderer_) {
-            SDL_Log("free-direct SetCooperativeLevel: SDL_CreateRenderer failed: %s", SDL_GetError());
+            DirectDrawLog("free-direct SetCooperativeLevel: SDL_CreateRenderer failed: %s", SDL_GetError());
             return DDERR_GENERIC;
         }
 
         int windowWidth = 0;
         int windowHeight = 0;
         SDL_GetWindowSize(sdlWindow_, &windowWidth, &windowHeight);
-        SDL_Log("free-direct SetCooperativeLevel: SDL window=%p size=%dx%d id=%u", 
+        DirectDrawLog("free-direct SetCooperativeLevel: SDL window=%p size=%dx%d id=%u", 
                 static_cast<void*>(sdlWindow_),
                 windowWidth,
                 windowHeight,
@@ -1386,7 +1384,7 @@ namespace {
         int outputWidth = 0;
         int outputHeight = 0;
         SDL_GetRenderOutputSize(renderer_, &outputWidth, &outputHeight);
-        SDL_Log("free-direct SetCooperativeLevel: renderer output size=%dx%d", outputWidth, outputHeight);
+        DirectDrawLog("free-direct SetCooperativeLevel: renderer output size=%dx%d", outputWidth, outputHeight);
 
         if (debugPrimaryClearEnabled_ && !debugPrimaryClearDone_) {
             SDL_SetRenderDrawColor(renderer_, 0, 128, 255, 255);
@@ -1395,7 +1393,7 @@ namespace {
             presentCallCount_++;
             primaryPresented_ = true;
             debugPrimaryClearDone_ = true;
-            SDL_Log("free-direct debug primary clear/present: executed in SetCooperativeLevel to validate visible output");
+            DirectDrawLog("free-direct debug primary clear/present: executed in SetCooperativeLevel to validate visible output");
         }
 
         return DD_OK;
@@ -1405,18 +1403,18 @@ namespace {
                                                  LPDIRECTDRAWSURFACE* lplpDDSurface,
                                                  IUnknown* pUnkOuter)
     {
-        SDL_Log("free-direct CreateSurface: desc=%p out=%p outer=%p", 
+        DirectDrawLog("free-direct CreateSurface: desc=%p out=%p outer=%p", 
                 static_cast<const void*>(lpDDSurfaceDesc),
                 static_cast<void*>(lplpDDSurface),
                 static_cast<void*>(pUnkOuter));
 
         if (!lpDDSurfaceDesc || !lplpDDSurface || pUnkOuter) {
-            SDL_Log("free-direct CreateSurface: invalid params");
+            DirectDrawLog("free-direct CreateSurface: invalid params");
             return DDERR_INVALIDPARAMS;
         }
 
         if (lpDDSurfaceDesc->dwSize != sizeof(DDSURFACEDESC)) {
-            SDL_Log("free-direct CreateSurface: invalid desc size=%lu expected=%zu", 
+            DirectDrawLog("free-direct CreateSurface: invalid desc size=%lu expected=%zu", 
                     static_cast<unsigned long>(lpDDSurfaceDesc->dwSize),
                     sizeof(DDSURFACEDESC));
             return DDERR_INVALIDPARAMS;
@@ -1427,7 +1425,7 @@ namespace {
         const bool offscreenPlain = (caps & DDSCAPS_OFFSCREENPLAIN) != 0;
         const bool systemMemory = (caps & DDSCAPS_SYSTEMMEMORY) != 0;
 
-        SDL_Log("free-direct CreateSurface request: flags=0x%08lx caps=0x%08lx primary=%s offscreenPlain=%s systemMemory=%s width=%lu height=%lu pfFlags=0x%08lx pfBpp=%lu", 
+        DirectDrawLog("free-direct CreateSurface request: flags=0x%08lx caps=0x%08lx primary=%s offscreenPlain=%s systemMemory=%s width=%lu height=%lu pfFlags=0x%08lx pfBpp=%lu", 
                 static_cast<unsigned long>(lpDDSurfaceDesc->dwFlags),
                 static_cast<unsigned long>(caps),
                 BoolToText(primary),
@@ -1442,7 +1440,7 @@ namespace {
         // used by legacy game code during back/mouse surface creation.
         const bool offscreen = offscreenPlain || systemMemory;
         if (primary == offscreen) {
-            SDL_Log("free-direct CreateSurface: invalid caps combination (primary=%s offscreen=%s)", BoolToText(primary), BoolToText(offscreen));
+            DirectDrawLog("free-direct CreateSurface: invalid caps combination (primary=%s offscreen=%s)", BoolToText(primary), BoolToText(offscreen));
             return DDERR_INVALIDPARAMS;
         }
 
@@ -1462,9 +1460,9 @@ namespace {
             if (displayModeWidth_ > 0 && displayModeHeight_ > 0) {
                 width = displayModeWidth_;
                 height = displayModeHeight_;
-                SDL_Log("free-direct CreateSurface: primary using display mode %dx%d", width, height);
+                DirectDrawLog("free-direct CreateSurface: primary using display mode %dx%d", width, height);
             } else {
-                SDL_Log("free-direct CreateSurface: primary using default %dx%d (no display mode set)", width, height);
+                DirectDrawLog("free-direct CreateSurface: primary using default %dx%d (no display mode set)", width, height);
             }
             // Minimal test-support consistency fix (docs/audit_ddraw.md §5.1, F7,
             // TASK-24H-0157's own out-of-scope clause pre-authorized this): honors
@@ -1499,7 +1497,7 @@ namespace {
         // icon-sized sub-images - bounding worst-case allocation to 4096*4096*4 = 64MiB.
         constexpr int kMaxSurfaceDimension = 4096;
         if (width <= 0 || width > kMaxSurfaceDimension || height <= 0 || height > kMaxSurfaceDimension) {
-            SDL_Log("free-direct CreateSurface: invalid size %dx%d (max %dx%d)", width, height,
+            DirectDrawLog("free-direct CreateSurface: invalid size %dx%d (max %dx%d)", width, height,
                     kMaxSurfaceDimension, kMaxSurfaceDimension);
             return DDERR_INVALIDPARAMS;
         }
@@ -1511,12 +1509,12 @@ namespace {
                                                                   height,
                                                                   bpp);
         if (!surface) {
-            SDL_Log("free-direct CreateSurface: out of memory for %dx%d bpp=%d", width, height, bpp);
+            DirectDrawLog("free-direct CreateSurface: out of memory for %dx%d bpp=%d", width, height, bpp);
             return DDERR_OUTOFMEMORY;
         }
 
         *lplpDDSurface = surface;
-        SDL_Log("free-direct CreateSurface result: surfaceId=%llu ptr=%p type=%s size=%dx%d bpp=%d pitch=%ld hasPalette=%s", 
+        DirectDrawLog("free-direct CreateSurface result: surfaceId=%llu ptr=%p type=%s size=%dx%d bpp=%d pitch=%ld hasPalette=%s", 
                 static_cast<unsigned long long>(surface->GetDebugId()),
                 static_cast<void*>(surface),
                 primary ? "primary" : "offscreen",
@@ -1530,7 +1528,7 @@ namespace {
 
     HRESULT WINAPI DirectDrawImpl::SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP)
     {
-        SDL_Log("free-direct SetDisplayMode: width=%lu height=%lu bpp=%lu", 
+        DirectDrawLog("free-direct SetDisplayMode: width=%lu height=%lu bpp=%lu", 
                 static_cast<unsigned long>(dwWidth),
                 static_cast<unsigned long>(dwHeight),
                 static_cast<unsigned long>(dwBPP));
@@ -1547,24 +1545,24 @@ namespace {
 
     HRESULT WINAPI DirectDrawImpl::CreatePalette(DWORD dwFlags, LPPALETTEENTRY lpColorTable, LPDIRECTDRAWPALETTE* lplpDDPalette, IUnknown* pUnkOuter)
     {
-        SDL_Log("free-direct CreatePalette: flags=0x%08lx colorTable=%p out=%p outer=%p", 
+        DirectDrawLog("free-direct CreatePalette: flags=0x%08lx colorTable=%p out=%p outer=%p", 
                 static_cast<unsigned long>(dwFlags),
                 static_cast<void*>(lpColorTable),
                 static_cast<void*>(lplpDDPalette),
                 static_cast<void*>(pUnkOuter));
         if (!lplpDDPalette || pUnkOuter) return DDERR_INVALIDPARAMS;
         *lplpDDPalette = new (std::nothrow) DirectDrawPaletteImpl(dwFlags, lpColorTable);
-        SDL_Log("free-direct CreatePalette result: palette=%p", static_cast<void*>(*lplpDDPalette));
+        DirectDrawLog("free-direct CreatePalette result: palette=%p", static_cast<void*>(*lplpDDPalette));
         return (*lplpDDPalette) ? DD_OK : DDERR_OUTOFMEMORY;
     }
 
     HRESULT WINAPI DirectDrawImpl::CreateClipper(DWORD dwFlags, LPDIRECTDRAWCLIPPER* lplpDDClipper, IUnknown* pUnkOuter)
     {
         (void)dwFlags;
-        SDL_Log("free-direct CreateClipper: out=%p outer=%p", static_cast<void*>(lplpDDClipper), static_cast<void*>(pUnkOuter));
+        DirectDrawLog("free-direct CreateClipper: out=%p outer=%p", static_cast<void*>(lplpDDClipper), static_cast<void*>(pUnkOuter));
         if (!lplpDDClipper || pUnkOuter) return DDERR_INVALIDPARAMS;
         *lplpDDClipper = new (std::nothrow) DirectDrawClipperImpl();
-        SDL_Log("free-direct CreateClipper result: clipper=%p", static_cast<void*>(*lplpDDClipper));
+        DirectDrawLog("free-direct CreateClipper result: clipper=%p", static_cast<void*>(*lplpDDClipper));
         return (*lplpDDClipper) ? DD_OK : DDERR_OUTOFMEMORY;
     }
 
@@ -1583,7 +1581,7 @@ namespace {
     HRESULT DirectDrawImpl::PresentPrimary(DirectDrawSurfaceImpl& primary)
     {
         if (!renderer_) {
-            SDL_Log("free-direct PresentPrimary: no renderer");
+            DirectDrawLog("free-direct PresentPrimary: no renderer");
             return DDERR_UNSUPPORTED;
         }
 
@@ -1622,7 +1620,7 @@ namespace {
                 FREE_DIRECT_DIAG_INC_EVER(sdlTexturesEver, "tex");
                 SDL_SetTextureBlendMode(primary.texture_, SDL_BLENDMODE_NONE);
             } else {
-                SDL_Log("free-direct PresentPrimary: SDL_CreateTexture failed: %s", SDL_GetError());
+                DirectDrawLog("free-direct PresentPrimary: SDL_CreateTexture failed: %s", SDL_GetError());
                 return DDERR_GENERIC;
             }
         }
@@ -1756,24 +1754,24 @@ namespace {
 
 HRESULT WINAPI DirectDrawCreate(const GUID* lpGUID, LPDIRECTDRAW* lplpDD, IUnknown* pUnkOuter)
 {
-    SDL_Log("free-direct DirectDrawCreate: guid=%p out=%p outer=%p", 
+    DirectDrawLog("free-direct DirectDrawCreate: guid=%p out=%p outer=%p", 
             static_cast<const void*>(lpGUID),
             static_cast<void*>(lplpDD),
             static_cast<void*>(pUnkOuter));
     (void)lpGUID;
 
     if (!lplpDD || pUnkOuter) {
-        SDL_Log("free-direct DirectDrawCreate: invalid params");
+        DirectDrawLog("free-direct DirectDrawCreate: invalid params");
         return DDERR_INVALIDPARAMS;
     }
 
     auto* directDraw = new (std::nothrow) DirectDrawImpl();
     if (!directDraw) {
-        SDL_Log("free-direct DirectDrawCreate: out of memory");
+        DirectDrawLog("free-direct DirectDrawCreate: out of memory");
         return DDERR_OUTOFMEMORY;
     }
 
     *lplpDD = directDraw;
-    SDL_Log("free-direct DirectDrawCreate result: dd=%p", static_cast<void*>(directDraw));
+    DirectDrawLog("free-direct DirectDrawCreate result: dd=%p", static_cast<void*>(directDraw));
     return DD_OK;
 }

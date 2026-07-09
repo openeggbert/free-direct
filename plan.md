@@ -6974,7 +6974,7 @@ Verified: replaced both hex literals with `DDPF_PALETTEINDEXED8`/`DDPF_RGB`
 (`directdraw_tests` 59/59).
 
 ### TASK-24H-0160: Remove the file-scope #define SDL_Log shadowing
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Implementation
@@ -7002,6 +7002,14 @@ Acceptance criteria:
 Out of scope:
 - Do not change the gating logic itself (env var names, `#ifdef` overrides) in this task — pure
   rename.
+
+Verified: `sed -i 's/SDL_Log(/DirectDrawLog(/g'` across the whole file (confirmed zero real
+`SDL_Log(` call sites existed before the `#define`'s line, so this was safe as a blanket
+replacement), then removed the `#define` line itself (`DirectDraw.cpp:115`, now gone). Confirmed
+`SDL_LogInfo(`/`SDL_LogMessageV(` call sites were untouched (different, longer identifier tokens,
+never matched by the macro or the sed pattern in the first place). `grep -n "#define SDL_Log"`
+returns nothing. Full suite passes 7/7 unchanged (`directdraw_tests` 59/59, including the Group 9
+logging-gate regression test).
 
 ### TASK-24H-0161: Document or remove DirectDrawSurfaceImpl::owner_'s lifetime contract
 Status: DONE
