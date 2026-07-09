@@ -21,8 +21,8 @@ header with no gap.
 
 | Offset | Size (bytes) | Field | Type | Notes |
 |---|---|---|---|---|
-| 0 | 4 | `magic` | `uint32_t` | Always `0x46524450` (`kDirectPlayWireMagic`, ASCII "FRDP" reversed). Rejects non-FreeDirect traffic early. **Not currently checked on receive** - see "Known gaps" below. |
-| 4 | 4 | `version` | `uint32_t` | Always `1` today (`kDirectPlayWireProtocolVersion`). Bumped whenever this layout changes incompatibly. **Not currently checked on receive** - see "Known gaps" below. |
+| 0 | 4 | `magic` | `uint32_t` | Always `0x46524450` (`kDirectPlayWireMagic`, ASCII "FRDP" reversed). Rejects non-FreeDirect traffic early. **Checked on receive** since `TASK-24H-0176` - see "Known gaps" below for what checking it does and doesn't buy. |
+| 4 | 4 | `version` | `uint32_t` | Always `1` today (`kDirectPlayWireProtocolVersion`). Bumped whenever this layout changes incompatibly. **Checked on receive** since `TASK-24H-0176` - see "Known gaps" below. |
 | 8 | 4 | `type` | `uint32_t` | Serialized as the underlying `uint32_t`, not the native `enum class` size. See "Packet types" below. |
 | 12 | 24 | `applicationGuid` | `GUID` (`Data1: unsigned long`, `Data2/Data3: unsigned short`, `Data4: unsigned char[8]`) | Copied via `std::memcpy(..., sizeof(GUID))`. **`sizeof(GUID)` is 24 bytes on this project's Linux/LP64 build** (`unsigned long` is 8 bytes under LP64, plus alignment padding to `alignof(GUID) == 8`) - **not** the 16 bytes a real Win32 `GUID` occupies (where `unsigned long` is 4 bytes under LLP64). Verified by direct compilation, not assumed - see "Known gaps" below for what this means for portability. |
 | 36 | 24 | `sessionGuid` | `GUID` | Same layout and same platform-dependent size as `applicationGuid`. |
@@ -53,20 +53,27 @@ payload bytes are appended by the caller separately - `DirectPlayWirePacketHeade
 adoption; `Join` (host role) and every other type currently fall through a `default:` case and are
 silently consumed with no effect.
 
-## Known gaps (honestly documented, not fixed here)
+## Known gaps (mostly honestly documented rather than fixed; one has since been fixed - see below)
 
-- **`magic`/`version` are parsed but never validated on receive.** `TryDeserializeDirectPlayWireHeader`
-  deliberately does not check them (see its own doc comment in `DirectPlayWireProtocol.hpp`) - a
-  wrong-protocol or wrong-version packet is a different rejection reason than a malformed/truncated
-  buffer, with its own `DPERR_*` mapping "to be decided once a real transport actually receives
-  packets" (a decision that has not yet been made, even though `EnetDirectPlayTransport` now does
-  receive real packets as of Decision 19). Today, a buffer that happens to be the right size but
-  has garbage `magic`/`version` bytes is still accepted and processed as if it were valid.
-- **`payloadLength` cross-checking is the only structural validation performed.**
-  `TryDeserializeDirectPlayWireHeader` rejects a buffer smaller than the header, and rejects a
-  header whose `payloadLength` disagrees with the actual trailing byte count - but does not (and
-  cannot, from this layer alone) detect a packet that is well-formed but semantically wrong (e.g. a
-  `sessionGuid` that doesn't match the receiver's own session).
+- **`magic`/`version` are now validated on receive** (`plan.md` `TASK-24H-0176`, resolved from a
+  genuine design question asked of the user via `AskUserQuestion` rather than decided
+  unilaterally, tracked as `docs/audit_dplay.md` finding D6). `TryDeserializeDirectPlayWireHeader`
+  now rejects a header whose `magic`/`version` don't match `kDirectPlayWireMagic`/
+  `kDirectPlayWireProtocolVersion` the same way it already rejected a too-small or
+  `payloadLength`-mismatched buffer - by returning `std::nullopt`, which the caller treats as "no
+  valid packet here." This closes the gap this section used to describe: a wrong-protocol or
+  garbage buffer that happened to be the right size used to be accepted and processed as if valid;
+  it is now dropped. Every real FreeDirect sender already writes the correct `magic`/`version` via
+  `SerializeDirectPlayWireHeader`, so this never rejects legitimate FreeDirect-to-FreeDirect
+  traffic. **Deliberately still not done**: a malformed/wrong-protocol packet and a wrong-*version*
+  packet still share one rejection outcome (`std::nullopt`, no distinct `DPERR_*` code) rather than
+  being distinguished - judged not worth the added complexity when `TASK-24H-0176` was decided.
+- **`payloadLength` cross-checking is the other structural validation performed**, alongside the
+  magic/version check above. `TryDeserializeDirectPlayWireHeader` rejects a buffer smaller than the
+  header, and rejects a header whose `payloadLength` disagrees with the actual trailing byte count
+  - but neither check (and none possible from this layer alone) detects a packet that is
+  well-formed but semantically wrong (e.g. a `sessionGuid` that doesn't match the receiver's own
+  session).
 - **No GUID-mismatch validation on join.** `Open()`'s joining branch never compares the joining
   caller's `guidApplication` against the host's before completing a connection (Decision 16's own
   explicit "deliberately still out of scope" note).
@@ -84,5 +91,9 @@ silently consumed with no effect.
   data models (e.g. one Linux/LP64 peer and one Windows/LLP64 peer) ever tried to talk to each
   other - not a configuration this project builds or tests today.
 
-None of these are fixed in this document - documenting them is this task's (`plan.md`
-TASK-24H-0095) entire scope; fixing any of them is separate, later work.
+This section was originally written to document these gaps, not fix them (`plan.md`
+TASK-24H-0095). One of them - `magic`/`version` validation - has since actually been fixed in code
+(`TASK-24H-0176`, 2026-07-09) and is now described above as fixed, not as an open gap; the
+remaining three (payload-length-only structural validation's own limits, no GUID-mismatch
+validation on join, and the platform-dependent header size) are still genuinely open and still
+separate, later work if ever taken on.

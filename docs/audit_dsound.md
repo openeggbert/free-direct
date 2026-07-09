@@ -14,6 +14,18 @@ This document is **read-only analysis**. No code was changed to produce it, and 
 has been fixed, per this project's policy of treating audits and implementation as separate tasks
 (`CLAUDE.md` Safety Rules).
 
+> **Status update (2026-07-09, later the same day): all 8 lettered findings below (S1-S8) have
+> since been turned into 8 `plan.md` tasks and all are now `DONE`** - a near-1:1 mapping, except
+> `TASK-24H-0168` covers both S5 and S6 together (they were closely related enough to fix as one
+> task), and `TASK-24H-0171` (the `MAXSOUND`=100 stress test) is an additional test-coverage task
+> from §4/§9.4 with no S-number of its own, filling the resulting 8th task slot
+> (`TASK-24H-0164`-`0171`). This audit document
+> itself is left exactly as originally written below - a record of what was found and when, not a
+> live status tracker - so several findings below still read as open problems even though the
+> corresponding code has since been fixed. For current status, see `plan.md`'s "DirectSound audit
+> hardening (2026-07-09)" section (each task's own `Verified:` note) or `NEXT.md` Section 5 for a
+> condensed per-finding summary of what changed.
+
 ## 1. Scope and methodology
 
 - **Primary subject**: `src/directsound/DirectSound.cpp` (`SharedAudioDevice`,

@@ -2066,3 +2066,50 @@ closes `plan.md` Phase 9's corresponding checkbox as "confirmed not needed."
 
 Only if a future, more complete `free-eggbert` source audit finds a reachable code path that
 actually branches on this distinction (none is known today).
+
+---
+
+## Decision 27: validate wire-header `magic`/`version` on receive, using the existing rejection path
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0176) -
+resolves a deferral first recorded in `DirectPlayWireProtocol.hpp`'s Phase 5-era file comment
+("until a real transport exists"), whose precondition `EnetDirectPlayTransport` (Decision 19) has
+since met.
+
+### The question
+
+`TryDeserializeDirectPlayWireHeader` parses `magic`/`version` but had never validated them -
+deliberately deferred at the time because no code path actually received untrusted bytes yet.
+`docs/audit_dplay.md` §6.4 (finding D6) resurfaced this once `EnetDirectPlayTransport` started
+receiving real UDP packets: should the check be added now, or should the deferral continue with a
+freshly-recorded rationale?
+
+### Decision
+
+Add the check. A header whose `magic`/`version` doesn't match `kDirectPlayWireMagic`/
+`kDirectPlayWireProtocolVersion` is now rejected through the function's existing `std::nullopt`
+path - the same outcome as a too-small or `payloadLength`-mismatched buffer. Rejected the
+alternative of inventing a distinct `DPERR_*` code for this specific rejection reason: the caller
+(`DirectPlay.cpp`'s `Receive()`) already silently drops any `std::nullopt` result with no
+propagated error today, so a new code would have nothing to attach to without a separate,
+unrequested change to that caller's own error-reporting contract - out of scope for what this
+question actually asked.
+
+### Implemented
+
+`src/directplay/DirectPlayWireProtocol.hpp`: `TryDeserializeDirectPlayWireHeader` now checks
+`header.magic != kDirectPlayWireMagic || header.version != kDirectPlayWireProtocolVersion` right
+after parsing and before the existing `payloadLength` cross-check, returning `std::nullopt` on a
+mismatch. Updated the function's own doc comment and the file-level comment (stale since Phase 5)
+to record this decision instead of the old deferral. `DirectPlayDiscoveryService`'s LAN discovery
+responder calls the same shared function, so it gained this validation for free (see Decision 23
+and `TASK-24H-0177`, which documented the consequence for that responder's own reflection-primitive
+characterization). Two new tests, `Test_WireHeaderTryDeserialize_RejectsWrongMagic`/
+`_RejectsWrongVersion` (`tests/directplay_tests.cpp`); the pre-existing round-trip/
+accepts-consistent-buffer tests needed no changes since `DirectPlayWirePacketHeader`'s default
+member initializers already use the correct `magic`/`version`. **Verified for real**: default build
+`ctest` (7/7); ENet-enabled build `ctest -L enet` (1/1 - the discovery responder is the real target
+of this change); ENet-enabled unfiltered `ctest` still shows only the exact same pre-existing,
+already-documented `directplay_tests` incompatibility (confirmed the failing assertions are all
+`Open(..., DPOPEN_JOIN)`-rooted connection failures, not magic/version-related - not a new
+regression from this change).

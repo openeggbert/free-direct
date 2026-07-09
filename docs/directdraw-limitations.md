@@ -120,7 +120,25 @@ call site (confirmed by the original call-site audit); it is implemented and tes
 (`Test_Blt_ColorFill_FillsDestRectWithColor`) as documented simplified behavior only, kept for
 API-shape completeness.
 
-## Presentation throttle and dirty-flag
+## CreateSurface enforces a fixed 4096x4096 dimension cap (new, TASK-24H-0154)
+
+`CreateSurface` (both the offscreen branch and, indirectly, the primary branch via
+`SetDisplayMode`'s stored `displayModeWidth_`/`displayModeHeight_`) now rejects `dwWidth`/`dwHeight`
+outside `1..4096` with `DDERR_INVALIDPARAMS`, before constructing the surface
+(`docs/audit_ddraw.md` §4.4, finding F4). Real DirectDraw has no such fixed constant — an actual
+DirectDraw driver's real limit depends on the underlying GPU/mode's capabilities, queried at
+runtime, and could in principle be smaller or (on modern hardware, if anyone still had a real
+DirectDraw driver) larger than 4096 in either dimension. FreeDirect's 4096 figure is a deliberate,
+hardcoded software ceiling, not a hardware query.
+
+**Why 4096 and not something else**: chosen only to close a real crash - `dwWidth`/`dwHeight` were
+previously cast from `DWORD` straight into `DirectDrawSurfaceImpl`'s `pixels_.resize(...)` with no
+bound at all, so a huge or `DWORD`-overflowed value could throw an uncaught `std::length_error`/
+`std::bad_alloc` from inside a `WINAPI` method - a violation of this project's own "no exceptions
+cross the interface boundary" rule. 4096 is simply "generous but finite" relative to both target
+games' actual surfaces (640x480-scale, `docs/audit_ddraw.md` §9), not derived from any real
+DirectDraw or hardware constant. **Currently unreachable by either target game** - both only ever
+request surfaces at or near 640x480; this closes a latent crash risk, not an observed one.
 
 The presentation path throttles redundant re-presents (skips upload+present if called within the
 configured frame interval, default 1/60s, overridable via `FREE_DIRECT_TARGET_FPS`) and skips

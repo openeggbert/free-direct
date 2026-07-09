@@ -11,6 +11,16 @@ has been fixed as part of this audit, per this project's standing policy of trea
 implementation as separate tasks (see `CLAUDE.md` Safety Rules). Findings are candidates for new
 `plan.md` tasks, not a to-do list to execute directly.
 
+> **Status update (2026-07-09, later the same day): all 12 lettered findings below (F1-F12) plus
+> one additional §3.4 code-quality item with no F-number have since been turned into 13 `plan.md`
+> tasks (`TASK-24H-0151`-`0163`, one task per finding, F1→0151 through F12→0162, §3.4→0163) and all
+> 13 are now `DONE`.** This audit document
+> itself is left exactly as originally written below - it is a record of what was found and when,
+> not a live status tracker - so several findings below still read as open problems ("has no
+> bound", "no fast path exists", etc.) even though the corresponding code has since been fixed. For
+> current status, see `plan.md`'s "DirectDraw audit hardening (2026-07-09)" section (each task's own
+> `Verified:` note) or `NEXT.md` Section 5 for a condensed per-finding summary of what changed.
+
 ## 1. Scope and methodology
 
 - **Primary subject**: `src/directdraw/DirectDraw.cpp` (all four COM-style classes:

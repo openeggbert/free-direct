@@ -11,6 +11,25 @@ compiled library, not just reasoned about.
 This document is **read-only analysis**. No code was changed to produce it (`CLAUDE.md` Safety
 Rules).
 
+> **Status update (2026-07-09, later the same day): 8 of these 10 findings (D2-D8, D10) have since
+> been turned into `plan.md` tasks (`TASK-24H-0172`-`0179`) and all 8 are now `DONE`**, including
+> `TASK-24H-0176` (magic/version validation, resolving D6), which was a genuine design decision
+> asked of the user via `AskUserQuestion` rather than assumed - see `docs/directplay-design.md`
+> Decision 27. The other two findings were correctly *not* turned into tasks, per this document's
+> own §9 recommendation, and remain exactly as characterized below: **D1** is the framing fact, not
+> a defect (nothing to fix); **D9** (`Shutdown()`'s bounded ~1s wait) was judged already a
+> deliberate, reasonable, documented design choice, surfaced for awareness only. This audit document
+> itself is left exactly as originally written below - a record of what was found and when, not a
+> live status tracker - so several findings still read as open problems even though the
+> corresponding code has since been fixed, and the file list in Section 1 below still names
+> `DirectPlayPlayer.{hpp,cpp}`, which `TASK-24H-0175` has since deleted as dead scaffolding. For
+> current status, see `plan.md`'s "DirectPlay audit hardening (2026-07-09)" section (each task's own
+> `Verified:` note) or `NEXT.md` Section 5 for a condensed per-finding summary of what changed. **D1's
+> framing fact itself is unaffected and still accurate**: every fix in this batch remains unreachable
+> by `free-eggbert`'s actual running code today, since `CDecor::TreatNetData()` still has its call
+> site commented out - but per the user's explicit correction, that unreachability is temporary
+> (tied to an in-progress decompilation), not a reason these fixes were low-value.
+
 ## 1. Scope and methodology — DirectPlay is different from the other two audits
 
 DirectPlay is, by a wide margin, FreeDirect's most heavily audited and most heavily decided

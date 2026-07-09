@@ -29,7 +29,9 @@ charter).
   `docs/directplay-design.md` Decisions 20-26); the new DirectPlay audit did not reopen or
   contradict any of those 26 Decisions, and found no new BLOCKED question, except one genuine
   micro-decision (wire-header magic/version validation, `TASK-24H-0176`) which was asked of the
-  user via `AskUserQuestion` before implementing, per this project's standing policy.
+  user via `AskUserQuestion` before implementing, per this project's standing policy - recorded as
+  `docs/directplay-design.md` Decision 27, following the same one-question-per-Decision format as
+  20-26.
   `TASK-24H-0057` (`PARTIAL`) still needs a subprocess test harness this project doesn't have - the
   **only** non-`DONE` item left anywhere in the entire backlog.
 - **Important architectural decisions** (full narrative + rationale for the DirectPlay ones lives
@@ -428,7 +430,8 @@ implemented, tested, and committed** - one commit per task, each independently b
 before being marked `DONE` (no batch-marking). See Section 3 item 7 for the batch summary, Section
 5 for what each fix actually changed, and `plan.md` for each task's own `Verified:` paragraph. One
 task (`TASK-24H-0176`, wire-header `magic`/`version` validation) was a genuine design decision,
-asked of the user via `AskUserQuestion` rather than assumed - user chose to add the check.
+asked of the user via `AskUserQuestion` rather than assumed - user chose to add the check, recorded
+as `docs/directplay-design.md` Decision 27.
 
 **The only non-DONE item anywhere in the entire backlog is `TASK-24H-0057`**
 (`DSERR_NODRIVER` graceful-failure path, `PARTIAL`) - genuinely hard to force in-process given

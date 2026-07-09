@@ -166,6 +166,12 @@ cmake --build build -j8
 ctest --test-dir build
 ```
 
+When FreeDirect is the top-level project (as above) and no `-DCMAKE_BUILD_TYPE` is given, it now
+defaults to `Release` (`-O3`) automatically - a bare `cmake -B build` no longer silently produces an
+unoptimized binary. Pass `-DCMAKE_BUILD_TYPE=Debug` explicitly if you want an unoptimized/debuggable
+build instead. This default only applies when building FreeDirect standalone; it never overrides a
+consuming project's own `CMAKE_BUILD_TYPE` choice when built through a target game (see below).
+
 Without `-DFREE_API_USE_SYSTEM_SDL3=ON` (and without a parent game providing SDL3), configure
 fails fast with a clear error rather than a confusing downstream failure:
 
@@ -355,7 +361,7 @@ Any format SDL3 can convert from is also accepted; unsupported formats fall back
 - Looping (`DSBPLAY_LOOPING = 0x1`) is accepted but ignored (TODO).
 - `SetCurrentPosition()` updates an internal cursor but the SDL stream is not seekable.
 - Accurate stereo panning for mono sources requires a per-sample callback (TODO).
-- Capture, 3D audio, and DirectPlay are not implemented.
+- Capture and 3D audio are not implemented.
 - Multiple simultaneous plays of the same buffer: calling `Play()` again stops and restarts the buffer (one stream per buffer).
 
 ---
