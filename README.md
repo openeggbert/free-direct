@@ -24,7 +24,7 @@ DirectX 3 (subset)
 * **Free Direct** → reimplements selected DirectX 3 APIs (2D only)
 * **DirectDraw** → Current real implementation focus, constrained to methods and flags used by the game and demo.
 * **DirectSound** → Partially implemented: SDL3-backed audio playback for static PCM buffers.
-* **DirectPlay** → Real session/player/message-queue state over a loopback transport: hosting, joining, unicast send/receive, and session enumeration all work between two FreeDirect processes. An optional ENet backend (`FREE_DIRECT_ENABLE_ENET`) adds real UDP networking for hosting; joining and discovery are not yet wired up over ENet. Broadcast (`idTo == 0`) and host-to-host message relay between two non-host peers are not implemented. `DirectPlayEnumerateA`/`W` remain stubs. **FreeDirect-to-FreeDirect only — never compatible with real Microsoft DirectPlay at the wire/packet level.** See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation list.
+* **DirectPlay** → Real session/player/message-queue state: hosting, joining, unicast send/receive, session enumeration, real broadcast (`idTo == 0`, delivered to every other player with host-side relay so non-host peers can reach each other), and `DirectPlayEnumerateA`/`W`'s placeholder-provider enumeration all work between two FreeDirect processes, over both the default loopback transport and an optional ENet backend (`FREE_DIRECT_ENABLE_ENET`) with real UDP networking, real host discovery (`FREE_DIRECT_ENET_HOST_ADDRESS`), and real LAN broadcast discovery. **FreeDirect-to-FreeDirect only — never compatible with real Microsoft DirectPlay at the wire/packet level.** See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation list.
 * **Direct3D** → Not implemented (not used by target code).
 * **SDL 3** → Internal implementation detail used only inside `.cpp` files.
 
@@ -115,16 +115,20 @@ behind these tags.
 | Method | Status |
 |---|---|
 | `DirectPlayCreate` | IMPLEMENTED |
-| `DirectPlayEnumerateA` / `W` | STUB |
-| `EnumSessions` | PARTIAL (loopback-only registry; no ENet or LAN discovery) |
-| `Open` | PARTIAL (loopback host+join and ENet hosting work; ENet joining never connects) |
-| `CreatePlayer` | IMPLEMENTED (name/data/event-handle fields accepted but not stored) |
-| `Send` | PARTIAL (self-send and host-to-one-assigned-remote-player unicast only; no broadcast, no non-host-to-non-host relay) |
+| `DirectPlayEnumerateA` / `W` | IMPLEMENTED (invokes the callback once with a FreeDirect-internal placeholder provider) |
+| `EnumSessions` | PARTIAL (loopback registry always; real UDP broadcast LAN discovery too, ENet-enabled builds only) |
+| `Open` | PARTIAL (loopback and ENet both work for hosting and joining; ENet host address via `FREE_DIRECT_ENET_HOST_ADDRESS`; no GUID-mismatch validation on join) |
+| `CreatePlayer` | IMPLEMENTED (name/data/event-handle fields accepted but not stored - deliberate, see below) |
+| `Send` | PARTIAL (self-send, host-to-one-assigned-remote-player unicast, and broadcast with host-side relay all work; direct non-broadcast unicast between two non-host peers has no path) |
 | `Receive` | IMPLEMENTED |
 | `Close` | IMPLEMENTED |
 
-See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation table
-and the 7 standing open design questions.
+All 7 of this project's formerly-standing DirectPlay design questions (broadcast semantics, ENet
+host discovery, LAN discovery, host routing, player names, duplicate-player detection, player-lost
+state) have been asked of, and answered by, the user and are now implemented or deliberately not
+implemented by design - see [docs/directplay-limitations.md](docs/directplay-limitations.md) for
+the full deviation table and each resolution, and
+[docs/directplay-design.md](docs/directplay-design.md) Decisions 20-26 for the full rationale.
 
 ---
 

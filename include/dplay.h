@@ -272,13 +272,13 @@ public:
     virtual ULONG WINAPI AddRef() = 0;
     /** @brief Decrements object reference count; deletes and defensively tears down the transport on last release. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
-    /** @brief Enumerates sessions against a real, process-wide loopback-hosted-session registry. Does not see ENet-hosted sessions and has no LAN discovery. @note Status: PARTIAL */
+    /** @brief Enumerates sessions against a real, process-wide loopback-hosted-session registry, plus (ENet-enabled builds only) a real UDP broadcast Discovery/DiscoveryResponse round-trip for LAN-hosted ENet sessions, using dwTimeout for real. @note Status: PARTIAL */
     virtual HRESULT WINAPI EnumSessions(LPDPSESSIONDESC2 lpEnumSessionsDesc, DWORD dwTimeout, LPDPENUMSESSIONS_CALLBACK2 lpEnumSessionsCallback, LPVOID lpContext, DWORD dwFlags) = 0;
-    /** @brief Opens or creates a session. Real for loopback (both host and join roles) and ENet hosting; ENet joining never connects yet (no host-address resolution mechanism exists). @note Status: PARTIAL */
+    /** @brief Opens or creates a session. Real for loopback (both host and join roles) and ENet (both host and join roles - joining resolves the host address via the FREE_DIRECT_ENET_HOST_ADDRESS environment variable). @note Status: PARTIAL */
     virtual HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) = 0;
     /** @brief Creates a player endpoint with real dwMaxPlayers validation and sequential DPID allocation. Player name/data/event-handle fields are accepted but not stored. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI CreatePlayer(LPDPID lpidPlayer, LPDPNAME lpPlayerName, HANDLE hEvent, LPVOID lpData, DWORD dwDataSize, DWORD dwFlags) = 0;
-    /** @brief Sends a packet. Real for self-send and host-to-one-assigned-remote-player unicast only - there is no broadcast and no host-side relay between non-host peers yet. idTo == 0 does not broadcast: it currently collides with self-send whenever the caller's own DPID is also 0 (see docs/audit-24h-free-direct.md; unresolved pending a DPID-0 semantics decision, plan.md TASK-24H-0131). @note Status: PARTIAL */
+    /** @brief Sends a packet. Real for self-send, host-to-one-assigned-remote-player unicast, and broadcast (idTo == DPID_ALLPLAYERS, delivered to every other player, with host-side relay so a non-host sender's broadcast reaches every other peer too - see docs/directplay-design.md Decisions 20/21). Direct non-broadcast unicast between two non-host peers still has no path (no real call site needs it). @note Status: PARTIAL */
     virtual HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) = 0;
     /** @brief Receives a packet from the local message queue; also services the transport and drains connect/disconnect/join-handshake events first. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) = 0;

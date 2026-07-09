@@ -16,14 +16,14 @@ charter).
   implementation can host/join/exchange messages with each other. This is explicitly **not**
   wire-compatible with real Microsoft DirectPlay — FreeDirect-to-FreeDirect only.
 - **Current development phase**: `plan.md`'s original Phases 0–18 and the 24-Hour Stabilization
-  Backlog are both now deep - the backlog carries **147 atomic `TASK-24H-XXXX` tasks**. As of this
-  session's final count (real count, `grep`-verified against `plan.md`, not estimated): **138
-  DONE, 0 TODO, 1 PARTIAL, 8 BLOCKED** pending a human decision. Session 1 ended at 64 DONE - this
-  session closed **74 more**, including `TASK-24H-0100` (real `DirectPlayEnumerateA`/`W`
-  implementation, the last safe task in the entire backlog - see Section 3). **Zero safe TODO
-  tasks remain.** Only the 1 PARTIAL and 8 BLOCKED items are left, which are genuinely not
-  closeable without either a subprocess test harness (`TASK-24H-0057`) or a human design decision
-  (Track B, Section 8).
+  Backlog are both effectively closed out - the backlog carries **150 atomic `TASK-24H-XXXX`
+  tasks** (147 + 3 added mid-session once Track B was decided). As of this session's true final
+  count (real count, `grep`-verified against `plan.md`, not estimated): **149 DONE, 0 TODO, 1
+  PARTIAL, 0 BLOCKED**. Session 1 ended at 64 DONE. **All 7 of the project's standing BLOCKED
+  DirectPlay design questions (Track B) were asked of, answered by, and implemented for the user
+  in this session** - never decided unilaterally (see Section 3 and
+  `docs/directplay-design.md` Decisions 20-26). The only item left anywhere in the backlog is
+  `TASK-24H-0057` (`PARTIAL`), which needs a subprocess test harness this project doesn't have.
 - **Important architectural decisions** (full narrative + rationale for the DirectPlay ones lives
   in `docs/directplay-design.md`, Decisions 1–19; deviation summary in
   `docs/directplay-limitations.md`, new this session):
@@ -201,6 +201,39 @@ explicit instruction):
     `g++` loop (63/63), full CMake `ctest` (7/7), ASan+UBSan `ctest` (7/7 clean - re-checked given
     this session's earlier real bug in this same file), a full out-of-tree `../free-eggbert`
     rebuild (exit 0), and `header_hygiene` (clean).
+14. **All 7 Track B DirectPlay design questions asked, decided, and implemented** - the user
+    explicitly asked to proceed into them after item 13's report. Presented via `AskUserQuestion`
+    (never decided unilaterally), recorded as `docs/directplay-design.md` Decisions 20-26, and
+    3 new tasks added/closed (`TASK-24H-0148`/`0149`/`0150`):
+    - **Decision 20/21 + `TASK-24H-0148`** (broadcast + host routing): `idTo == 0`
+      (`DPID_ALLPLAYERS`, new `include/dplay.h` constant) now always means broadcast, checked
+      before self-send since both can match for the host specifically. Host role iterates
+      `remotePlayerIds` directly; a joining role's broadcast reaches the host, which relays it to
+      every *other* connected peer (never back to the sender). Found and fixed a real,
+      unanticipated consequence: 5 pre-existing tests used the host's first (always-DPID-`0`)
+      `CreatePlayer()` result as a generic "some player ID" for self-send testing, which silently
+      broke once broadcast took priority - fixed each by creating a second player first.
+      `TASK-24H-0092`'s old "proves the collision" characterization test rewritten into
+      `Test_HostBroadcast_ReachesAllRemoteClientsNotSelf`. 63→65 `directplay_tests`.
+    - **Decision 22 + `TASK-24H-0149`** (ENet host discovery): a new `FREE_DIRECT_ENET_HOST_ADDRESS`
+      env var (`"<host>"` or `"<host>:<port>"`), read once by `Open()`'s ENet joining branch -
+      previously completely unwired. 4→6 `enet_directplay_tests`.
+    - **Decision 23 + `TASK-24H-0150`** (LAN UDP discovery, the most architecturally novel piece):
+      new `DirectPlayDiscoveryService` (`src/directplay/DirectPlayDiscovery.hpp`/`.cpp`), built on
+      ENet's own portable `ENetSocket`/`enet_socket_*` primitives (not hand-rolled per-platform
+      sockets, not `ENetHost`/`ENetPeer`). A hosting session listens on a new fixed port (`51323`)
+      and replies to `Discovery` broadcasts; `EnumSessions()` gained an additive broadcast-and-
+      collect phase using `dwTimeout` for real (its first actual use anywhere in this codebase).
+      Found and fixed two real issues in this task's own test code (not the implementation): a
+      dangling-pointer read of a `DPSESSIONDESC2` field past its callback-only-valid lifetime, and
+      two new tests that were written but never registered in `main()` so they silently never ran.
+      4→8 `enet_directplay_tests`.
+    - **Decisions 24/25/26** (player names, duplicate-player detection, player-lost state): all
+      three decided **not needed** - no code changes required.
+    - Every piece verified through the full matrix: default build, ASan+UBSan (clean, zero
+      diagnostics, directly grepped raw output each time), ENet-enabled build, ASan+UBSan+ENet
+      combined, `header_hygiene`, and a full out-of-tree `../free-eggbert` rebuild after each of
+      the three implementation commits.
 
 **Prior session (2)** (DirectDraw/DirectSound test-coverage focus - condensed; full detail was
 here before this rewrite, still in `git log`): added `tests/directdraw_tests.cpp` (45 tests) and
@@ -218,50 +251,65 @@ collision characterization test.
 
 ## 4. Current blocker / main problem
 
-**There is still no build- or test-breaking blocker.** Everything builds, all 150 committed
-`Test_*` checks pass (63 directplay + 53 directdraw + 30 directsound + 4 ENet, opt-in), plus 4
-header-level checks, across every verified configuration (default, ENet, ASan+UBSan, and both
-target games).
+**There is no build- or test-breaking blocker, and no more BLOCKED design questions.** Everything
+builds, all 156 committed `Test_*` checks pass (65 directplay + 53 directdraw + 30 directsound + 8
+ENet, opt-in), plus 4 header-level checks, across every verified configuration (default, ENet,
+ASan+UBSan, ASan+UBSan+ENet combined, and both target games).
 
-The DirectPlay design fork described in prior sessions is **unchanged** — all 7 standing BLOCKED
-design questions (DPID-0 broadcast semantics, ENet host discovery, LAN discovery, host routing,
-player names, duplicate-player semantics, player-lost state) still need a human decision. This
-session deliberately did not touch any of them, per explicit instruction - see
-`docs/directplay-limitations.md`'s dedicated section for all 7 listed together with citations.
+**The DirectPlay design fork described in every prior session is now resolved.** All 7 standing
+BLOCKED design questions (DPID-0 broadcast semantics, ENet host discovery, LAN discovery, host
+routing, player names, duplicate-player semantics, player-lost state) were presented to the user
+via `AskUserQuestion` this session (never decided unilaterally), and the user chose real
+implementation for 4 of them (broadcast+routing, ENet host discovery, LAN discovery) and "not
+needed" for the other 3 (player names, duplicate-player, player-lost state). All are now recorded
+as `docs/directplay-design.md` Decisions 20-26 and, for the 4 requiring code, implemented and
+tested (`TASK-24H-0148`/`0149`/`0150`).
 
-**What's different now**: 74 more tasks closed, two real memory-safety/UB bugs found and fixed via
-systematic sweeps (one manual, one sanitizer-driven), one stale task premise caught and corrected
-rather than blindly executed, one real documentation math error (GUID wire size) caught before
-publishing, both target games freshly re-verified building clean, and - the last item -
-`DirectPlayEnumerateA`/`W` implemented for real per Decision 1's already-decided shape.
-**Zero safe TODO tasks remain in the entire 147-task backlog.**
+**What's different now**: broadcast (`idTo == DPID_ALLPLAYERS`) works for real, with host-side
+relay so non-host peers can reach each other; ENet joining is wired via
+`FREE_DIRECT_ENET_HOST_ADDRESS`; real LAN discovery exists via a new raw-UDP
+`DirectPlayDiscoveryService`, built on ENet's own portable socket primitives. Two more real bugs
+were found and fixed in this session's own newly-written test code (a dangling-pointer read past a
+callback's documented lifetime, and two tests that were written but never registered so they
+silently never ran) - both caught by actually running the tests, not assumed passing.
+**Zero TODO tasks remain in the entire 150-task backlog.**
 
 **Minor, unchanged**: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` still unexercised in this environment (no
 system `libenet` package) - the vendored `third_party/enet` path is the one actually verified.
 
 ## 5. Known bugs and limitations
 
-**DirectPlay** (updated this session):
-- **Confirmed by test**: a hosting process's real broadcast call (`Send(m_dpid, 0, ...)`,
-  `free-eggbert`'s only reachable `Send()` pattern) collides with self-send because the host's own
-  DPID is also 0 (Decision 3) — proven by `Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf`.
-  Blocked on a human decision (`TASK-24H-0131`) — do not resolve unilaterally.
-- ENet joining/discovery, host routing, player names, duplicate-player/player-lost semantics — all
-  unchanged, all either BLOCKED or not started. See Section 8, Track B, and
-  `docs/directplay-limitations.md`'s dedicated section for all 7 together.
+**DirectPlay** (all 7 Track B questions resolved this session - see Section 3, item 14, and
+`docs/directplay-design.md` Decisions 20-26):
+- **Fixed, not just documented**: the host's real broadcast call (`Send(m_dpid, 0, ...)`,
+  `free-eggbert`'s only reachable `Send()` pattern) no longer collides with self-send - `idTo ==
+  DPID_ALLPLAYERS` (`0`) is now checked first and always means broadcast (Decision 20), with
+  host-side relay so non-host peers can reach each other too (Decision 21). The old
+  characterization test proving the collision was rewritten (not deleted) to prove the fix.
+- ENet joining is wired via `FREE_DIRECT_ENET_HOST_ADDRESS` (Decision 22); real LAN discovery
+  exists via `DirectPlayDiscoveryService` (Decision 23, raw UDP on ENet's own portable sockets).
+- Player names, duplicate-player detection, and a distinct player-lost state were all decided
+  **not needed** (Decisions 24/25/26) - no code changes, `IDirectPlay2A`'s public surface is
+  unchanged by these three.
 - **Two new findings this session, both in `docs/directplay-limitations.md` now**:
   - `DPESC_TIMEDOUT`: `free-eggbert`'s `EnumSessionsCallback` really does check this flag (contrary
     to `TASK-24H-0022`'s own original, now-corrected, evidence), but FreeDirect's `EnumSessions()`
     is a synchronous registry lookup that never sets it - the check is real but unreachable from
     FreeDirect's side today. Not a bug: enumeration still terminates normally via `DP_OK`.
   - `DPSESSION_KEEPALIVE`/`DPSESSION_MIGRATEHOST`: `free-eggbert` really does set both when hosting,
-    but `Open()` never reads `DPSESSIONDESC2::dwFlags` at all - silently ignored. Consistent with
-    host migration being entangled with the still-open "host routing"/"player-lost state" BLOCKED
-    questions, not a new contradiction.
+    but `Open()` never reads `DPSESSIONDESC2::dwFlags` at all - silently ignored. Host **migration**
+    (electing a new host if the original leaves) is a distinct, still-unimplemented feature from
+    host **message routing** (relaying between two non-host peers, now implemented via Decision 21)
+    - resolving Track B did not include a migration decision; this remains open but was not one of
+    the 7 questions asked.
 - **Fixed this session, not just documented**: `Send()`'s null-`lpData`-with-nonzero-size UB
   (pointer arithmetic on a null pointer), and `DirectPlayMessageQueue::TryReceive()`'s null-`src`
   `memcpy` UB for zero-length messages (found via ASan/UBSan). Both are real hardening of already-
   validated behavior, not new API surface.
+- A dangling-pointer read of `DPSESSIONDESC2::lpszSessionNameA` past its callback-only-valid
+  lifetime, found in this session's own new LAN-discovery test code (not the implementation) -
+  fixed by copying the string content during the callback, matching the existing correct pattern
+  already used by the loopback `EnumSessions` tests.
 
 **DirectDraw** (unchanged this session in substance; test coverage now complete for previously-gap
 areas):
@@ -379,23 +427,25 @@ No lint/format tooling is configured in this repository.
 ## 8. Next smallest tasks
 
 **Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **0**).
-Every safe task in the 147-task backlog is now DONE, including `TASK-24H-0100`
-(`DirectPlayEnumerateA`/`W`, closed after Track A's last item was picked up on request following
-this session's own final report). The only two items left anywhere in the backlog are:
-- `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not closeable without a
-  subprocess test harness this project doesn't have yet (see Section 5).
-- Track B, below (8 `BLOCKED` tasks, all need a human decision).
+Every task in the 150-task backlog is now DONE except one. The only item left anywhere in the
+backlog is `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not closeable without
+a subprocess test harness this project doesn't have yet (see Section 5).
 
-A future session picking this up has no safe backlog work left to do on autopilot - the next real
-progress requires either building the subprocess harness for `TASK-24H-0057`, or a human decision
-on one of Track B's 7 questions.
+**Track B — resolved.** All 7 questions (`TASK-24H-0091, 0131..0137`) were asked of, and answered
+by, the user this session via `AskUserQuestion` - never decided unilaterally. 4 got real
+implementation (DPID-0 broadcast/self-send semantics - Decision 20; host routing - Decision 21;
+ENet host-address resolution - Decision 22; LAN discovery - Decision 23), 3 were decided not
+needed (player names - Decision 24; duplicate-player definition - Decision 25; player-lost state -
+Decision 26). Full detail in `docs/directplay-design.md` Decisions 20-26;
+`docs/directplay-limitations.md` still has the pre-resolution deviation-table framing and is now
+somewhat superseded by the Decisions themselves for these 7 items specifically (not yet
+re-reconciled - a small follow-up documentation task, not tracked as its own `TASK-24H-XXXX` yet).
 
-**Track B — needs a human decision first** (`plan.md`'s 8 `BLOCKED` tasks,
-`TASK-24H-0091, 0131..0137`): DPID-0 broadcast/self-send semantics (proven, not just suspected -
-see Section 5), ENet host-address resolution, LAN discovery, host routing, player names,
-duplicate-player definition, player-lost state. All 7 questions are now also listed together, with
-citations, in `docs/directplay-limitations.md`'s dedicated section. Do not start any of these
-without asking.
+There is no more safe backlog work to pick up on autopilot, and no more BLOCKED questions either.
+A future session's only path to further progress is either building the subprocess harness for
+`TASK-24H-0057`, or identifying genuinely new work (a fresh call-site audit of either target game,
+a new user-driven feature request, or revisiting a "not needed" Decision if a concrete consumer
+need is later found - each of Decisions 24-26 documents exactly what would justify revisiting it).
 
 ## 9. Do not do yet
 
