@@ -4623,12 +4623,12 @@ cites Decision 3 and explains the direction of resolution in detail - confirmed 
 task's acceptance criteria exactly, no further edit needed.
 
 ### TASK-24H-0091: Add DPID_ALLPLAYERS and DPID_SYSMSG constants to include/dplay.h
-Status: BLOCKED
+Status: TODO
 Priority: P1
 Area: DirectPlay
 Type: Implementation
-Evidence: docs/audit-24h-free-direct.md §3 (constants absent; needed before broadcast can be implemented correctly); Decision 3/15
-Depends on: TASK-24H-0131 (blocked on DPID-0 broadcast-semantics decision)
+Evidence: docs/audit-24h-free-direct.md §3 (constants absent; needed before broadcast can be implemented correctly); Decision 3/15/20
+Depends on: TASK-24H-0131 (unblocked — see its own Verified note; Decision 20 recorded)
 
 Problem:
 Real DirectPlay reserves specific `DPID` values for `DPID_ALLPLAYERS`/`DPID_SYSMSG` broadcast/system
@@ -4637,16 +4637,19 @@ host's own player makes the natural value for `DPID_ALLPLAYERS` (0 in real Direc
 with a real player ID today.
 
 Required work:
-- Do not add these constants until TASK-24H-0131 resolves what DPID `0`/`DPID_ALLPLAYERS` actually
-  means under FreeDirect's semantics — adding the constant first would silently prejudge that
-  decision.
+- Unblocked: Decision 20 resolved DPID 0/`DPID_ALLPLAYERS` semantics (always broadcast, checked
+  before self-send). Add both constants (`DPID_ALLPLAYERS = 0`, `DPID_SYSMSG = 0`, matching real
+  DirectPlay) to `include/dplay.h`, folded into `TASK-24H-0148`'s broadcast implementation work
+  rather than as a standalone commit, since `DirectPlay.cpp`'s own broadcast check needs the named
+  constant to be useful at all.
 
 Acceptance criteria:
-- N/A until unblocked.
+- Both constants declared in `include/dplay.h` with accurate Doxygen comments; `DirectPlay.cpp`'s
+  new broadcast-detection code uses `DPID_ALLPLAYERS`, not a bare literal `0`.
 
 Out of scope:
 - Do not implement broadcast delivery using an assumed value for these constants before the design
-  question is resolved.
+  question is resolved. (Now resolved - see Decision 20.)
 
 ### TASK-24H-0092: Add a characterization test for the host DPID-0 self-send/broadcast collision
 Status: DONE
@@ -5881,7 +5884,7 @@ recorded so implementation can skip it and move to the next safe task, per this 
 policy.
 
 ### TASK-24H-0131: DECISION NEEDED — Is DPID 0 broadcast, host player, or invalid?
-Status: BLOCKED
+Status: DONE
 Priority: P0
 Area: DirectPlay
 Type: Verification
@@ -5907,8 +5910,13 @@ Acceptance criteria:
 Out of scope:
 - Do not implement any broadcast delivery logic before this is decided.
 
+Verified: Asked the user directly (not decided unilaterally). Decision: `idTo == 0` always means
+broadcast to every other player, checked before the self-send branch so it takes priority even for
+the host's own `Send(0, 0, ...)`. Recorded as `docs/directplay-design.md` Decision 20. Unblocks
+`TASK-24H-0091` and the new implementation task `TASK-24H-0148`.
+
 ### TASK-24H-0132: DECISION NEEDED — How does Open(...JOIN...) discover a host address for ENet?
-Status: BLOCKED
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Verification
@@ -5932,8 +5940,13 @@ Out of scope:
 - Do not implement ENet joining before this is decided. Do not add LAN broadcast discovery as an
   implicit answer to this question (see TASK-24H-0133 — that's a separate question).
 
+Verified: Asked the user directly. Decision: a new environment variable,
+`FREE_DIRECT_ENET_HOST_ADDRESS` (`"<host>"` or `"<host>:<port>"`), read once by `Open()`'s ENet
+joining branch. Recorded as `docs/directplay-design.md` Decision 22. Implementation:
+`TASK-24H-0149`.
+
 ### TASK-24H-0133: DECISION NEEDED — Should FreeDirect implement LAN broadcast discovery?
-Status: BLOCKED
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Verification
@@ -5953,8 +5966,15 @@ Acceptance criteria:
 Out of scope:
 - Do not implement any UDP broadcast/multicast code before this is decided.
 
+Verified: Asked the user directly, including the recommended "no, out of scope" default (no known
+`free-eggbert` call site reaches this path). The user chose **yes**, as a deliberate scope
+exception. Decision: raw UDP broadcast (not `ENetHost`) on a new dedicated discovery port
+(`51323`), using the already-defined `Discovery`/`DiscoveryResponse` wire packet types, additive to
+the existing loopback registry lookup. Recorded as `docs/directplay-design.md` Decision 23.
+Implementation: new task `TASK-24H-0150`.
+
 ### TASK-24H-0134: DECISION NEEDED — Should the host route messages between non-host peers?
-Status: BLOCKED
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Verification
@@ -5978,8 +5998,15 @@ Acceptance criteria:
 Out of scope:
 - Do not implement relay/forwarding logic before this is decided.
 
+Verified: Asked the user directly, alongside TASK-24H-0131 (the two are entangled - broadcast
+cannot reach non-host peers without relay). Decision: **yes**, the host relays a broadcast
+(`idTo == 0`) received from one peer to every other connected peer, and enqueues a copy for itself.
+Recorded as `docs/directplay-design.md` Decision 21, sharing implementation task `TASK-24H-0148`
+with Decision 20 (not meaningfully separable - broadcast delivery for a non-host sender requires
+this relay to reach anyone at all).
+
 ### TASK-24H-0135: DECISION NEEDED — Should player names be stored and exposed?
-Status: BLOCKED
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Verification
@@ -6004,8 +6031,13 @@ Acceptance criteria:
 Out of scope:
 - Do not add a new public method to `include/dplay.h` before this is decided.
 
+Verified: Asked the user directly. Decision: do not store player names, and do not add a new
+`GetPlayerName`-style method. Recorded as `docs/directplay-design.md` Decision 24. No code change
+required - `CreatePlayer()`'s existing behavior (accept but don't retain `lpPlayerName`) already
+matches this decision.
+
 ### TASK-24H-0136: DECISION NEEDED — What defines a "duplicate" player for CreatePlayer validation?
-Status: BLOCKED
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Verification
@@ -6026,8 +6058,12 @@ Acceptance criteria:
 Out of scope:
 - Do not guess at a definition and implement speculative validation.
 
+Verified: Asked the user directly. Decision: no duplicate-player detection is added - current
+collision-free-by-construction DPID allocation is sufficient. Recorded as
+`docs/directplay-design.md` Decision 25. No code change required.
+
 ### TASK-24H-0137: DECISION NEEDED — Is a distinct "player-lost" state needed, separate from clean removal?
-Status: BLOCKED
+Status: DONE
 Priority: P2
 Area: DirectPlay
 Type: Verification
@@ -6049,6 +6085,132 @@ Acceptance criteria:
 
 Out of scope:
 - Do not implement a new state enum value before this is decided.
+
+Verified: Asked the user directly. Decision: no distinct player-lost state is added - a
+disconnected remote player is removed uniformly regardless of whether the disconnect was clean or
+abrupt. Recorded as `docs/directplay-design.md` Decision 26. No code change required.
+
+## Post-decision implementation (Track B unblocked)
+
+Three new atomic tasks, added per TASK-24H-0131/0132/0133/0134's own acceptance criteria ("only
+then should implementation proceed... a new task is added"), now that the user has made all 4
+underlying decisions (Decisions 20-23, `docs/directplay-design.md`).
+
+### TASK-24H-0148: Implement real broadcast (idTo==0) delivery with host-side relay
+Status: TODO
+Priority: P0
+Area: DirectPlay
+Type: Implementation
+Evidence: docs/directplay-design.md Decisions 20/21; TASK-24H-0131/0134
+Depends on: TASK-24H-0131, TASK-24H-0134 (both DONE - decisions recorded)
+
+Problem:
+`Send(idFrom, 0, ...)` is `free-eggbert`'s only reachable call pattern, intended as a broadcast to
+every other player, but today only reaches the sender itself (self-send collision) for a host, and
+returns `DPERR_INVALIDPLAYER` unconditionally for a joining role. Decisions 20/21 resolved how this
+should work; this task implements it.
+
+Required work:
+- Add `DPID_ALLPLAYERS`/`DPID_SYSMSG` constants to `include/dplay.h` (`TASK-24H-0091`).
+- `DirectPlay.cpp`'s `Send()`: add a broadcast branch, checked before the `idTo == idFrom` self-send
+  branch, for `idTo == DPID_ALLPLAYERS`. Hosting role: iterate `remotePlayerIds`, addressed
+  `transport->Send()` to each (no self-delivery to the host's own queue). Joining role: send to the
+  single `hostPeer_` connection with the wire header's `idTo` left at `DPID_ALLPLAYERS` (the relay
+  marker, not a real address).
+- `DirectPlay.cpp`'s `Receive()` drain loop, `Data` case: when `session_.isHost` and
+  `header->idTo == DPID_ALLPLAYERS`, enqueue a copy locally *and* relay (addressed `transport->Send()`)
+  to every `remotePlayerIds` entry except the one matching `header->idFrom` (the original sender).
+- Update `TASK-24H-0092`'s characterization test (`Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf`)
+  - its own premise (the collision) is exactly what this task fixes, so its assertion is now wrong;
+  rename/rewrite it to assert the new, correct broadcast behavior rather than leaving it stale.
+
+Acceptance criteria:
+- New tests: a host broadcasting reaches every connected remote client and not its own queue; a
+  joining client broadcasting is relayed by the host to every *other* connected client (not back to
+  the sender) and also reaches the host's own queue; a two-remote-client fan-out scenario. All pass.
+- `TASK-24H-0092`'s test is updated, not left asserting stale (now-false) behavior.
+- Existing 63+ `directplay_tests` still pass unaffected.
+- Verified through a real build+test run (default and ASan+UBSan) plus a `../free-eggbert` rebuild.
+
+Out of scope:
+- ENet-side broadcast/relay (loopback-first, matching this project's established pattern - Decisions
+  10-19 all did loopback before ENet) - only add it here if it falls out naturally from reusing
+  Decision 14's existing per-DPID `Send()`, which already works for both backends; do not invent new
+  ENet-specific relay code in this task if the shared `DirectPlay.cpp` logic already covers it.
+
+### TASK-24H-0149: Wire ENet joining Open() to a host address via FREE_DIRECT_ENET_HOST_ADDRESS
+Status: TODO
+Priority: P1
+Area: DirectPlay
+Type: Implementation
+Evidence: docs/directplay-design.md Decision 22; TASK-24H-0132
+Depends on: TASK-24H-0132 (DONE - decision recorded)
+
+Problem:
+The ENet backend's joining role is completely unwired - `Open(..., DPOPEN_JOIN)` never calls
+`Connect()` at all under `FREE_DIRECT_ENABLE_ENET`, because there was no way to learn a host
+address. Decision 22 resolved this; this task implements it.
+
+Required work:
+- `DirectPlay.cpp`'s `Open()`, ENet branch (`#ifdef FREE_DIRECT_ENABLE_ENET`), joining case: read
+  `FREE_DIRECT_ENET_HOST_ADDRESS` via `SDL_getenv`; parse an optional trailing `:<port>` (default
+  `kDefaultDirectPlayEnetPort` if absent); call `transport->Connect(host, port)`; return
+  `DPERR_NOSESSIONS` if the env var is unset or `Connect()` fails.
+- Send the existing `Join` wire packet (Decision 16) after a successful `Connect()`, matching the
+  loopback path's existing shape exactly.
+
+Acceptance criteria:
+- New test in `tests/enet_directplay_tests.cpp` (gated `FREE_DIRECT_ENABLE_ENET`): a real two-instance
+  ENet join using the env var succeeds; an unset env var returns `DPERR_NOSESSIONS` without crashing.
+- Verified through a real ENet-enabled build+test run.
+
+Out of scope:
+- LAN discovery (TASK-24H-0150) - this task only wires a manually-supplied address.
+- GUID-mismatch validation on join (Decision 16's own already-recorded "deliberately still out of
+  scope").
+
+### TASK-24H-0150: Implement LAN UDP broadcast discovery for ENet-hosted sessions
+Status: TODO
+Priority: P2
+Area: DirectPlay
+Type: Implementation
+Evidence: docs/directplay-design.md Decision 23; TASK-24H-0133
+Depends on: TASK-24H-0133 (DONE - decision recorded), TASK-24H-0149 (host address wiring should land first)
+
+Problem:
+`EnumSessions()` only ever sees loopback-hosted sessions; an ENet-hosted session on another
+process/machine is completely invisible to it. Decision 23 resolved that this should be fixed with
+real UDP broadcast discovery; this task implements it.
+
+Required work:
+- New fixed constant `kDefaultDirectPlayDiscoveryPort = 51323` (`EnetDirectPlayTransport.hpp` or a
+  new small private header), distinct from the existing ENet (`51321`) and loopback (`51322`) ports.
+- Hosting role (ENet): open a dedicated `SO_BROADCAST`-enabled, non-blocking UDP socket on the
+  discovery port; `Receive()`'s existing `Service()` call polls it for an inbound `Discovery`
+  packet and replies (unicast) with a `DiscoveryResponse` carrying the session's real
+  `applicationGuid`/`guidInstance`/`dwMaxPlayers`/`dwCurrentPlayers`/name, when the request's
+  `applicationGuid` matches (or is the zero/wildcard GUID).
+- `EnumSessions()` (ENet-enabled builds): after the existing loopback-registry lookup, additionally
+  broadcast one `Discovery` packet to `INADDR_BROADCAST` on the discovery port and collect
+  `DiscoveryResponse` replies for up to `dwTimeout` milliseconds (`dwTimeout == 0` means "no wait,
+  return whatever arrived immediately" - never block indefinitely), invoking the callback once per
+  distinct responding host and honoring an early `FALSE` return.
+- Raw UDP sockets, not `ENetHost`/`ENetPeer` - keep this channel's failure modes independent of the
+  peer-connection state machine (Decision 23's own rationale).
+
+Acceptance criteria:
+- New tests in `tests/enet_directplay_tests.cpp`: a real host responds to a real `Discovery`
+  broadcast with an accurate `DiscoveryResponse`; `EnumSessions()` over ENet finds a real
+  ENet-hosted session on a hardcoded loopback-adjacent test address; a non-matching
+  `applicationGuid` filter excludes a session, matching the loopback path's existing filter
+  semantics.
+- Verified through a real ENet-enabled build+test run. `dwTimeout` handling verified not to block
+  the test suite indefinitely (bounded, deterministic).
+
+Out of scope:
+- Real multi-interface/subnet detection - `INADDR_BROADCAST` only (Decision 23's own explicit
+  scope boundary).
+- Any change to the loopback backend's existing `EnumSessions()` behavior (Decision 18, unaffected).
 
 ## Integration
 

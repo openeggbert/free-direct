@@ -1643,3 +1643,317 @@ only calls `Listen()` for the hosting role over ENet); the join-request/accepted
 ENet (Decision 16 is loopback-only); `EnumSessions()` discovering an ENet-hosted session (Decision
 18 is loopback-only); how a joining ENet call resolves a host address (flagged as a separate,
 still-open question since Decision 5).
+
+---
+
+## Decision 20: `idTo == 0` always means broadcast to every other player, never "unicast to the player whose DPID happens to be 0"
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0131, the
+project's single highest-priority BLOCKED question). Not yet implemented as of this decision being
+recorded - implementation is TASK-24H-0148, a new task added by this decision, per TASK-24H-0131's
+own acceptance criteria ("only then should broadcast implementation... proceed" as separate work).
+
+### The question
+
+`free-eggbert`'s only reachable `Send()` call pattern (`src/network.cpp:254`,
+`m_pDP->Send(m_dpid, 0, !!dwFlags, ...)`) always targets `idTo == 0`, intending real DirectPlay's
+`DPID_ALLPLAYERS` broadcast convention. But Decision 3 already assigned DPID `0` to the host's own
+first local player, to satisfy a different, also-real `free-eggbert` requirement (`event.cpp`'s
+`from == i` self-recognition comparison). Today this means the host's own broadcast call
+(`idFrom == idTo == 0`) collides with the self-send branch (Decision 12) and never reaches any
+remote client - proven by `TASK-24H-0092`'s characterization test,
+`Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf`.
+
+### Decision
+
+`idTo == 0` always means "broadcast to every other player in the session" - checked **before** the
+`idTo == idFrom` self-send branch, so it takes priority even for the one case where they could
+otherwise both match (the host's own `Send(0, 0, ...)`, since the host's DPID is always `0`).
+Broadcast never loops back to the sender - the sender does not receive its own broadcast message a
+second time. This makes `DPID` `0` unambiguous in practice despite nominally serving two roles
+(Decision 3's "a real player's ID" and this decision's "the broadcast target marker"): a caller can
+never legitimately want to `Send()` an addressed unicast *to* DPID `0` specifically, because DPID
+`0` is always the host, and nothing in either target game's real call sites ever attempts to
+address the host by DPID at all (the one real `Send()` pattern always uses literal `0` meaning
+broadcast, never a variable holding the host's actual assigned id).
+
+Both `DPID_ALLPLAYERS` and `DPID_SYSMSG` (both literally `0` in real DirectPlay, per Decision 3's
+own citation of `../free-eggbert/dxsdk3/sdk/inc/dplay.h:56,61`) are added to `include/dplay.h` as
+named constants (`TASK-24H-0091`, unblocked by this decision) - `DPID_ALLPLAYERS` for this
+decision's own use in `DirectPlay.cpp`'s internal broadcast check, `DPID_SYSMSG` alongside it for
+API-shape completeness (matching this project's existing precedent of declaring known-real
+DirectPlay constants without an active call site, e.g. `DDBLT_ROTATIONANGLE`,
+`DPSESSION_KEEPALIVE`) - no system-message mechanism exists to actually send anything with
+`DPID_SYSMSG` as its `from` value, and none is being added by this decision.
+
+### Consequence for host routing
+
+A host receiving a broadcast is straightforward (it directly holds every remote player's
+transport-level connection, Decision 7). A **joining** player's broadcast is not - a joining
+session has exactly one connection, to the host (Decision 10/13's `hostPeer_`/`IsConnectedToHost`
+model) - so a joining player's broadcast can only ever *reach* the host directly; delivering it to
+every *other* joining player requires the host to relay it. This is Decision 21's job, decided
+alongside this one in the same conversation, not an independent later question.
+
+### Implemented
+
+See Decision 21's "Implemented" section - the two decisions share one implementation task
+(`TASK-24H-0148`) since broadcast delivery for a non-host sender is not meaningfully separable from
+host-side relay; splitting them would mean shipping a broadcast primitive that provably cannot
+reach other players for the one call pattern (`free-eggbert`'s) both games actually need.
+
+---
+
+## Decision 21: the host relays broadcast (and, by the same mechanism, could address-relay) messages between non-host peers
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0134),
+answered together with Decision 20 in the same conversation - the two were presented as related
+questions precisely because Decision 20 alone cannot deliver a non-host sender's broadcast to
+anyone but the host without this decision.
+
+### The question
+
+Today, `EnetDirectPlayTransport`/`LoopbackDirectPlayTransport` both give a joining instance exactly
+one connection (to the host); a joining player has no direct path to any other joining player.
+Should the host relay messages between non-host peers (star-topology relay), given the one
+confirmed real call pattern is a broadcast, not a peer-targeted send?
+
+### Decision
+
+Yes. When the host's `Receive()` drain loop (Decision 15/16) processes an incoming `Data`-typed
+wire packet from a connected peer whose header has `idTo == 0` (`DPID_ALLPLAYERS`, Decision 20),
+the host:
+1. Enqueues a copy into its own `session_.messageQueue` (the host is itself a legitimate broadcast
+   recipient, distinct from being "the sender" - Decision 20's "never loops back to the sender"
+   rule refers to the original sender, not the host acting as relay/recipient).
+2. Re-sends the same payload, addressed individually via `transport->Send(targetId, ...)`
+   (Decision 14), to every entry in `session_.remotePlayerIds` **except** the peer whose DPID
+   matches the packet's own `header->idFrom` (the original sender - never echoed back to itself).
+
+This reuses Decision 14's existing per-DPID-addressed `Send()` capability directly - no new
+transport-level primitive is needed, only new policy in `DirectPlay.cpp`'s `Receive()`. A
+genuine multi-hop concern (does the relayed copy get re-relayed again if the recipient is somehow
+also treated as "hosting") does not apply: only the actual host (`session_.isHost`) ever runs this
+relay logic, and a non-host peer's `Receive()` never inspects `idTo` for relay purposes at all - it
+simply enqueues whatever a `Data` packet contains addressed to it, exactly as before.
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`: `Send()` gains a broadcast branch, checked before the self-send
+branch, handling both roles:
+- **Hosting role**: iterates `session_.remotePlayerIds`, calling `session_.transport->Send(id, ...)`
+  for each (mirroring the existing unicast path's wire serialization) - the host's own copy is
+  *not* separately enqueued here (Decision 20: broadcast never loops back to its own sender, and
+  the host is the sender in this branch).
+- **Joining role**: addresses the single `hostPeer_` connection with `idTo` left at `0` in the wire
+  header (not resolved to any specific DPID - it is the *marker*, not an address) so the receiving
+  host's `Receive()` drain loop (below) recognizes it as needing relay.
+
+`Receive()`'s drain loop's `Data` case now checks `header->idTo == 0` (only meaningful/acted-on
+when `session_.isHost`): if so, enqueues locally *and* relays to every other `remotePlayerIds`
+entry as described above, instead of the previous unconditional single local enqueue. A non-host
+receiver's handling of an incoming `Data` packet is unchanged (always enqueued locally - a
+non-host process only ever receives packets the host already addressed or relayed to it
+specifically).
+
+`TASK-24H-0092`'s characterization test, `Test_HostSendToDpidZero_CurrentlyOnlyReachesSelf`, is
+**superseded, not deleted** - its own premise (the collision) is exactly what this decision fixes,
+so leaving its assertion unchanged would make it fail; renamed and rewritten to
+`Test_HostBroadcast_ReachesAllRemoteClientsNotSelf`, asserting the new, correct behavior, with a
+comment explaining the supersession and citing this Decision.
+
+New committed tests (`tests/directplay_tests.cpp`): a host broadcasting reaches every connected
+remote client and not its own queue; a joining client broadcasting is relayed by the host to every
+*other* connected client (not back to the sender) and also reaches the host's own queue; a
+two-remote-client scenario proving relay fan-out to more than one recipient. **Verified for real**:
+full build+test matrix (default, ASan+UBSan, both target games) - see the commit history for exact
+pass counts at the time this landed.
+
+---
+
+## Decision 22: ENet host address for a joining `Open(DPOPEN_JOIN)` is read from an environment variable
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0132).
+Implementation: `TASK-24H-0149`.
+
+### The question
+
+`DPSESSIONDESC2` has no address-like field (Decision 5 already established this for the hosting
+port; the identical problem blocks a joining `Connect()` call over ENet). How does a joining
+process learn which host to connect to?
+
+### Decision
+
+A new environment variable, `FREE_DIRECT_ENET_HOST_ADDRESS`, read once by `Open(..., DPOPEN_JOIN |
+DPOPEN_OPENSESSION)`'s ENet branch. Accepted formats: `"<host>"` (uses
+`kDefaultDirectPlayEnetPort`, Decision 5's existing `51321`) or `"<host>:<port>"` (explicit port).
+Chosen over a new FreeDirect-specific `IDirectPlay`-adjacent API (rejected: new public API surface
+for a single environment-configuration need, when an env var already matches this project's
+existing convention for exactly this class of "FreeDirect-internal mechanism with no real
+DirectPlay equivalent" choice - see Decisions 4/5's identical reasoning) and over a fixed
+`127.0.0.1`-only convention (rejected: works for same-machine testing only, not real network play,
+which is the whole point of the ENet backend existing at all).
+
+Missing/unset `FREE_DIRECT_ENET_HOST_ADDRESS` when attempting an ENet join is not a new error
+condition to invent - `Connect()` is simply never called, and `Open()` returns `DPERR_NOSESSIONS`
+(the existing "could not find/reach a session" code, already used by the loopback path for the
+equivalent "nothing is there" case, Decision 11).
+
+### Implemented
+
+`src/directplay/DirectPlay.cpp`: `Open()`'s ENet branch (`#ifdef FREE_DIRECT_ENABLE_ENET`), joining
+case: reads `FREE_DIRECT_ENET_HOST_ADDRESS` via `SDL_getenv`, parses an optional trailing
+`:<port>`, calls `transport->Connect(host, port)`, returning `DPERR_NOSESSIONS` on a missing env
+var or a failed `Connect()`. Sends the same `Join` wire packet the loopback path already sends
+post-`Connect()` (Decision 16), unchanged. **Verified for real**: a real two-process (or two-thread
+test-harness) ENet connect using the env var, gated behind `FREE_DIRECT_ENABLE_ENET` -
+`tests/enet_directplay_tests.cpp`.
+
+---
+
+## Decision 23: LAN session discovery via UDP broadcast `Discovery`/`DiscoveryResponse` packets, `EnumSessions()`'s `dwTimeout` finally given real meaning for the ENet backend
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0133) -
+chosen over the "not needed" default this document's own earlier drafting recommended, since no
+`free-eggbert` call site currently reaches this path. The user chose to implement it anyway, as a
+deliberate scope exception per `CLAUDE.md`'s own ask-first process (this is exactly that ask, and
+exactly that answer). Implementation: `TASK-24H-0150`.
+
+### The question
+
+`EnumSessions()` (Decision 18) only ever sees loopback-hosted sessions via its in-process registry;
+an ENet-hosted session run by a different process, potentially on a different machine, is
+completely invisible to it. Should FreeDirect implement real LAN discovery so `EnumSessions()` can
+find such sessions?
+
+### Decision
+
+Yes. `DirectPlayWirePacketType::Discovery`/`DiscoveryResponse` (defined since Phase 5, unused until
+now, see `docs/directplay-protocol.md`) are given real behavior, ENet-only:
+
+- **Hosting** (`FREE_DIRECT_ENABLE_ENET`, `session_.isHost`): in addition to the existing
+  `Listen()`ed peer-connection socket, the host also owns a second, dedicated UDP socket bound to
+  `kDefaultDirectPlayDiscoveryPort` (a new fixed constant, `51323` - chosen adjacent to but distinct
+  from `kDefaultDirectPlayEnetPort`, `51321`, and the loopback backend's `kDefaultDirectPlayLoopbackPort`,
+  `51322`) in `SO_BROADCAST`-enabled, non-blocking mode. `Receive()`'s existing `Service()` call
+  (Decision 6) additionally polls this socket for an inbound `Discovery` packet and, if the packet's
+  `applicationGuid` matches (or the discovery request carries a zero/wildcard GUID), replies
+  directly (unicast UDP, not broadcast) to the requester's source address with a `DiscoveryResponse`
+  carrying the same session fields `EnumSessions()`'s loopback path already reports
+  (`applicationGuid`/`guidInstance`/`dwMaxPlayers`/`dwCurrentPlayers`/session name).
+- **Enumerating** (`FREE_DIRECT_ENABLE_ENET`, any role): `EnumSessions()` sends one UDP broadcast
+  `Discovery` packet to the LAN broadcast address on `kDefaultDirectPlayDiscoveryPort`, then
+  collects `DiscoveryResponse` replies for up to `dwTimeout` milliseconds (the parameter's first
+  real use anywhere in this codebase - every prior backend answered synchronously, Decisions 10/18),
+  invoking the caller's callback once per distinct responding host, honoring an early `FALSE` return
+  exactly as the loopback path already does. `dwTimeout == 0` is treated as "no wait, return
+  whatever arrived immediately" rather than "wait forever" - matching this project's consistent
+  preference (Decisions 6/16) for never blocking a caller indefinitely on network I/O with no
+  cancellation path.
+- This is **additive** to, not a replacement for, Decision 18's loopback registry lookup:
+  `EnumSessions()` still checks the loopback registry first (instant, synchronous, unaffected by
+  this decision) and only performs the UDP broadcast round-trip when `FREE_DIRECT_ENABLE_ENET` is
+  compiled in, reporting the union of both sources.
+
+Raw UDP broadcast sockets (not an `ENetHost`) are used for the discovery channel specifically,
+kept separate from the peer-connection `ENetHost`/`ENetPeer` machinery entirely - broadcasting to
+`ENET_HOST_BROADCAST` addresses an actual ENet connection attempt at every host on the subnet
+simultaneously, which is a fundamentally different (and, for a stateless "is anyone here"
+announce/reply exchange, poorly-suited) mechanism than a real connection handshake. A plain
+best-effort UDP datagram matches this exchange's actual shape (fire, wait briefly, collect zero or
+more replies) far better, and keeps the discovery channel's failure modes (a reply lost in transit)
+independent of `ENetHost`'s own connection-oriented state machine.
+
+### Explicitly out of scope
+
+Real subnet/broadcast-address detection across multiple network interfaces is not attempted -
+`INADDR_BROADCAST`/`255.255.255.255` is used, which reaches every host on the sender's default
+route's local subnet on ordinary consumer/LAN network configurations, matching what a real game's
+LAN-discovery feature is actually expected to support, without adding a general-purpose
+network-interface-enumeration dependency for a narrow, single-purpose broadcast.
+
+### Implemented
+
+See `TASK-24H-0150`'s own `plan.md` entry and `Verified:` note once landed - this Decision records
+the design; implementation follows as separate, trackable work per this project's "decide before
+implementing" pattern (Decisions 2-19 all followed the same split).
+
+---
+
+## Decision 24: player names (`DPNAME`) are not stored
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0135) -
+resolves Decision 17's own deferred "flagged, not implemented" item.
+
+### The question
+
+`free-eggbert` always supplies a real short player name to `CreatePlayer()`, but storing it today
+would be permanently unobservable dead state (`IDirectPlay2A` has no `GetPlayerName`-style method).
+Should FreeDirect add a new observability method as a deliberate scope exception, store the name
+anyway as currently-dead state, or not store it at all?
+
+### Decision
+
+Do not store player names. `CreatePlayer()`'s `lpPlayerName` parameter continues to be accepted
+(for signature compatibility and `dwSize` validation, unchanged) but not retained anywhere. No new
+public method is added to `include/dplay.h`. This closes `plan.md` Phase 9's corresponding
+checkbox as "confirmed not needed" (Decision 17 had already flagged this exact wording as
+requiring explicit user confirmation before being marked that way - this is that confirmation).
+
+### When this gets revisited
+
+Only if a future, more complete `free-eggbert` source audit finds a real reachable call site that
+actually queries a player's name back (none is known today - `docs/directplay-callsite-audit.md`
+§1 already confirms no `GetPlayerName`-equivalent call exists anywhere in the audited source).
+
+---
+
+## Decision 25: no duplicate-player detection in `CreatePlayer()`
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0136) -
+resolves Decision 17's own "Validate against duplicate players" finding (no concrete definition to
+implement against).
+
+### The question
+
+What would "duplicate" mean for `CreatePlayer()` validation, given DPID allocation is already
+collision-free by construction (Decision 3's sequential counter) and `free-eggbert` only ever calls
+`CreatePlayer()` once per `CNetwork` instance?
+
+### Decision
+
+No duplicate-player detection is added. `CreatePlayer()`'s existing validation (`dwSize`,
+`dwMaxPlayers` cap) is sufficient. This closes `plan.md` Phase 9's corresponding checkbox as
+"confirmed not needed, no concrete definition exists to validate against."
+
+### When this gets revisited
+
+Only if a future, more complete audit of `free-eggbert` (or a second target game with DirectPlay
+usage) surfaces an actual repeated-`CreatePlayer()`-call pattern with a concrete identity concept
+(e.g. a caller-supplied unique token) to validate against.
+
+---
+
+## Decision 26: no distinct "player-lost" state, separate from clean removal
+
+**Status:** Decided, asked of and confirmed by the user directly (`plan.md` TASK-24H-0137) -
+resolves Decision 17's own "player-lost state" finding (same observability wall as player names).
+
+### The question
+
+Real DirectPlay can report a player as abruptly "lost" (e.g. a connection timeout) distinctly from
+a clean, intentional removal. Does `free-eggbert`'s reachable code path need this distinction?
+
+### Decision
+
+No. `free-eggbert`'s current session-lifecycle handling (`docs/directplay-callsite-audit.md`) does
+not observe or branch on any such distinction, and the mechanism that would report it (a system
+message, Decision 17's same observability gap) does not exist. A disconnected remote player is
+removed from `session_.remotePlayerIds`/`session_.currentPlayers` uniformly (Decision 8's existing
+`TakeDisconnectedPeer` mechanism), regardless of whether the disconnect was clean or abrupt. This
+closes `plan.md` Phase 9's corresponding checkbox as "confirmed not needed."
+
+### When this gets revisited
+
+Only if a future, more complete `free-eggbert` source audit finds a reachable code path that
+actually branches on this distinction (none is known today).
