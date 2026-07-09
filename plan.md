@@ -7855,6 +7855,278 @@ usage; `TASK-24H-0181`, closing the last remaining `PARTIAL` item in the backlog
 
 ---
 
+## Maintainability hardening (2026-07-09, second follow-up)
+
+A dedicated maintainability audit (not correctness/performance/memory, which the earlier audits
+already covered) ran two parallel passes: one over `src/`/`include/` code itself, one over the
+surrounding test/build/documentation infrastructure. Two findings collided with either a standing
+project rule (`NEXT.md`'s "no broad refactor" default) or an unwritten-but-real convention (no
+shared test-helpers header) and were explicitly asked of the user via `AskUserQuestion` before any
+task was written — both were approved as scoped, behavior-preserving exceptions, not blanket
+policy changes.
+
+### TASK-24H-0183: Add DirectPlay debug logging matching DirectDraw/DirectSound's FREE_DIRECT_DEBUG_* pattern
+Status: TODO
+Priority: P2
+Area: DirectPlay
+Type: Implementation
+Evidence: follow-up maintainability audit (2026-07-09) — `DirectDraw.cpp` has 60 `DirectDrawLog(...)`
+call sites and `DirectSound.cpp` has 19 `DS_LOG(...)` call sites, both gated by the established
+`FREE_DIRECT_DEBUG_*`/`FREE_DIRECT_FORCE_DEBUG_*` mechanism (`IsDirectDrawDebugEnabled()`/
+`dsDebugEnabled()`, `DirectDraw.cpp:40-47`/`DirectSound.cpp:54`); `src/directplay/*.{cpp,hpp}` (9
+files) has zero logging calls of any kind. No `FREE_DIRECT_DEBUG_DPLAY` exists to reach for when
+debugging a DirectPlay issue, unlike the other two subsystems.
+Depends on: None
+
+Problem:
+DirectPlay is the one subsystem with no debug-observability path, and is also the subsystem most
+likely to need real debugging soon as `free-eggbert`'s decompilation progresses and its packet pump
+becomes reachable again (`docs/audit_dplay.md` §2/§4's decompilation-in-progress framing).
+
+Required work:
+- Add a `DirectPlayLog(...)`/`IsDirectPlayDebugEnabled()` pair in `src/directplay/DirectPlay.cpp`,
+  mirroring `DirectDraw.cpp`'s exact pattern (env-var check via `FREE_DIRECT_DEBUG_DPLAY`, plus an
+  `#ifdef FREE_DIRECT_DEBUG_DPLAY` compile-time override).
+- Add `DPLAY` to `CMakeLists.txt`'s `FREE_DIRECT_FORCE_DEBUG_*` `foreach` list (~line 131),
+  producing `FREE_DIRECT_FORCE_DEBUG_DPLAY` automatically via the existing mechanism.
+- Add log calls at the same granularity/decision points DirectDraw/DirectSound already use:
+  object creation/destruction, `Send()`/`Receive()` delivery-path selection (self-send/unicast/
+  broadcast; per-packet-type dispatch), `Open()`/`Close()` state transitions.
+- Update `README.md`'s "Debug logging and performance options" list to include the new flag,
+  matching how the existing 7 flags are documented there.
+
+Acceptance criteria:
+- New test(s) confirming `FREE_DIRECT_DEBUG_DPLAY` produces log output and its absence produces
+  none, mirroring the existing zero-log regression-test pattern already used for DirectDraw/
+  DirectSound's flags.
+- Verified the force-enable CMake option actually changes behavior (build with the flag on,
+  confirm the corresponding zero-log test now fails as expected), matching `TASK-24H-0119`/`0120`'s
+  own verification method.
+
+Out of scope:
+- Do not add logging to `LoopbackDirectPlayTransport`/`EnetDirectPlayTransport`/
+  `DirectPlayDiscoveryService` beyond what's needed to observe `DirectPlay2AImpl`'s own
+  `Open`/`Close`/`Send`/`Receive`/`CreatePlayer`/`EnumSessions` decision points — a full
+  per-transport logging pass is a separate, larger task if ever wanted.
+
+### TASK-24H-0184: Extract Send()/Receive()'s delivery paths into private helper methods (behavior-preserving)
+Status: TODO
+Priority: P2
+Area: DirectPlay
+Type: Implementation
+Evidence: follow-up maintainability audit (2026-07-09) — `DirectPlay2AImpl::Send()`
+(`DirectPlay.cpp`, ~145 lines) and `::Receive()` (~195 lines) are the two largest, most
+multi-purpose functions in the entire codebase, each stitching together three substantially
+different code paths (`Send`: self-send/unicast/broadcast-with-relay; `Receive`: per-packet-type
+dispatch across `Join`/`JoinAccept`/`Data`) in one function body — the single biggest complexity
+concentration in the codebase. User explicitly approved a behavior-preserving extract-method
+refactor for this via `AskUserQuestion` (2026-07-09), overriding the standing "no broad refactor"
+default for this one, scoped case.
+Depends on: None
+
+Problem:
+A future change to one `Send()`/`Receive()` delivery path requires reading past the other two
+unrelated paths in the same function body to be confident nothing was missed — the single biggest
+maintainability risk found in this session's code-level audit.
+
+Required work:
+- Extract `Send()`'s three delivery paths (self-send, unicast-to-one-assigned-remote-player,
+  broadcast-with-host-relay) into three private helper methods on `DirectPlay2AImpl`, each taking
+  the arguments it actually needs; `Send()` itself becomes a short dispatcher.
+- Extract `Receive()`'s per-packet-type handling (`Join`/`JoinAccept`/`Data`, plus the existing
+  drain-loop structure) into private helper methods similarly.
+- This is strictly "extract method": no behavioral change of any kind. Every existing test in
+  `tests/directplay_tests.cpp` and `tests/enet_directplay_tests.cpp` must pass completely
+  unchanged, with no test file edits required by this task.
+
+Acceptance criteria:
+- `git diff` shows only `DirectPlay.cpp` (and its own private header if a declaration split is
+  needed) changed — no test file edits.
+- Full existing test suite passes unchanged: default build `ctest`, ENet-enabled `ctest -L enet`,
+  ASan+UBSan build (to independently confirm the refactor introduced no new memory-safety issue).
+- Each extracted method is individually reasoned-about-able without needing to read the other
+  extracted methods' bodies.
+
+Out of scope:
+- Do not change `Send()`/`Receive()`'s external behavior, error codes, or the DPID/routing
+  semantics established by Decisions 14/15/20/21 in any way — this is purely an internal structure
+  change.
+- Do not extract or touch `DirectDraw.cpp`/`DirectSound.cpp` in this task, even though the same
+  "no broad refactor" question could theoretically apply there too — `DirectDraw.cpp`'s size was
+  flagged as a watch-item, not an approved refactor target; ask again separately if that becomes
+  worth doing.
+- Do not add new logging as part of this task even though `TASK-24H-0183` is landing nearby — keep
+  the two changes independent and separately reviewable/revertable.
+
+### TASK-24H-0185: Add a shared tests/TestHelpers.hpp, consolidating DirectDraw/DirectSound test scaffolding
+Status: TODO
+Priority: P2
+Area: Tests
+Type: Implementation
+Evidence: follow-up maintainability audit (2026-07-09) — `tests/integration_tests.cpp` duplicates
+~111 of its 304 lines (~36%) as near-identical copies of helper functions already in
+`tests/directdraw_tests.cpp`/`tests/directsound_tests.cpp` (`CreateDirectDrawNoWindow`,
+`CreateTestWindow`/`TestWindowProc`, `CreatePrimarySurface`, `CreateOffscreenSurface`,
+`ReadPresentedPixel`, `CreateDirectSoundNoWindow`, `CreatePcmBuffer`). This has already caused a
+real, silent divergence: `integration_tests.cpp`'s copy of `CreateOffscreenSurface` hardcodes
+`DDPF_RGB` unconditionally, dropping the `DDPF_PALETTEINDEXED8` 8-bit-surface support the original
+(`directdraw_tests.cpp`) provides via `(bpp == 8) ? DDPF_PALETTEINDEXED8 : DDPF_RGB`. Currently
+harmless only because no test in `integration_tests.cpp` happens to request an 8-bit offscreen
+surface. User explicitly approved introducing a shared header via `AskUserQuestion` (2026-07-09),
+reversing this project's prior no-shared-test-header convention for this specific, now-justified
+case.
+Depends on: None
+
+Problem:
+Three test binaries independently reimplement the same small set of DirectDraw/DirectSound
+scaffolding helpers, and the duplication has already produced one silent behavioral gap (the
+`CreateOffscreenSurface` bpp bug above) that happened to be harmless only by luck of which tests
+exist today.
+
+Required work:
+- Add a new private header, `tests/TestHelpers.hpp` (not installed, not part of `include/`,
+  matching this project's existing private-header conventions), containing the ~10 helper
+  functions currently duplicated across `tests/directdraw_tests.cpp`/`tests/directsound_tests.cpp`/
+  `tests/integration_tests.cpp`.
+- The consolidated `CreateOffscreenSurface` must use the correct, original
+  `(bpp == 8) ? DDPF_PALETTEINDEXED8 : DDPF_RGB` logic — this fixes `integration_tests.cpp`'s bug
+  as a natural consequence of consolidating onto the correct original, not as a separate patch.
+- Update `tests/directdraw_tests.cpp`, `tests/directsound_tests.cpp`, `tests/integration_tests.cpp`
+  to `#include "TestHelpers.hpp"` and remove their own now-duplicate local copies.
+- Update `tests/CMakeLists.txt` if any target needs a new include path for the shared header
+  (likely none, since it can live directly in `tests/` alongside the binaries that include it).
+
+Acceptance criteria:
+- All existing tests in all three files pass completely unchanged in behavior (same assertions,
+  same pass/fail outcomes) — this is a pure de-duplication, not a test-behavior change.
+- New test in `tests/integration_tests.cpp` (or confirmed via one of the existing files) exercising
+  an 8-bit offscreen surface through the now-shared, now-correct `CreateOffscreenSurface`, proving
+  the fix.
+- `grep` confirms no duplicate definition of any of the consolidated helper functions remains in
+  more than one `.cpp` file.
+
+Out of scope:
+- Do not consolidate `tests/directplay_tests.cpp`/`tests/enet_directplay_tests.cpp`'s own helpers
+  into this header — those test different interfaces (whitebox DirectPlay internals) with no
+  overlap with the DirectDraw/DirectSound helpers being consolidated here.
+- Do not use this header as a place to add new test-only production-code hooks or whitebox
+  accessors — it is purely a consolidation of existing black-box test scaffolding.
+
+### TASK-24H-0186: Replace plan.md's stale "Priority summary" section with a self-verifying pointer
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: follow-up maintainability audit (2026-07-09) — the "Priority summary" section
+(`plan.md`, near the end) stops at `TASK-24H-0147` ("New total: 147 atomic tasks"), with zero
+mention of any task from `0148` through `0182` — 35 tasks, ~19% of the entire backlog, including
+two full audit-hardening waves. A reader trusting this section for priority triage gets
+systematically incomplete information with no indication it's stale.
+Depends on: None
+
+Problem:
+A hand-maintained, duplicated summary of task priorities requires being kept in sync by hand every
+time tasks are added, and has demonstrably failed to be kept in sync across at least 5 batches of
+additions since it was last updated.
+
+Required work:
+- Replace the free-text "Priority summary" section's hand-maintained task-ID lists with a short
+  note pointing at the authoritative, always-accurate source: each task's own `Priority:` field,
+  queryable directly (e.g. `grep -B2 "^Priority: P0" plan.md | grep "^### TASK"`).
+- Keep a brief explanation of what P0/P1/P2/P3 mean (that part isn't a duplication risk, it's a
+  legend), but delete the enumerated, hand-maintained task-ID-list-per-priority body.
+
+Acceptance criteria:
+- `plan.md` no longer contains a task-ID list that can silently go stale relative to the real
+  `Status:`/`Priority:` fields.
+- The replacement note's suggested `grep` command actually works and returns a sensible result
+  when run.
+
+Out of scope:
+- Do not build tooling/scripting to auto-generate this section — a documented `grep` command is
+  sufficient at this project's current scale (per the infra audit's own explicit "don't recommend
+  enterprise-scale process for a project this size" framing).
+
+### TASK-24H-0187: Consolidate NEXT.md's duplicated task-count status fact to one source of truth
+Status: TODO
+Priority: P1
+Area: Docs
+Type: Documentation
+Evidence: follow-up maintainability audit (2026-07-09) — `NEXT.md`'s "182 DONE, 0 TODO, 0 PARTIAL,
+0 BLOCKED"-shaped fact is independently restated in at least 5 separate sections (1, 2, 4, 8, 10),
+with nothing enforcing consistency between them. This session's own edit history already produced
+one stale leftover sentence that survived an earlier edit pass in Section 1 and had to be caught
+and fixed separately — direct, current-session proof this drifts in practice, not a hypothetical.
+Depends on: None
+
+Problem:
+Every implementation batch requires manually updating this fact in 5+ places; a partial update
+risks leaving contradictory claims within the same file, which has already happened once this
+session.
+
+Required work:
+- Restructure `NEXT.md` so the task-count fact is stated prominently and completely exactly once
+  (recommend: a short "at a glance" line near the very top of Section 1), and every other section
+  that currently restates the exact counts instead references it ("see the count at the top of
+  this file" / "see Section 1") without repeating the numbers.
+- Apply this restructuring to the current, already-accurate 182/0/0/0 state as part of this task —
+  do not leave the file in a partially-migrated state.
+
+Acceptance criteria:
+- `grep` confirms the exact task-count phrase (or numbers) appears in exactly one place in the
+  resulting `NEXT.md`, with every other former restatement replaced by a cross-reference.
+- All of `NEXT.md`'s other content (Sections 3/5/6/7/9's substantive content, not just the count)
+  is preserved — this is a structural change to reduce duplication, not a content cut.
+
+Out of scope:
+- Do not apply the same restructuring to `plan.md`'s per-task `Status:`/`Priority:` fields — those
+  are not duplicated (each task has exactly one `Status:` line), this task is specifically about
+  the cross-section-duplicated summary counts in `NEXT.md` only.
+
+### TASK-24H-0188: Reconcile docs/directplay-limitations.md's deviation table with Decisions 20-27
+Status: TODO
+Priority: P2
+Area: Docs
+Type: Documentation
+Evidence: follow-up maintainability audit (2026-07-09) — `NEXT.md`'s own Section 8 already flags
+this: "`docs/directplay-limitations.md` still has the pre-resolution deviation-table framing and is
+now somewhat superseded by the Decisions themselves for these 7 items specifically (not yet
+re-reconciled...)". A known, self-acknowledged gap that's persisted across multiple sessions
+without being formalized as its own task until now.
+Depends on: None
+
+Problem:
+`docs/directplay-limitations.md`'s deviation table was written before Decisions 20-27 resolved the
+7 Track B questions (plus the new Decision 27); the table's entries for those 7 items may describe
+pre-resolution behavior rather than the real, current, Decision-driven behavior.
+
+Required work:
+- Read `docs/directplay-limitations.md`'s full deviation table against `docs/directplay-design.md`'s
+  Decisions 20-27 and update every table row whose described behavior was changed by one of those
+  Decisions, so the table accurately reflects current behavior.
+- Add a cross-reference from each updated row to the specific Decision number that changed it,
+  matching the existing citation style already used elsewhere in this file.
+
+Acceptance criteria:
+- No deviation-table row describes pre-Decision-20-27 behavior as if it were still current.
+- Every row affected by a Decision cites that Decision number.
+
+Out of scope:
+- Do not change `docs/directplay-design.md` itself — Decisions are a historical record of what was
+  decided and when, not to be rewritten; only `directplay-limitations.md`'s own table is in scope.
+- Do not attempt to resolve `docs/audit-24h-free-direct.md`'s separate, smaller overlap with
+  `docs/directplay-callsite-audit.md` in this task — that's a distinct, lower-priority finding from
+  the same audit; a separate task if ever pursued.
+
+**Update (2026-07-09, second follow-up)**: 6 more atomic tasks added, `TASK-24H-0183` through
+`TASK-24H-0188`, from a dedicated maintainability audit (code-level + infrastructure-level, run in
+parallel). Two required a user decision before being written at all (`TASK-24H-0184`'s
+extract-method refactor of `Send()`/`Receive()`, `TASK-24H-0185`'s new shared test-helpers header)
+and were resolved via `AskUserQuestion`, not assumed. New running total: **188 atomic tasks**
+(`TASK-24H-0001` through `TASK-24H-0188`).
+
+---
+
 ## Priority summary
 
 - **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,
