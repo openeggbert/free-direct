@@ -1,7 +1,7 @@
 # NEXT.md
 
-**At a glance (2026-07-09, updated after `TASK-24H-0184` closed the backlog)**: `plan.md` carries
-**188** atomic `TASK-24H-XXXX` tasks — **188 DONE, 0 TODO, 0 PARTIAL, 0 BLOCKED - every task in the
+**At a glance (2026-07-09, updated after `TASK-24H-0189` closed the backlog)**: `plan.md` carries
+**189** atomic `TASK-24H-XXXX` tasks — **189 DONE, 0 TODO, 0 PARTIAL, 0 BLOCKED - every task in the
 entire backlog is done** (`grep`-verified directly against `plan.md`, not estimated or recalled
 from memory). **This is the single authoritative count for this file — every other section below
 references it instead of restating the numbers**, per `TASK-24H-0187` (a prior version of this
@@ -649,10 +649,20 @@ system `libenet` package) - the vendored `third_party/enet` path is the one actu
 
 **DirectDraw** (deep audit done 2026-07-09, `docs/audit_ddraw.md` - all 13 tasks
 `TASK-24H-0151`-`0163` now DONE, see below):
-- `GetDC`/`ReleaseDC` are documented `STUB` in the header but are functionally real - unchanged.
+- **Fixed this session (`TASK-24H-0189`)**: `include/ddraw.h`'s public `@note Status:` tags for
+  `GetDC`/`ReleaseDC` and `IsLost`/`Restore` had both drifted out of sync with
+  `src/directdraw/DirectDraw.cpp`'s own (correct) tags, in opposite directions -
+  `GetDC`/`ReleaseDC` were tagged `STUB` despite being functionally real (understated), while
+  `IsLost`/`Restore` were tagged `IMPLEMENTED` despite being honest inert stubs (overstated - the
+  more serious kind per `CLAUDE.md`'s Documentation Policy). Found via a systematic
+  header-vs-implementation status-tag sweep across all three public headers (only DirectDraw had
+  any mismatch; DirectSound and DirectPlay's method-level tags were all already consistent).
+  `GetDC`/`ReleaseDC` are now `IMPLEMENTED` (functionally real: real pixel-buffer wrapping, real
+  palette round-trip, exercised by `planetblupi`'s live per-click hit-test path); `IsLost`/`Restore`
+  are now `STUB` (matching their actual always-`DD_OK`-unconditionally behavior). Both corrected in
+  `README.md`'s Compatibility Status table and `docs/directdraw-limitations.md` too.
 - `Flip`, presentation throttle, and clipper one-time-init are tested (`TASK-24H-0046`/`0047`/
   `0050`-`0055`) - previously the largest DirectDraw test gap, closed in an earlier session.
-- `IsLost`/`Restore` remain honestly-documented inert stubs — unchanged, still test-locked.
 - **New finding, documented not fixed** (`docs/directdraw-limitations.md`, earlier session):
   `SetDisplayMode`'s `dwBPP` parameter is accepted/logged but never stored/used - the primary
   surface is always 32bpp. Currently latent for both target games; not fixed speculatively per

@@ -8258,12 +8258,86 @@ Corrected `NEXT.md`'s own stale claim (Section 8, Track B paragraph) to record w
 found rather than repeating the inaccurate "not yet re-reconciled" note. Documentation-only change
 to both files - no code or test files touched, no build/test run needed.
 
+### TASK-24H-0189: Fix DirectDraw header/implementation @note Status: tag inconsistencies
+Status: DONE
+Priority: P1
+Area: DirectDraw
+Type: Documentation
+Evidence: user asked directly, following a code-quality assessment question, to fix the
+`GetDC`/`ReleaseDC` header-vs-implementation status-tag mismatch already flagged (but never
+fixed) across multiple earlier documents - `docs/directdraw-limitations.md`'s own "GetDC/ReleaseDC:
+functionally real, documented STUB" section, `docs/audit_ddraw.md` §5.5 (explicitly cross-
+referencing the same, already-known finding), and `TASK-24H-0044`'s own `Verified:` note (an
+earlier session's explicit "no fix was needed" judgment call, being revisited here). A systematic
+sweep prompted by that fix found a second, more serious mismatch in the opposite direction.
+Depends on: None
+
+Problem:
+`include/ddraw.h`'s public `@note Status:` Doxygen tags for `GetDC`/`ReleaseDC` and `IsLost`/
+`Restore` had both drifted out of sync with `src/directdraw/DirectDraw.cpp`'s own tags for the same
+methods, in opposite directions: `GetDC`/`ReleaseDC` were tagged `STUB` despite being functionally
+real (understated compatibility); `IsLost`/`Restore` were tagged `IMPLEMENTED` despite being honest
+inert stubs (overstated compatibility - the more serious kind per `CLAUDE.md`'s Documentation
+Policy: "must never claim compatibility that does not exist"). The public header is the one most
+likely to actually be read by a future contributor, so a stale header tag is worse than a stale
+internal comment.
+
+Required work:
+- Change `include/ddraw.h`'s `GetDC`/`ReleaseDC` tags from `STUB` to `IMPLEMENTED`, matching
+  `DirectDraw.cpp`'s already-correct tags and the functionally-real behavior documented in
+  `docs/directdraw-limitations.md`.
+- Change `include/ddraw.h`'s `IsLost`/`Restore` tags from `IMPLEMENTED` back to `STUB`, matching
+  `DirectDraw.cpp`'s already-correct tags and the honest-inert-stub behavior already documented in
+  `docs/directdraw-limitations.md` (which had been describing the header as saying `STUB` for these
+  two - itself a stale claim once the header actually said `IMPLEMENTED`).
+- Update `README.md`'s Compatibility Status table entries for both pairs to match.
+- Update `docs/directdraw-limitations.md`'s two corresponding sections to describe the fix, not
+  just the prior state.
+- Systematically check `include/dsound.h`/`src/directsound/DirectSound.cpp` and the method-level
+  (not macro-group/typedef) tags in `include/dplay.h`/`src/directplay/DirectPlay.cpp` for the same
+  class of mismatch before considering this task complete, per `docs/audit_ddraw.md` §7's own
+  suggestion that this deserves a systematic check, not a one-off fix.
+
+Acceptance criteria:
+- `include/ddraw.h`, `README.md`, and `docs/directdraw-limitations.md` all agree with
+  `DirectDraw.cpp`'s own tags for `GetDC`/`ReleaseDC`/`IsLost`/`Restore`.
+- DirectSound and DirectPlay checked for the same pattern; any other genuine mismatch found is
+  either fixed in this same task (if trivial) or filed as a new task (if not).
+
+Out of scope:
+- `include/dplay.h`'s `@note Status: STUB` tags on macro/constant groups (`DPERR_*`, session/send
+  flags) and on type declarations (`DPNAME`, `DPSESSIONDESC2`, the three callback typedefs) are a
+  different, more ambiguous category - a `STUB`/`IMPLEMENTED`/`PARTIAL` tag naturally fits a
+  *method* (something with call-pattern-dependent behavior), not a struct layout or a `#define`
+  block, and assigning each of these a more granular status would require a real per-field/
+  per-constant judgment call, not a mechanical header-vs-implementation comparison. Left for a
+  separate task if ever pursued, not decided unilaterally here.
+
+Verified: fixed `include/ddraw.h`'s four tags as described. Systematically cross-checked every
+method-level status tag in `include/dsound.h` against `src/directsound/DirectSound.cpp` (7 pairs
+with an unqualified `IMPLEMENTED`/`PARTIAL` tag on both sides: `GetStatus`, `Stop`, `Lock`,
+`Unlock`, `SetCurrentPosition`, `SetCooperativeLevel`, `CreateSoundBuffer`) and found zero
+mismatches - DirectSound's tags were already fully consistent. Cross-checked every method-level tag
+in `include/dplay.h` against `src/directplay/DirectPlay.cpp` and found zero mismatches too (all
+already correctly reflect the extensive DirectPlay work done earlier this session - `QueryInterface`,
+`Send`, `Receive`, `Open`, `Close`, `EnumSessions`, `CreatePlayer`, `DirectPlayCreate`,
+`DirectPlayEnumerateA`/`W`). Confirmed the four `IDirectDrawSurface`/`IDirectDraw` `QueryInterface`
+implementations (`DirectDrawSurfaceImpl`, `DirectDrawPaletteImpl`, `DirectDrawClipperImpl`,
+`DirectDrawImpl`) are all genuine, unconditional-`DDERR_UNSUPPORTED` stubs by reading each one
+directly - their existing `STUB` tags are accurate, not a fifth mismatch. Updated `README.md` and
+`docs/directdraw-limitations.md` as described. This is a documentation-only change (four one-line
+Doxygen comments, two doc-file sections, two README table cells) - no production logic changed;
+verified `header_smoke_ddraw`/`header_hygiene` still pass (public header still compiles standalone,
+still leaks no internal-backend symbol) rather than assuming a comment-only change is automatically
+safe.
+
 **Update (2026-07-09, second follow-up)**: 6 more atomic tasks added, `TASK-24H-0183` through
 `TASK-24H-0188`, from a dedicated maintainability audit (code-level + infrastructure-level, run in
 parallel). Two required a user decision before being written at all (`TASK-24H-0184`'s
 extract-method refactor of `Send()`/`Receive()`, `TASK-24H-0185`'s new shared test-helpers header)
-and were resolved via `AskUserQuestion`, not assumed. New running total: **188 atomic tasks**
-(`TASK-24H-0001` through `TASK-24H-0188`).
+and were resolved via `AskUserQuestion`, not assumed. `TASK-24H-0189` was added and closed the same
+day, prompted by a direct user follow-up after a code-quality assessment question. New running
+total: **189 atomic tasks** (`TASK-24H-0001` through `TASK-24H-0189`).
 
 ---
 

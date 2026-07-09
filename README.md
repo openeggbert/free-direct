@@ -85,8 +85,8 @@ and omitted from the table for brevity.
 | `Flip` | IMPLEMENTED (simplified present) |
 | `SetClipper` | IMPLEMENTED |
 | `SetPalette` | IMPLEMENTED |
-| `IsLost` / `Restore` | IMPLEMENTED |
-| `GetDC` / `ReleaseDC` | STUB |
+| `IsLost` / `Restore` | STUB (always reports "not lost" / always succeeds) |
+| `GetDC` / `ReleaseDC` | IMPLEMENTED (not full GDI emulation) |
 | `Lock` / `Unlock` | IMPLEMENTED |
 
 See [docs/directdraw-limitations.md](docs/directdraw-limitations.md) for the full findings behind

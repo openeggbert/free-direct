@@ -81,29 +81,46 @@ matched color in the first place is a separate question from the range-compariso
 audited here, and depends on `GetDC`/`ReleaseDC` (see below) — the project's own highest-documented
 DirectDraw risk area, tracked separately.
 
-## GetDC/ReleaseDC: functionally real, documented STUB, highest-risk area
+## GetDC/ReleaseDC: functionally real, now correctly labeled IMPLEMENTED (was STUB, TASK-24H-0189)
 
-`GetDC`/`ReleaseDC` are tagged `STUB` in `include/ddraw.h`'s Doxygen comments, but are
-functionally real: for a 32-bit surface, `GetDC` wraps the surface's own pixel buffer directly (no
-copy) via `FreeApiCreateSurfaceDC`; for an 8-bit surface, it expands through a temporary
-palette-converted 32-bit buffer, converting back to nearest-palette-index on `ReleaseDC`.
-`planetblupi`'s `IsIconPixel` (a live per-click gameplay hit-test path, `pixmap.cpp:729-731`,
-called from `decblupi.cpp:3399`) depends on this. `tests/directdraw_tests.cpp`'s
+`GetDC`/`ReleaseDC` are functionally real: for a 32-bit surface, `GetDC` wraps the surface's own
+pixel buffer directly (no copy) via `FreeApiCreateSurfaceDC`; for an 8-bit surface, it expands
+through a temporary palette-converted 32-bit buffer, converting back to nearest-palette-index on
+`ReleaseDC`. `planetblupi`'s `IsIconPixel` (a live per-click gameplay hit-test path,
+`pixmap.cpp:729-731`, called from `decblupi.cpp:3399`) depends on this. `tests/directdraw_tests.cpp`'s
 `Test_GetDCReleaseDC_32Bit_SharesBackingPixelsWithLock` and
-`Test_SetPalette_AffectsGetDCColorExpansion` now cover the mechanism directly (though not
-`IsIconPixel` itself, which is game code). The `STUB` tag remains accurate in the sense of "not
-full GDI emulation," not "broken" — see `include/ddraw.h`'s own per-method comment.
+`Test_SetPalette_AffectsGetDCColorExpansion` cover the mechanism directly (though not `IsIconPixel`
+itself, which is game code).
+
+`include/ddraw.h`'s public Doxygen comments used to tag both methods `STUB`, even though the
+implementation file's own comments (`src/directdraw/DirectDraw.cpp`) already correctly said
+`IMPLEMENTED` - the public header, the one most likely to actually be read, had simply gone stale
+relative to the implementation. Fixed to `IMPLEMENTED` (`TASK-24H-0189`), with a parenthetical
+pointing back here: neither method emulates arbitrary GDI drawing operations on the returned `HDC`
+(no `LineTo`, no `TextOut`, etc. would do anything meaningful) - only the surface-buffer-wrapping/
+palette-round-trip pattern the two target games actually use is real, which is exactly this
+project's own definition of `IMPLEMENTED` ("real behavior for the subset this project targets"),
+not a remaining gap.
 
 ## IsLost/Restore: honest inert stub, not a bug
 
 `IsLost()` always returns `DD_OK` (never "lost"); `Restore()` always returns `DD_OK`
 unconditionally. Both games' `RestoreAll()` helper (called from ~8-9 sites per game, including
 every frame's `Display()`) is reachable but its `Restore()`-on-loss branch never fires, since
-`IsLost()` never reports loss. This is honestly documented as `STUB` in the header and locked in by
-`tests/directdraw_tests.cpp`'s `Test_IsLost_AlwaysReturnsNotLost`/`Test_Restore_ReturnsOkUnconditionally`
-as current, intentional behavior — no call site in either game has been shown to need real
-lost-surface recovery (this backend never loses surfaces the way a real GPU-backed DirectDraw
-device could).
+`IsLost()` never reports loss. Locked in by `tests/directdraw_tests.cpp`'s
+`Test_IsLost_AlwaysReturnsNotLost`/`Test_Restore_ReturnsOkUnconditionally` as current, intentional
+behavior — no call site in either game has been shown to need real lost-surface recovery (this
+backend never loses surfaces the way a real GPU-backed DirectDraw device could).
+
+`include/ddraw.h`'s public Doxygen comments had drifted to say `IMPLEMENTED` for both methods -
+the *opposite* direction of mistake from `GetDC`/`ReleaseDC` above: this one **overstated**
+compatibility (claiming real behavior that doesn't exist) rather than understating it, which
+`CLAUDE.md`'s Documentation Policy singles out as the more serious kind ("must never claim
+compatibility that does not exist"). `src/directdraw/DirectDraw.cpp`'s own comments had stayed
+correctly labeled `STUB` throughout - only the public header had gone stale. Found via a
+systematic header-vs-implementation status-tag sweep (suggested by `docs/audit_ddraw.md` §7's own
+"worth turning into a lightweight recurring check" note) prompted by fixing the `GetDC`/`ReleaseDC`
+case; fixed both back to `STUB` (`TASK-24H-0189`).
 
 ## Simplified flip chain and DDBLTFX.dwFillColor interpretation
 

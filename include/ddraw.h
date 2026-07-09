@@ -414,13 +414,13 @@ public:
     virtual HRESULT WINAPI SetClipper(LPDIRECTDRAWCLIPPER lpDDClipper) = 0;
     /** @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI SetPalette(LPDIRECTDRAWPALETTE lpDDPalette) = 0;
-    /** @note Status: IMPLEMENTED */
+    /** @note Status: STUB (always reports "not lost" - see docs/directdraw-limitations.md) */
     virtual HRESULT WINAPI IsLost() = 0;
-    /** @note Status: IMPLEMENTED */
+    /** @note Status: STUB (always succeeds unconditionally - see docs/directdraw-limitations.md) */
     virtual HRESULT WINAPI Restore() = 0;
-    /** @note Status: STUB */
+    /** @note Status: IMPLEMENTED (not full GDI emulation - see docs/directdraw-limitations.md) */
     virtual HRESULT WINAPI GetDC(HDC* lphDC) = 0;
-    /** @note Status: STUB */
+    /** @note Status: IMPLEMENTED (not full GDI emulation - see docs/directdraw-limitations.md) */
     virtual HRESULT WINAPI ReleaseDC(HDC hDC) = 0;
     /** @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI GetSurfaceDesc(LPDDSURFACEDESC lpDDSurfaceDesc) = 0;
