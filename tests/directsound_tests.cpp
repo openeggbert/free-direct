@@ -420,6 +420,49 @@ void Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently() {
     ds->Release();
 }
 
+// docs/audit_dsound.md §4/§9.4, TASK-24H-0171: both target games allow up to MAXSOUND (100)
+// simultaneous IDirectSoundBuffer objects (`../free-eggbert/include/sound.hpp:15`), the real
+// ceiling their own fixed-size buffer array allows - existing tests only ever exercised 2. No
+// confirmed bug at this scale; this is a coverage gap, not a fix for a known defect.
+void Test_100SimultaneousBuffers_AllPlayIndependently() {
+    constexpr int kMaxSound = 100;
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+
+    // A generous ~1 second of audio per buffer (44100 bytes at 22050Hz 16-bit mono), not the
+    // low-hundreds-of-bytes real game SFX size - creating/playing 100 buffers in a loop takes
+    // real wall-clock time, and a too-short buffer can fully drain (even under the dummy driver)
+    // before this test gets around to checking its status later in the same loop.
+    LPDIRECTSOUNDBUFFER buffers[kMaxSound];
+    for (int i = 0; i < kMaxSound; ++i) {
+        buffers[i] = CreatePcmBuffer(ds, 44100, 16, 1, 22050);
+        CHECK(buffers[i] != nullptr);
+    }
+
+    for (int i = 0; i < kMaxSound; ++i) {
+        CHECK(buffers[i]->Play(0, 0, 0) == DS_OK);
+    }
+
+    for (int i = 0; i < kMaxSound; ++i) {
+        DWORD status = 0;
+        CHECK(buffers[i]->GetStatus(&status) == DS_OK);
+        CHECK((status & DSBSTATUS_PLAYING) != 0);
+    }
+
+    // Stopping one must not affect any of the others.
+    CHECK(buffers[50]->Stop() == DS_OK);
+    DWORD stoppedStatus = 0;
+    CHECK(buffers[50]->GetStatus(&stoppedStatus) == DS_OK);
+    CHECK((stoppedStatus & DSBSTATUS_PLAYING) == 0);
+    DWORD neighborStatus = 0;
+    CHECK(buffers[51]->GetStatus(&neighborStatus) == DS_OK);
+    CHECK((neighborStatus & DSBSTATUS_PLAYING) != 0);
+
+    for (int i = 0; i < kMaxSound; ++i) {
+        buffers[i]->Release();
+    }
+    ds->Release();
+}
+
 // Realistic lifetime pattern for both target games: IDirectSound stays alive for the whole
 // session while individual sound buffers are created and released over time. Releasing one
 // buffer must not affect the shared audio device's availability for a buffer created afterward.
@@ -608,6 +651,7 @@ int main() {
     Test_Play_CalledTwiceInARow_StillReportsPlaying();
     Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp();
     Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently();
+    Test_100SimultaneousBuffers_AllPlayIndependently();
     Test_ReleaseBuffer_ThenCreateAndPlayAnother_OnSameDevice_StillWorks();
     Test_DirectSoundCreate_SoleOwnerCreateReleaseCycle_CompletesWithoutError();
 

@@ -7412,7 +7412,7 @@ comment to what's black-box-observable (no public API exposes a buffer's interna
 unchanged. Full suite passes 7/7 (`directsound_tests` 34/34, up from 33).
 
 ### TASK-24H-0171: Add a stress test for MAXSOUND (100) simultaneous DirectSoundBuffers
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Test
@@ -7439,6 +7439,17 @@ Out of scope:
 - Do not change any production code in this task unless the new test uncovers a real defect at
   scale — if it does, that becomes its own separate, atomic follow-up task, not folded into this
   one.
+
+Verified: added `Test_100SimultaneousBuffers_AllPlayIndependently` (`tests/directsound_tests.cpp`),
+creating, playing, and independently status-checking 100 buffers, then confirming stopping one
+doesn't affect its neighbor. No production code change - confirms this task's own "no confirmed
+bug at scale" framing. Found and fixed a real *test-design* bug during verification, not a product
+bug: the first version used 441-byte (~10ms) buffers, which fully drained (even under the dummy
+driver) by the time the test got around to checking all 100 statuses after the create+play loops -
+201 assertions failed. Fixed by using 44100-byte (~1s) buffers, giving ample margin for the loop's
+real wall-clock overhead; confirmed clean afterward. Full suite passes 7/7
+(`directsound_tests` 35/35, up from 34). **This closes out the entire DirectSound audit-hardening
+batch (`TASK-24H-0164`-`0171`, 8/8 DONE).**
 
 ---
 
