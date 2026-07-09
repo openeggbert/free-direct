@@ -927,6 +927,38 @@ void Test_Presentation_PresentsAgainAfterThrottleIntervalElapses() {
     DestroyWindow(hwnd);
 }
 
+// docs/audit_ddraw.md §4.6 (F6), TASK-24H-0156: a second SetCooperativeLevel call destroys and
+// recreates renderer_ - any already-presented primary surface's cached texture_ was created
+// against the *old* renderer and would otherwise dangle. Presents once (populating texture_),
+// calls SetCooperativeLevel again, then presents a second, differently-colored fill (past the
+// throttle window, same technique as the test above) and confirms the *new* color reads back
+// correctly - proving the texture was actually invalidated and recreated against the new
+// renderer, not silently reused or left stale (which would show the first color, or crash).
+void Test_SetCooperativeLevel_CalledTwiceAfterPresent_RecreatesTextureNotStale() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1000");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+
+    FillPrimaryWithColor(primary, 0x00FF0000); // red, populates texture_ against the 1st renderer
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    SDL_Delay(50);
+
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK); // destroys+recreates renderer_
+
+    FillPrimaryWithColor(primary, 0x000000FF); // blue, must recreate texture_ against the 2nd renderer
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 0x00);         // R - not the stale red fill
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 0xFF); // B - the second color went through
+
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
 // The dirty-flag check specifically (as opposed to the throttle check just above) is NOT
 // independently black-box-testable through the public API: every pixel-writing path (Blt/
 // BltFast/FillColor/BlitFrom) unconditionally calls MarkDirty() as a side effect of writing, and
@@ -1335,6 +1367,7 @@ int main() {
     Test_Flip_WithoutCooperativeLevel_ReturnsUnsupported();
     Test_Presentation_ThrottlesSecondPresentWithinInterval();
     Test_Presentation_PresentsAgainAfterThrottleIntervalElapses();
+    Test_SetCooperativeLevel_CalledTwiceAfterPresent_RecreatesTextureNotStale();
     Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable();
     Test_ClipperSetup_CreateSetHWndSetClipper_ReturnsOk();
     Test_CreateClipper_NullOutParam_ReturnsInvalidParams();

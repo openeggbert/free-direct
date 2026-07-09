@@ -321,6 +321,16 @@ namespace {
     private:
         friend class DirectDrawImpl;
         std::atomic<ULONG> refCount_;
+        /// The DirectDrawImpl that created this surface via CreateSurface(), or null (test-only
+        /// construction paths). Raw, non-owning back-pointer: this surface does not extend
+        /// owner_'s lifetime, and must not be dereferenced once owner_ has been destroyed.
+        /// Lifetime contract (docs/audit_ddraw.md §4.1, F11, TASK-24H-0161): a real DirectDraw
+        /// application (and both target games) always releases every surface it created before
+        /// releasing the IDirectDraw object itself, so this ordering is never actually violated
+        /// in practice - but it is not independently enforced by this code either. Used by the
+        /// constructor/destructor to register/unregister this surface in owner_->liveSurfaces_
+        /// (TASK-24H-0156), so SetCooperativeLevel can invalidate this surface's texture_ if it
+        /// ever replaces owner_'s renderer_.
         DirectDrawImpl* owner_;
         SurfaceType type_;
         int width_;
@@ -376,6 +386,14 @@ namespace {
         HWND hwnd_;
         SDL_Window* sdlWindow_;
         SDL_Renderer* renderer_;
+        /// Every surface this instance has created, registered/unregistered by
+        /// DirectDrawSurfaceImpl's own constructor/destructor via the existing mutual friend
+        /// relationship (docs/audit_ddraw.md §4.1/§4.6, F11/F6, TASK-24H-0156/0161) - lets
+        /// SetCooperativeLevel invalidate every live surface's cached texture_ when it replaces
+        /// renderer_, instead of leaving them dangling against a destroyed renderer. Raw,
+        /// non-owning pointers: DirectDrawImpl does not own surface lifetime (callers do, via
+        /// AddRef/Release), it only needs to reach already-live surfaces while they exist.
+        std::vector<DirectDrawSurfaceImpl*> liveSurfaces_;
         bool primaryPresented_;
         uint64_t presentCallCount_;
         bool debugPrimaryClearDone_;
@@ -449,8 +467,15 @@ namespace {
         FREE_DIRECT_DIAG_ADD_BYTES(ddSurfacePixelCapacityBytes,
                                    ddSurfacePixelCapacityHighWaterBytes,
                                    static_cast<int64_t>(diagPixelCapacityBytes_));
+        // Registers with owner_ so SetCooperativeLevel can find and invalidate this surface's
+        // texture_ if it ever replaces renderer_ (docs/audit_ddraw.md §4.6, F6,
+        // TASK-24H-0156) - owner_ is otherwise never read, only stored (§4.1, F11). Deliberately
+        // placed after pixels_.resize() above, not before: nothing between here and the end of
+        // the constructor can throw, so a partially-constructed surface can never end up
+        // registered with no matching destructor call to unregister it.
+        if (owner_) owner_->liveSurfaces_.push_back(this);
 
-        SDL_Log("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s", 
+        SDL_Log("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s",
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 width_,
@@ -462,11 +487,18 @@ namespace {
 
     DirectDrawSurfaceImpl::~DirectDrawSurfaceImpl()
     {
-        SDL_Log("free-direct surface destroy: id=%llu type=%s texture=%p palette=%s", 
+        SDL_Log("free-direct surface destroy: id=%llu type=%s texture=%p palette=%s",
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
                 static_cast<void*>(texture_),
                 BoolToText(HasPalette()));
+
+        // Unregisters from owner_'s liveSurfaces_ (TASK-24H-0156/0161) - must happen before this
+        // object's memory is freed, so SetCooperativeLevel never iterates a dangling pointer.
+        if (owner_) {
+            auto& live = owner_->liveSurfaces_;
+            live.erase(std::remove(live.begin(), live.end(), this), live.end());
+        }
 
         if (attachedDc_) {
             FreeApiDestroySurfaceDC(attachedDc_);
@@ -1283,6 +1315,24 @@ namespace {
         }
 
         if (renderer_) {
+            // Every live surface's cached texture_ (if any) was created against this exact
+            // renderer_ (PresentPrimary only ever creates one, lazily, per surface) and would
+            // otherwise dangle once it's destroyed below - SDL_RenderTexture-ing a texture that
+            // belonged to an already-destroyed renderer is undefined behavior, not merely a
+            // resource leak (docs/audit_ddraw.md §4.6, F6, TASK-24H-0156). Destroying it here and
+            // marking the surface dirty makes PresentPrimary's own `if (!primary.texture_)` cache
+            // check recreate it fresh against the new renderer_ below, rather than skipping
+            // recreation entirely because ConsumeAndClearDirty()/the dirty check thinks nothing
+            // changed.
+            for (DirectDrawSurfaceImpl* surface : liveSurfaces_) {
+                if (surface->texture_) {
+                    SDL_DestroyTexture(surface->texture_);
+                    surface->texture_ = nullptr;
+                    surface->MarkDirty();
+                    FREE_DIRECT_DIAG_DEC(sdlTextures);
+                    FREE_DIRECT_DIAG_INC_TOTAL(sdlTexturesDestroyed);
+                }
+            }
             SDL_Log("free-direct SetCooperativeLevel: destroyed previous renderer=%p", static_cast<void*>(renderer_));
             SDL_DestroyRenderer(renderer_);
             renderer_ = nullptr;

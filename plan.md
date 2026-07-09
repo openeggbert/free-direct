@@ -6811,7 +6811,7 @@ behavior (round-trip tests, the original 250+10>256 out-of-range tests) unaffect
 passes 7/7 (`directdraw_tests` 56/56, up from 54).
 
 ### TASK-24H-0156: Guard SetCooperativeLevel against stale surface textures on renderer replacement
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Implementation
@@ -6845,6 +6845,20 @@ Out of scope:
 - This task depends on deciding how `DirectDrawImpl` tracks its live surfaces (§4.1's `owner_`
   question) — if that requires a separate design decision beyond a mechanical fix, split that out
   rather than blocking this task's narrower goal indefinitely.
+
+Verified: resolved together with `TASK-24H-0161` - `owner_` now has a real use. Added
+`liveSurfaces_` (`DirectDraw.cpp`, private `DirectDrawImpl` member), populated/cleared by
+`DirectDrawSurfaceImpl`'s own constructor/destructor via the existing mutual `friend`
+relationship (registration placed *after* `pixels_.resize()` succeeds, so a partially-constructed
+surface can never end up registered with no destructor call to unregister it). `SetCooperativeLevel`
+now iterates `liveSurfaces_` right before destroying `renderer_`, destroying and nulling any
+non-null `texture_` and calling `MarkDirty()` so `PresentPrimary`'s own dirty-check doesn't skip
+recreating it on the next present. New test
+`Test_SetCooperativeLevel_CalledTwiceAfterPresent_RecreatesTextureNotStale`
+(`tests/directdraw_tests.cpp`, placed near the existing throttle tests since it needs
+`CreateDirectDrawWithTargetFps`/`SDL_Delay` to get a real second present past the throttle window)
+presents red, calls `SetCooperativeLevel` again, presents blue, and confirms the readback shows
+blue, not red or a crash. Full suite passes 7/7 (`directdraw_tests` 57/57, up from 56).
 
 ### TASK-24H-0157: Fix FillColor's 8-bit branch skipping MarkDirty on primary surfaces
 Status: TODO
@@ -6964,7 +6978,7 @@ Out of scope:
   rename.
 
 ### TASK-24H-0161: Document or remove DirectDrawSurfaceImpl::owner_'s lifetime contract
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Documentation
@@ -6991,6 +7005,15 @@ Acceptance criteria:
 Out of scope:
 - Do not implement any new behavior that *uses* `owner_` in this task — that's TASK-24H-0156's
   concern if it chooses this mechanism.
+
+Verified: resolved together with `TASK-24H-0156`, which chose to use `owner_` (option (a):
+document, not remove) - `TASK-24H-0156`'s fix reads `owner_` for real now (registering/
+unregistering in `liveSurfaces_`), so a doc comment fit better than removal. Added a full
+ownership/lifetime comment directly on the `owner_` member declaration
+(`DirectDraw.cpp`, in `DirectDrawSurfaceImpl`'s private section): states it's a raw, non-owning
+back-pointer that must not be dereferenced once `owner_` is destroyed, notes the contract is
+upheld by both target games' real usage (surfaces always released before their `IDirectDraw`) but
+not independently enforced by this code, and documents its new real use by `TASK-24H-0156`.
 
 ### TASK-24H-0162: Document DirectDraw's single-threaded usage assumption
 Status: TODO
