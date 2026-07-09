@@ -780,10 +780,15 @@ never decided unilaterally. 4 got real implementation (DPID-0 broadcast/self-sen
 Decision 20; host routing - Decision 21; ENet host-address resolution - Decision 22; LAN discovery
 - Decision 23), 3 were decided not needed (player names - Decision 24; duplicate-player definition
 - Decision 25; player-lost state - Decision 26). Full detail in `docs/directplay-design.md`
-Decisions 20-26 (now 27, this session, for `TASK-24H-0176`); `docs/directplay-limitations.md` still
-has the pre-resolution deviation-table framing and is now somewhat superseded by the Decisions
-themselves for these 7 items specifically (not yet re-reconciled - a small follow-up documentation
-task, not tracked as its own `TASK-24H-XXXX` yet).
+Decisions 20-26 (now 27, this session, for `TASK-24H-0176`). **Correction (`TASK-24H-0188`,
+2026-07-09)**: this section previously claimed `docs/directplay-limitations.md` "still has the
+pre-resolution deviation-table framing... not yet re-reconciled" - checked directly against the
+real file and found that claim itself was stale: every row touched by Decisions 20-26 is already
+marked `(**resolved, implemented**)`/`(**resolved: decided not needed**)` with correct Decision
+citations, and a dedicated section (its own "Formerly-BLOCKED design questions" heading) already
+walks through all 7 resolved questions. The reconciliation had already happened in an earlier
+session; only the note claiming otherwise was wrong. The one real, small gap found on re-check -
+the LAN-discovery-responder row not yet citing Decision 27 - was fixed directly.
 
 **A future session's path to further progress, now that the entire backlog is empty**: there is no
 queued work of any kind left in `plan.md`. Options: identify genuinely new work via a fresh

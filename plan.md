@@ -8096,7 +8096,7 @@ Out of scope:
   the cross-section-duplicated summary counts in `NEXT.md` only.
 
 ### TASK-24H-0188: Reconcile docs/directplay-limitations.md's deviation table with Decisions 20-27
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Docs
 Type: Documentation
@@ -8129,6 +8129,21 @@ Out of scope:
 - Do not attempt to resolve `docs/audit-24h-free-direct.md`'s separate, smaller overlap with
   `docs/directplay-callsite-audit.md` in this task — that's a distinct, lower-priority finding from
   the same audit; a separate task if ever pursued.
+
+Verified: read `docs/directplay-limitations.md`'s full 23-row deviation table plus its dedicated
+"Formerly-BLOCKED design questions" section line by line against `docs/directplay-design.md`'s
+Decisions 20-27, instead of assuming this task's own Evidence line (quoting `NEXT.md`) was
+accurate. **Finding: the premise was wrong.** Every row touched by Decisions 20-26 was already
+correctly marked `(**resolved, implemented**)`/`(**resolved: decided not needed**)` with accurate
+Decision citations and current-behavior descriptions (rows for DPID-0 broadcast, LAN discovery,
+ENet host address, broadcast delivery, host routing, ENet join handshake, player names,
+duplicate-player, player-lost state) — the reconciliation had already happened in an earlier
+session. The stale claim was in `NEXT.md` itself, asserting a gap that no longer existed. The one
+real, small gap on re-check: the LAN-discovery-responder row (added same-day as `TASK-24H-0176`)
+cited `TASK-24H-0176` but not the formal `Decision 27` it corresponds to - added that citation.
+Corrected `NEXT.md`'s own stale claim (Section 8, Track B paragraph) to record what was actually
+found rather than repeating the inaccurate "not yet re-reconciled" note. Documentation-only change
+to both files - no code or test files touched, no build/test run needed.
 
 **Update (2026-07-09, second follow-up)**: 6 more atomic tasks added, `TASK-24H-0183` through
 `TASK-24H-0188`, from a dedicated maintainability audit (code-level + infrastructure-level, run in
