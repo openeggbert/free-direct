@@ -7328,7 +7328,7 @@ recording the behavior as a deliberate, considered choice with its reachability 
 change - documentation-only, nothing to build or test.
 
 ### TASK-24H-0169: Clamp/validate nSamplesPerSec before it reaches SDL_CreateAudioStream
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Implementation
@@ -7358,6 +7358,13 @@ Acceptance criteria:
 Out of scope:
 - Do not validate `nChannels`/`wBitsPerSample` in this task — only `nSamplesPerSec`, per this
   audit's finding. Other fields would need their own evidence before their own task.
+
+Verified: bounded to `(0, 192000]` Hz in the constructor (`DirectSound.cpp:277-286`); out-of-range
+resets `srcSpec_.freq` to `0`, letting `ensureStream()`'s existing fallback substitute the safe
+default rather than passing an unchecked value to SDL. New test
+`Test_CreateSoundBuffer_HugeSampleRate_FallsBackGracefully` constructs a buffer with
+`nSamplesPerSec = 0xFFFFFFFF` and confirms `Play()` succeeds (falls back, doesn't crash). Full
+suite passes 7/7 (`directsound_tests` 33/33, up from 32).
 
 ### TASK-24H-0170: Fix near-zero nSamplesPerSec fallback to only replace the frequency field
 Status: TODO

@@ -219,6 +219,19 @@ void Test_CreateSoundBuffer_HugeBufferBytes_ReturnsInvalidParam() {
     ds->Release();
 }
 
+// docs/audit_dsound.md §7.2 (S7), TASK-24H-0169: an nSamplesPerSec near DWORD max casts to a
+// negative/nonsensical int with no bound before reaching SDL_CreateAudioStream. Must resolve to
+// some defined, non-crashing outcome - falling back to the safe default, same as the
+// missing-format test above.
+void Test_CreateSoundBuffer_HugeSampleRate_FallsBackGracefully() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 1000, 16, 1, 0xFFFFFFFFu);
+    CHECK(buf->Play(0, 0, 0) == DS_OK); // must not crash; falls back to 16-bit mono 22050 Hz
+
+    buf->Release();
+    ds->Release();
+}
+
 // ===== Lock / Unlock =====
 
 void Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion() {
@@ -561,6 +574,7 @@ int main() {
     Test_CreateSoundBuffer_ZeroSizedBuffer_ReturnsOk();
     Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully();
     Test_CreateSoundBuffer_HugeBufferBytes_ReturnsInvalidParam();
+    Test_CreateSoundBuffer_HugeSampleRate_FallsBackGracefully();
 
     Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion();
     Test_Lock_WraparoundRegion_ReturnsTwoValidRegions();

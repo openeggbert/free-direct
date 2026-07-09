@@ -275,6 +275,17 @@ public:
             srcSpec_.format   = (bits == 8) ? SDL_AUDIO_U8 : SDL_AUDIO_S16LE;
             srcSpec_.channels = static_cast<int>(pcm->wf.nChannels);
             srcSpec_.freq     = static_cast<int>(pcm->wf.nSamplesPerSec);
+            // A DWORD near 0xFFFFFFFF casts to a negative int; anything above a generous ceiling
+            // is equally nonsensical for a real sample rate. Neither was validated before
+            // reaching SDL_CreateAudioStream (docs/audit_dsound.md §7.2, S7, TASK-24H-0169) -
+            // reset to 0 so ensureStream()'s existing srcSpec_.freq == 0 fallback substitutes the
+            // documented safe default instead of passing an unchecked value to SDL.
+            constexpr int kMaxSampleRateHz = 192000;
+            if (srcSpec_.freq <= 0 || srcSpec_.freq > kMaxSampleRateHz) {
+                DS_LOG("Buffer format: nSamplesPerSec=%u out of range, falling back",
+                       (unsigned)pcm->wf.nSamplesPerSec);
+                srcSpec_.freq = 0;
+            }
 
             DS_LOG("Buffer format: %d-bit, %d ch, %d Hz, %u bytes",
                    (int)bits,
