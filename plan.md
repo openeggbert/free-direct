@@ -7616,12 +7616,20 @@ full existing suite instead, confirming no behavior change under normal load: de
 discovery responder).
 
 ### TASK-24H-0179: Reuse a persistent wireBuf member in Receive() instead of allocating per call
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Status: DONE | Priority: P2 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §5.2 (D10) — `DirectPlay.cpp:616` allocates a fresh ~4.1KB vector
 every `Receive()` call; measured at 228.7ns/call, empirically negligible. Depends on: None.
 Lowest priority in this batch — proposed purely for consistency with this project's established
 buffer-reuse pattern elsewhere (e.g. `docs/audit_ddraw.md`'s `PresentPrimary`), not a measured
 performance need.
+
+Verified: added a persistent `wireBuf_` member to `DirectPlay2AImpl` (`DirectPlay.cpp:746-751`),
+lazily resized once on first use (`if (wireBuf_.size() < kMaxWireBufferSize)`, a no-op on every
+subsequent call). `Receive()`'s drain loop binds a local reference (`wireBuf = wireBuf_`) so every
+existing use of `wireBuf` below it needed no further changes. Verified across both configurations:
+default build `ctest` 7/7; `-DFREE_DIRECT_ENABLE_ENET=ON` build `ctest -L enet` 1/1. **This closes
+out the entire DirectPlay audit-hardening batch (`TASK-24H-0172`-`0179`, 8/8 DONE) and, with it,
+all 29 tasks from all three audits (`TASK-24H-0151`-`0179`) are now DONE.**
 
 ---
 

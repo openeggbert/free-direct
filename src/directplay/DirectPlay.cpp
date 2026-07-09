@@ -623,7 +623,12 @@ namespace {
                 constexpr std::size_t kMaxWireBufferSize =
                     free_direct_directplay::kDirectPlayWireHeaderSize +
                     free_direct_directplay::DirectPlayMessageQueue::kMaxPayloadBytes;
-                std::vector<std::uint8_t> wireBuf(kMaxWireBufferSize);
+                // wireBuf_ is a persistent member (TASK-24H-0179), resized once and reused across
+                // calls instead of allocating fresh every time - a no-op after the first call.
+                if (wireBuf_.size() < kMaxWireBufferSize) {
+                    wireBuf_.resize(kMaxWireBufferSize);
+                }
+                std::vector<std::uint8_t>& wireBuf = wireBuf_;
                 std::size_t receivedSize = 0;
                 while (session_.transport->Receive(wireBuf.data(), wireBuf.size(), &receivedSize)) {
                     const auto header = free_direct_directplay::TryDeserializeDirectPlayWireHeader(
@@ -744,6 +749,12 @@ namespace {
     private:
         std::atomic<ULONG> refCount_;
         free_direct_directplay::DirectPlaySession session_;
+        // Persistent scratch buffer for Receive()'s drain loop, reused across calls instead of
+        // allocating a fresh ~4.1KB vector every call (docs/audit_dplay.md §5.2, D10,
+        // TASK-24H-0179) - measured negligible (228.7ns/call) even before this change, proposed
+        // purely for consistency with this project's established buffer-reuse pattern elsewhere
+        // (e.g. DirectDraw's PresentPrimary), not for a measured performance need.
+        std::vector<std::uint8_t> wireBuf_;
 #ifdef FREE_DIRECT_ENABLE_ENET
         // Owned by this object (not DirectPlaySession, which stays backend-agnostic - the
         // transport/discovery split mirrors CLAUDE.md's Internal Backend Policy) - real LAN
