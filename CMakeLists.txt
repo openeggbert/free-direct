@@ -2,6 +2,19 @@ cmake_minimum_required(VERSION 3.20)
 
 project(FREE_DIRECT LANGUAGES CXX)
 
+# Default to a Release build when this is the top-level project and no build type was requested,
+# neither on the command line nor by an earlier set() call (docs/audit_ddraw.md §3.1,
+# TASK-24H-0151): a plain `cmake -B build` with no extra flags was silently producing an
+# unoptimized binary (measured 6.6x slower than -O3 on a DirectDraw hot path). Scoped to the
+# top-level case only (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR, the portable
+# pre-3.21 equivalent of PROJECT_IS_TOP_LEVEL) so a consuming project's own build-type choice for
+# free-eggbert/planetblupi is never overridden - only free-direct's own standalone build is
+# affected. CMAKE_CONFIGURATION_TYPES guards multi-config generators (Visual Studio, Xcode),
+# which select config at build time and ignore CMAKE_BUILD_TYPE entirely.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build: Debug Release RelWithDebInfo MinSizeRel" FORCE)
+endif()
+
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)

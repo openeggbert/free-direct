@@ -6580,7 +6580,7 @@ reasoning) and cross-checked every finding's reachability against `free-eggbert`
 `BLOCKED` — the audit raised no new design questions requiring a user decision.
 
 ### TASK-24H-0151: Default CMAKE_BUILD_TYPE to Release when unset
-Status: TODO
+Status: DONE
 Priority: P0
 Area: Build
 Type: Implementation
@@ -6611,6 +6611,17 @@ Acceptance criteria:
 Out of scope:
 - Do not add new build types or change what flags `CMAKE_CXX_FLAGS_RELEASE` etc. contain — only the
   default selection.
+
+Verified: implemented via `if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT
+CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)`, scoped to the top-level-project case only so a
+consuming project's (`free-eggbert`/`planetblupi`) own build-type choice is never overridden.
+Confirmed via fresh `/tmp` scratch builds: (1) `cmake -B <dir> -DFREE_API_USE_SYSTEM_SDL3=ON` with
+no other flags now configures `CMAKE_BUILD_TYPE=Release` and `flags.make` shows `-O3 -DNDEBUG`; (2)
+`-DCMAKE_BUILD_TYPE=Debug` still configures as `Debug`, unaffected; (3) full build with
+`FREE_DIRECT_BUILD_TESTS=ON` succeeds and `ctest` passes 7/7 under the new default; (4) a fresh
+out-of-tree `../free-eggbert` configure still succeeds and its own `CMAKE_BUILD_TYPE` stays empty
+(unaffected, confirming the top-level-only scoping); (5) the bare-standalone (no flags, no sibling
+game) configure still fails with the same actionable SDL3-missing error, unchanged.
 
 ### TASK-24H-0152: Add a 1:1 fast path to BlitFrom
 Status: TODO
