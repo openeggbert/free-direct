@@ -6861,7 +6861,7 @@ presents red, calls `SetCooperativeLevel` again, presents blue, and confirms the
 blue, not red or a crash. Full suite passes 7/7 (`directdraw_tests` 57/57, up from 56).
 
 ### TASK-24H-0157: Fix FillColor's 8-bit branch skipping MarkDirty on primary surfaces
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Implementation
@@ -6890,6 +6890,19 @@ Out of scope:
 - Do not add general 8-bit primary surface support to `CreateSurface` in this task unless it turns
   out to be strictly required to write the regression test — if so, keep that as a minimal,
   clearly-labeled test-support change, not a behavior change for either target game.
+
+Verified: restructured the 8-bit branch's early `return DD_OK` into an `if/else` so both branches
+fall through to the shared `MarkDirty()` tail (`DirectDraw.cpp:559-587`). It *was* strictly required
+to write the regression test, exactly as anticipated above - added the minimal, clearly-labeled
+`DDSD_PIXELFORMAT` honoring to `CreateSurface`'s primary branch (mirroring the offscreen branch's
+existing logic exactly, `DirectDraw.cpp:1452-1461`), changing no behavior for either target game
+(neither ever sets `DDSD_PIXELFORMAT` for any surface). New test
+`Test_FillColor_8BitPrimary_MarksDirty` (`tests/directdraw_tests.cpp`) builds an 8-bit primary
+surface directly, sets a real 2-entry palette, fills with palette index 1, presents, delays past
+the throttle window, fills with index 2, presents again, and confirms the readback shows index 2's
+color. Proved the test has teeth: temporarily reverted the fix (re-added the early `return`),
+rebuilt, and confirmed all three color-channel assertions failed as expected; restored the fix and
+confirmed a clean pass again. Full suite passes 7/7 (`directdraw_tests` 58/58, up from 57).
 
 ### TASK-24H-0158: Return DDERR_DCALREADYCREATED on a redundant GetDC call
 Status: TODO

@@ -556,6 +556,9 @@ namespace {
 
         const RECT fillRect = ClampRect(destRect ? *destRect : GetFullRect(width_, height_), width_, height_);
 
+        // Both branches fall through to the shared MarkDirty() tail below (docs/audit_ddraw.md
+        // §5.1, F7, TASK-24H-0157) - the 8-bit branch used to return early here, skipping it, so
+        // a fill on an 8-bit primary surface would never be flagged for presentation.
         if (bpp_ == 8) {
             const auto index = static_cast<uint8_t>(fillColor & 0xFFu);
             for (int y = fillRect.top; y < fillRect.bottom; ++y) {
@@ -564,20 +567,19 @@ namespace {
                     pixels_[offset] = index;
                 }
             }
-            return DD_OK;
-        }
+        } else {
+            const auto r = static_cast<uint8_t>((fillColor >> 16) & 0xFFu);
+            const auto g = static_cast<uint8_t>((fillColor >> 8) & 0xFFu);
+            const auto b = static_cast<uint8_t>(fillColor & 0xFFu);
 
-        const auto r = static_cast<uint8_t>((fillColor >> 16) & 0xFFu);
-        const auto g = static_cast<uint8_t>((fillColor >> 8) & 0xFFu);
-        const auto b = static_cast<uint8_t>(fillColor & 0xFFu);
-
-        for (int y = fillRect.top; y < fillRect.bottom; ++y) {
-            for (int x = fillRect.left; x < fillRect.right; ++x) {
-                const size_t offset = (static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)) * 4u;
-                pixels_[offset + 0u] = r;
-                pixels_[offset + 1u] = g;
-                pixels_[offset + 2u] = b;
-                pixels_[offset + 3u] = 255;
+            for (int y = fillRect.top; y < fillRect.bottom; ++y) {
+                for (int x = fillRect.left; x < fillRect.right; ++x) {
+                    const size_t offset = (static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)) * 4u;
+                    pixels_[offset + 0u] = r;
+                    pixels_[offset + 1u] = g;
+                    pixels_[offset + 2u] = b;
+                    pixels_[offset + 3u] = 255;
+                }
             }
         }
 
@@ -1453,6 +1455,16 @@ namespace {
                 SDL_Log("free-direct CreateSurface: primary using display mode %dx%d", width, height);
             } else {
                 SDL_Log("free-direct CreateSurface: primary using default %dx%d (no display mode set)", width, height);
+            }
+            // Minimal test-support consistency fix (docs/audit_ddraw.md §5.1, F7,
+            // TASK-24H-0157's own out-of-scope clause pre-authorized this): honors
+            // DDSD_PIXELFORMAT the same way the offscreen branch below already does, purely so
+            // an 8-bit primary surface can be constructed at all for
+            // Test_FillColor_8BitPrimary_MarksDirty. Neither target game ever sets
+            // DDSD_PIXELFORMAT for any surface (primary or offscreen, per
+            // docs/directdraw-limitations.md), so this changes no real behavior.
+            if (lpDDSurfaceDesc->dwFlags & DDSD_PIXELFORMAT) {
+                bpp = static_cast<int>(lpDDSurfaceDesc->ddpfPixelFormat.dwRGBBitCount);
             }
         } else {
             if ((lpDDSurfaceDesc->dwFlags & (DDSD_WIDTH | DDSD_HEIGHT)) == 0) {

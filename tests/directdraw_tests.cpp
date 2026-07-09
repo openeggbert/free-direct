@@ -992,6 +992,63 @@ void Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable() {
     DestroyWindow(hwnd);
 }
 
+// docs/audit_ddraw.md §5.1 (F7), TASK-24H-0157: FillColor's 8-bit branch used to return before
+// reaching the MarkDirty() call the 32-bit branch reaches - a fill on an 8-bit primary surface
+// would never be flagged for presentation. CreateSurface's primary branch doesn't honor
+// DDSD_PIXELFORMAT by default (neither target game ever needs it - see the minimal, clearly-
+// labeled consistency fix next to this task's own entry in plan.md), so this test builds the
+// DDSURFACEDESC directly rather than using CreatePrimarySurface(). Same present/delay/fill/
+// present/read technique as the throttle tests above: if the dirty flag were still not being set
+// on the 8-bit path, the second present would be silently skipped and the readback would still
+// show the first palette entry's color, not the second.
+void Test_FillColor_8BitPrimary_MarksDirty() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1000");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    desc.dwFlags = DDSD_CAPS | DDSD_PIXELFORMAT;
+    desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    desc.ddpfPixelFormat.dwFlags = DDPF_PALETTEINDEXED8;
+    desc.ddpfPixelFormat.dwRGBBitCount = 8;
+    LPDIRECTDRAWSURFACE primary = nullptr;
+    CHECK(dd->CreateSurface(&desc, &primary, nullptr) == DD_OK);
+
+    LPDIRECTDRAWPALETTE palette = nullptr;
+    CHECK(dd->CreatePalette(DDPCAPS_8BIT, nullptr, &palette, nullptr) == DD_OK);
+    PALETTEENTRY entries[256] = {};
+    entries[1] = {0x11, 0x22, 0x33, 0};
+    entries[2] = {0x44, 0x55, 0x66, 0};
+    CHECK(palette->SetEntries(0, 0, 256, entries) == DD_OK);
+    CHECK(primary->SetPalette(palette) == DD_OK);
+
+    DDBLTFX fx{};
+    std::memset(&fx, 0, sizeof(fx));
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = 1; // palette index 1
+    CHECK(primary->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    SDL_Delay(50);
+
+    fx.dwFillColor = 2; // palette index 2 - must reach the screen, proving dirty_ was set
+    CHECK(primary->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 0x44);         // R
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 0x55);  // G
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 0x66); // B - index 2's color, not index 1's
+
+    palette->Release();
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
 // Both target games perform this exact one-time sequence in their Create() function:
 // CreateClipper -> SetHWnd -> SetClipper(on the back/primary surface) - see
 // docs/audit-24h-free-direct.md §2.1.
@@ -1369,6 +1426,7 @@ int main() {
     Test_Presentation_PresentsAgainAfterThrottleIntervalElapses();
     Test_SetCooperativeLevel_CalledTwiceAfterPresent_RecreatesTextureNotStale();
     Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable();
+    Test_FillColor_8BitPrimary_MarksDirty();
     Test_ClipperSetup_CreateSetHWndSetClipper_ReturnsOk();
     Test_CreateClipper_NullOutParam_ReturnsInvalidParams();
 
