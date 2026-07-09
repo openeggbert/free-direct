@@ -7432,7 +7432,7 @@ Add an entry to `docs/directplay-limitations.md`. No code change proposed — th
 is explicitly LAN-only casual discovery, not an internet-facing service.
 
 ### TASK-24H-0178: Cap Service()'s and RespondToPendingRequests()'s drain-loop iterations
-Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
+Status: DONE | Priority: P1 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §7.4 (D8) — `EnetDirectPlayTransport::Service()`
 (`EnetDirectPlayTransport.cpp:165`) and `DirectPlayDiscoveryService::RespondToPendingRequests()`
 (`DirectPlayDiscovery.cpp:108`) both drain "everything pending" with no per-call cap; a high
@@ -7443,6 +7443,17 @@ spreading a large drain across multiple calls). Raised to P1: the one part of th
 genuinely exposed to arbitrary network input volume, and will matter for real once free-eggbert's
 decompilation reconnects actual gameplay traffic (docs/audit_dplay.md §2's decompilation-in-progress
 caveat).
+
+Verified: added `kMaxEventsPerService = 64` to `EnetDirectPlayTransport::Service()`'s drain loop
+(`EnetDirectPlayTransport.cpp:170-173`) and `kMaxRequestsPerCall = 64` to
+`DirectPlayDiscoveryService::RespondToPendingRequests()`'s loop (`DirectPlayDiscovery.cpp:110`),
+both bounding iterations per call with any remainder left for the next call. No new test added -
+this task's acceptance criteria didn't call for one, and exercising the cap itself would need
+synthesizing 65+ real ENet events/UDP packets in a tight loop, a materially heavier test than this
+defensive bound (which is a no-op under any realistic traffic volume) warrants. Verified via the
+full existing suite instead, confirming no behavior change under normal load: default build `ctest`
+7/7; ENet-enabled build `ctest -L enet` 1/1 (exercises both `Service()` and, transitively, the
+discovery responder).
 
 ### TASK-24H-0179: Reuse a persistent wireBuf member in Receive() instead of allocating per call
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation

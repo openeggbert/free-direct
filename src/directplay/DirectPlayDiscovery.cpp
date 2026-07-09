@@ -104,8 +104,14 @@ void DirectPlayDiscoveryService::StopListening() {
 void DirectPlayDiscoveryService::RespondToPendingRequests(const DiscoveredSessionInfo& info) {
     if (!IsListening()) return;
 
+    // Bounded per call (docs/audit_dplay.md §7.4, D8, TASK-24H-0178): a raw UDP socket has no
+    // connection-level gating, so an unbounded drain loop here could be kept busy indefinitely by
+    // a high enough incoming-packet rate. Any remainder is drained on a subsequent call - this is
+    // already called repeatedly from Receive()'s polling pattern (Decision 6), so nothing is lost
+    // by spreading a large drain across multiple calls.
+    constexpr int kMaxRequestsPerCall = 64;
     std::uint8_t buf[512];
-    for (;;) {
+    for (int processed = 0; processed < kMaxRequestsPerCall; ++processed) {
         ENetBuffer recvBuffer;
         recvBuffer.data = buf;
         recvBuffer.dataLength = sizeof(buf);

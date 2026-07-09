@@ -158,11 +158,20 @@ bool EnetDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, std:
 void EnetDirectPlayTransport::Service() {
     if (!host_) return;
 
-    // Drain everything currently pending; timeout 0 means "don't block" - Receive()
-    // (the only caller today, per docs/directplay-design.md Decision 6) must return
-    // promptly regardless of whether any network I/O is ready.
+    // Drain currently pending events, up to kMaxEventsPerService per call; timeout 0 means
+    // "don't block" - Receive() (the only caller today, per docs/directplay-design.md Decision 6)
+    // must return promptly regardless of whether any network I/O is ready. The cap bounds how
+    // long one Service() call can take under a high incoming-packet rate (docs/audit_dplay.md
+    // §7.4, D8, TASK-24H-0178) - any remainder is simply drained on the next call, since Service()
+    // is already called repeatedly from Receive()'s polling pattern, so nothing is lost by
+    // spreading a large drain across multiple calls. 64 comfortably exceeds any realistic burst
+    // under normal gameplay traffic (a handful of small packets per frame, per the real payload
+    // sizes observed in docs/audit_dplay.md §4).
+    constexpr int kMaxEventsPerService = 64;
     ENetEvent event;
-    while (enet_host_service(host_, &event, 0) > 0) {
+    int processed = 0;
+    while (processed < kMaxEventsPerService && enet_host_service(host_, &event, 0) > 0) {
+        ++processed;
         switch (event.type) {
             case ENET_EVENT_TYPE_CONNECT:
                 if (listening_) {
