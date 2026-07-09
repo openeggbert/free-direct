@@ -1014,14 +1014,24 @@ namespace {
                 const uint8_t r = dcTempBuffer_[i * 4u + 0u];
                 const uint8_t g = dcTempBuffer_[i * 4u + 1u];
                 const uint8_t b = dcTempBuffer_[i * 4u + 2u];
-                // Find the nearest palette entry (minimise squared RGB distance).
+                // Find the nearest palette entry (minimise squared RGB distance). Visits
+                // entries 0..255 in order, same as before, so tie-breaking (first index with
+                // minimum distance wins) is unchanged - but skips the G/B terms once the
+                // running partial sum already can't beat bestDist, since every squared term is
+                // non-negative (docs/audit_ddraw.md §3.3, TASK-24H-0153). This is a proven-
+                // equivalent transformation, not a different algorithm: dist >= bestDist after
+                // adding only dr*dr implies the full dr*dr+dg*dg+db*db would be >= bestDist too.
                 int bestIdx = 0;
                 int bestDist = INT_MAX;
                 for (int j = 0; j < 256; ++j) {
                     const int dr = static_cast<int>(r) - static_cast<int>(entries[j].peRed);
+                    int dist = dr * dr;
+                    if (dist >= bestDist) continue;
                     const int dg = static_cast<int>(g) - static_cast<int>(entries[j].peGreen);
+                    dist += dg * dg;
+                    if (dist >= bestDist) continue;
                     const int db = static_cast<int>(b) - static_cast<int>(entries[j].peBlue);
-                    const int dist = dr * dr + dg * dg + db * db;
+                    dist += db * db;
                     if (dist < bestDist) {
                         bestDist = dist;
                         bestIdx = j;

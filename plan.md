@@ -6682,7 +6682,7 @@ this exact byte layout, for marginal additional gain beyond what this task's acc
 required.
 
 ### TASK-24H-0153: Optimize ReleaseDC's 8-bit palette-match from O(n*256) to a faster lookup
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Implementation
@@ -6712,6 +6712,17 @@ Out of scope:
 - Do not change `GetDC`'s 8-bit expansion path (only `ReleaseDC`'s reverse conversion) in this task.
 - Do not add real 8-bit primary/offscreen surface usage to either target game — this task only
   improves the algorithm for whenever the path is exercised.
+
+Verified: chose partial-sum pruning over a k-d tree/inverse LUT (`DirectDraw.cpp:1017-1035`) -
+computes `dr*dr` first and `continue`s once it alone already reaches `bestDist`, only then adds
+`dg*dg`/`db*db` with the same early-exit. This is a mathematically proven-equivalent
+transformation (every squared term is non-negative, so a partial sum already `>= bestDist` cannot
+produce a smaller total), not a different algorithm - visitation order (0..255) and tie-breaking
+(first index at minimum distance wins) are byte-for-byte unchanged, which a k-d tree would have
+put at real risk (traversal order isn't index order) for a P2, currently-unreachable task where
+that risk wasn't worth taking. Full suite passes 7/7 unchanged (`directdraw_tests` 56/56).
+Re-ran `docs/audit_ddraw.md` §7 Benchmark 1's exact methodology at `-O3`: `ReleaseDC` improved from
+0.427ms/call (original baseline) to **0.366ms/call** - a real, measured ~14% improvement.
 
 ### TASK-24H-0154: Validate CreateSurface's dwWidth/dwHeight before allocating
 Status: DONE
