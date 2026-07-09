@@ -7575,13 +7575,21 @@ assertions are all `Open(..., DPOPEN_JOIN) == DP_OK`-rooted connection failures,
 magic/version-related).
 
 ### TASK-24H-0177: Document the LAN discovery responder's reflection-primitive characteristic
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
+Status: DONE | Priority: P2 | Area: DirectPlay | Type: Documentation
 Evidence: docs/audit_dplay.md §7.3 (D7) — `DirectPlayDiscoveryService`'s raw-socket responder
 validates only size/type (no magic/version, no auth) and unicasts a real reply to whatever source
 address a request claims; a structurally-present, low-amplification UDP reflection primitive,
 LAN-only intended scope. Depends on: None.
 Add an entry to `docs/directplay-limitations.md`. No code change proposed — this project's scope
 is explicitly LAN-only casual discovery, not an internet-facing service.
+
+Verified: added a new deviation-table row ("LAN discovery responder validation"). Updated the
+finding's own framing to reflect that `TASK-24H-0176` (done earlier in this same batch) already
+added `magic`/`version` validation to the shared `TryDeserializeDirectPlayWireHeader` the discovery
+responder also calls - the audit's original "no magic/version check" observation predated that fix
+and is now stale, so the doc entry correctly states what's still true today: size/`magic`/`version`/
+`payloadLength` are all validated, but there is still no authentication, so the reflection
+characteristic itself remains. Documentation-only, no code change.
 
 ### TASK-24H-0178: Cap Service()'s and RespondToPendingRequests()'s drain-loop iterations
 Status: DONE | Priority: P1 | Area: DirectPlay | Type: Implementation
