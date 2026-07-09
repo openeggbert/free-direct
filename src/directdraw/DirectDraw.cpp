@@ -967,7 +967,17 @@ namespace {
             return DDERR_UNSUPPORTED;
         }
 
-        if (!attachedDc_) {
+        // A second GetDC() before an intervening ReleaseDC() used to silently re-return the same
+        // handle instead of matching real DirectDraw semantics (docs/audit_ddraw.md §4.3, F8,
+        // TASK-24H-0158) - DDERR_DCALREADYCREATED is already defined in include/ddraw.h but was
+        // never returned anywhere.
+        if (attachedDc_) {
+            SDL_Log("free-direct GetDC: DC already created surfaceId=%llu dc=%p",
+                    static_cast<unsigned long long>(debugId_), reinterpret_cast<void*>(attachedDc_));
+            return DDERR_DCALREADYCREATED;
+        }
+
+        {
             if (bpp_ == 8) {
                 // Expand 8-bit palette indices to a temporary 32-bit RGBA buffer.
                 const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);

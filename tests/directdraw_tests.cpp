@@ -1307,6 +1307,32 @@ void Test_GetDC_NullOutParam_ReturnsInvalidParams() {
     dd->Release();
 }
 
+// docs/audit_ddraw.md §4.3 (F8), TASK-24H-0158: a second GetDC() before an intervening
+// ReleaseDC() must return DDERR_DCALREADYCREATED, matching real DirectDraw semantics, instead of
+// silently re-returning the same handle.
+void Test_GetDC_CalledTwiceWithoutRelease_ReturnsDcAlreadyCreated() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 4, 4, 32);
+
+    HDC first = nullptr;
+    CHECK(surface->GetDC(&first) == DD_OK);
+    CHECK(first != nullptr);
+
+    HDC second = nullptr;
+    CHECK(surface->GetDC(&second) == DDERR_DCALREADYCREATED);
+
+    // A subsequent GetDC() after a real ReleaseDC() must succeed again - the rejection is only
+    // for a *redundant* call, not a permanent lockout.
+    CHECK(surface->ReleaseDC(first) == DD_OK);
+    HDC third = nullptr;
+    CHECK(surface->GetDC(&third) == DD_OK);
+    CHECK(third != nullptr);
+    surface->ReleaseDC(third);
+
+    surface->Release();
+    dd->Release();
+}
+
 // ===== Group 8: lost/restore =====
 
 // Characterization tests, not correctness tests: IsLost/Restore are honestly documented STUBs
@@ -1446,6 +1472,7 @@ int main() {
     // Group 7: DC bridge
     Test_GetDCReleaseDC_32Bit_SharesBackingPixelsWithLock();
     Test_GetDC_NullOutParam_ReturnsInvalidParams();
+    Test_GetDC_CalledTwiceWithoutRelease_ReturnsDcAlreadyCreated();
 
     // Group 8: lost/restore
     Test_IsLost_AlwaysReturnsNotLost();

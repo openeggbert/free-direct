@@ -6905,7 +6905,7 @@ rebuilt, and confirmed all three color-channel assertions failed as expected; re
 confirmed a clean pass again. Full suite passes 7/7 (`directdraw_tests` 58/58, up from 57).
 
 ### TASK-24H-0158: Return DDERR_DCALREADYCREATED on a redundant GetDC call
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectDraw
 Type: Implementation
@@ -6934,6 +6934,15 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change `ReleaseDC`'s behavior in this task.
+
+Verified: added an `if (attachedDc_) return DDERR_DCALREADYCREATED;` check right after `GetDC`'s
+existing null-buffer check (`DirectDraw.cpp:970-978`). No `docs/directdraw-limitations.md` entry
+needed either way - no existing entry named this deviation, and the fix now fully matches real
+DirectDraw semantics, so there's nothing residual to document. New test
+`Test_GetDC_CalledTwiceWithoutRelease_ReturnsDcAlreadyCreated`
+(`tests/directdraw_tests.cpp`) confirms a second `GetDC()` returns `DDERR_DCALREADYCREATED`, and
+that a subsequent `GetDC()` after a real `ReleaseDC()` succeeds again (not a permanent lockout).
+Full suite passes 7/7 (`directdraw_tests` 59/59, up from 58).
 
 ### TASK-24H-0159: Replace GetSurfaceDesc's magic pixel-format numbers with named constants
 Status: TODO
