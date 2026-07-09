@@ -7036,7 +7036,7 @@ cases under extreme situations, cross-checked against real call sites in both `.
 `../planetblupi`. Numbering continues from `TASK-24H-0163`. None of these are `BLOCKED`.
 
 ### TASK-24H-0164: Bound CreateSoundBuffer's dwBufferBytes before allocating
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Implementation
@@ -7070,6 +7070,15 @@ Out of scope:
 - Do not add validation of any other `DSBUFFERDESC` field in this task — only `dwBufferBytes`.
 - Do not add `.wav` file-level validation to either target game's source — out of scope for this
   project regardless (`CLAUDE.md`: never modify game source).
+
+Verified: added `kMaxSoundBufferBytes = 64 MiB` (`DirectSound.cpp:97-103`) and a check in
+`CreateSoundBuffer` (`DirectSound.cpp:711-717`) returning `DSERR_INVALIDPARAM` — and defensively
+nulling `*lplpDirectSoundBuffer`, matching `DirectSoundCreate`'s existing convention on its own
+failure path — before ever constructing `DirectSoundBufferImpl`, so the unbounded `resize` is never
+reached for an out-of-range value. New test `Test_CreateSoundBuffer_HugeBufferBytes_ReturnsInvalidParam`
+(`tests/directsound_tests.cpp`) passes `dwBufferBytes = 0xFFFFFFFF`, seeds the out-param with a
+poison pointer (not pre-nulled) to verify the function actually nulls it, and confirms
+`DSERR_INVALIDPARAM` with no crash. Full suite passes 7/7 (`directsound_tests` 31/31, up from 30).
 
 ### TASK-24H-0165: Document and regression-test the real SharedAudioDevice close/reopen cost
 Status: TODO

@@ -200,6 +200,25 @@ void Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully() {
     ds->Release();
 }
 
+// docs/audit_dsound.md §6.1 (S1), TASK-24H-0164: dwBufferBytes must be bounded before it reaches
+// an unguarded std::vector::resize inside DirectSoundBufferImpl's constructor - a value near
+// DWORD max must be rejected outright, not attempted (which would otherwise throw uncaught,
+// crashing the test process).
+void Test_CreateSoundBuffer_HugeBufferBytes_ReturnsInvalidParam() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    DSBUFFERDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DSBUFFERDESC);
+    desc.dwBufferBytes = 0xFFFFFFFFu;
+    desc.lpwfxFormat = nullptr;
+
+    LPDIRECTSOUNDBUFFER buf = reinterpret_cast<LPDIRECTSOUNDBUFFER>(1); // poison, must be nulled
+    CHECK(ds->CreateSoundBuffer(&desc, &buf, nullptr) == DSERR_INVALIDPARAM);
+    CHECK(buf == nullptr);
+
+    ds->Release();
+}
+
 // ===== Lock / Unlock =====
 
 void Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion() {
@@ -527,6 +546,7 @@ int main() {
     Test_CreateSoundBuffer_NullDescriptor_ReturnsOkWithEmptyBuffer();
     Test_CreateSoundBuffer_ZeroSizedBuffer_ReturnsOk();
     Test_CreateSoundBuffer_MissingFormat_FallsBackGracefully();
+    Test_CreateSoundBuffer_HugeBufferBytes_ReturnsInvalidParam();
 
     Test_Lock_FromWriteCursor_ReturnsFullBufferSingleRegion();
     Test_Lock_WraparoundRegion_ReturnsTwoValidRegions();

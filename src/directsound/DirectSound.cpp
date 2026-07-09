@@ -95,6 +95,15 @@ static bool dsFormatDebugEnabled()
 #define DSBPAN_CENTER  (0L)
 #define DSBPAN_RIGHT   (10000L)
 
+// Generous but finite ceiling on DSBUFFERDESC::dwBufferBytes (docs/audit_dsound.md §6.1,
+// TASK-24H-0164): both target games read this value unvalidated from an on-disk .wav file's own
+// dwDSize header field before it reaches CreateSoundBuffer, so a corrupted/truncated asset is a
+// concretely plausible way for an attacker- or corruption-controlled DWORD to otherwise reach an
+// unbounded std::vector::resize. 64 MiB comfortably exceeds even a multi-minute uncompressed
+// stereo 16-bit WAV (roughly 10 MiB/minute at 44.1kHz) - real game SFX assets are, per the
+// call-site audit, in the low hundreds of bytes.
+static constexpr DWORD kMaxSoundBufferBytes = 64u * 1024u * 1024u;
+
 // ---------------------------------------------------------------------------
 // Shared SDL audio device
 // ---------------------------------------------------------------------------
@@ -697,6 +706,17 @@ public:
                    (unsigned)lpcDSBufferDesc->dwSize,
                    (unsigned long)lpcDSBufferDesc->dwFlags,
                    (unsigned)lpcDSBufferDesc->dwBufferBytes);
+        }
+
+        // Bound dwBufferBytes before ever reaching DirectSoundBufferImpl's constructor, which
+        // otherwise resizes data_ to it unconditionally (docs/audit_dsound.md §6.1, S1,
+        // TASK-24H-0164) - an unsatisfiable resize throws uncaught, crossing the COM-style
+        // interface boundary CLAUDE.md's Coding Style says must never be crossed by an exception.
+        if (lpcDSBufferDesc && lpcDSBufferDesc->dwBufferBytes > kMaxSoundBufferBytes) {
+            DS_LOG("CreateSoundBuffer: dwBufferBytes=%u exceeds max=%u",
+                   (unsigned)lpcDSBufferDesc->dwBufferBytes, (unsigned)kMaxSoundBufferBytes);
+            *lplpDirectSoundBuffer = nullptr;
+            return DSERR_INVALIDPARAM;
         }
 
         auto* buf = new (std::nothrow) DirectSoundBufferImpl(lpcDSBufferDesc);
