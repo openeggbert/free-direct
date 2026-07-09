@@ -631,17 +631,24 @@ severity×reachability rankings (`docs/audit_ddraw.md` §2/§12, `docs/audit_dso
    hardening gaps (one can crash the process, one is an out-of-bounds write), currently unreachable
    by either target game but cheap, low-risk, self-contained fixes with tests already sketched.
 5. `TASK-24H-0172` (P1, Area: DirectPlay) - fix `Send()`'s self-send path reading the caller's
-   buffer before validating its claimed size. The DirectPlay audit's only P1: a real, precisely-
-   located inconsistency with the other two `Send()` delivery paths, though confirmed unreachable
-   by free-eggbert's own call pattern and not exercised by the existing oversized-payload test.
-6. `TASK-24H-0153`, `0156`-`0163` (P2, DirectDraw), `TASK-24H-0165`-`0171` (P2, DirectSound), and
-   `TASK-24H-0173`-`0179` (P2, DirectPlay) - remaining latent-defect fixes, documentation gaps, and
-   code-quality cleanups, opportunistic, no urgency (all confirmed unreachable today - DirectPlay's
-   whole batch doubly so, per `docs/audit_dplay.md` §4's finding that free-eggbert's multiplayer
-   packet pump never runs at all). Within this group, `TASK-24H-0165` (documenting the ~51ms device
-   close/reopen cost) and `TASK-24H-0173`/`0174` (fixing two stale-documentation contradictions) are
-   worth doing early relative to their siblings since they're pure documentation (plus one
-   non-timing-sensitive test for 0165), not code changes.
+   buffer before validating its claimed size. A real, precisely-located inconsistency with the
+   other two `Send()` delivery paths, currently unreachable by free-eggbert's own call pattern and
+   not exercised by the existing oversized-payload test.
+6. `TASK-24H-0176`/`0178` (P1, Area: DirectPlay) - wire-header magic/version validation decision,
+   and an iteration cap on `Service()`'s/the discovery responder's unbounded drain loops. Both
+   raised from an initial P2 after the user clarified that free-eggbert's DirectPlay
+   unreachability (`docs/audit_dplay.md` §4) is temporary - tied to an ongoing decompilation, not a
+   permanent state - so these two genuine protocol-robustness/network-input-volume gaps shouldn't
+   be deprioritized purely on today's reachability, unlike pure documentation/cleanup items.
+7. `TASK-24H-0153`, `0156`-`0163` (P2, DirectDraw), `TASK-24H-0165`-`0171` (P2, DirectSound), and
+   `TASK-24H-0173`-`0175`/`0177`/`0179` (P2, DirectPlay) - remaining latent-defect fixes,
+   documentation gaps, and code-quality cleanups, opportunistic, no urgency. Within this group,
+   `TASK-24H-0165` (documenting the ~51ms device close/reopen cost) and `TASK-24H-0173`/`0174`
+   (fixing two stale-documentation contradictions) are worth doing early relative to their siblings
+   since they're pure documentation (plus one non-timing-sensitive test for 0165), not code changes.
+   `TASK-24H-0175` (removing `DirectPlayPlayer`'s dead scaffolding) is the one DirectPlay item in
+   this batch genuinely unaffected by decompilation progress - it's dead for internal-architecture
+   reasons, not because of free-eggbert's current state.
 
 Also still open, unchanged: `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not
 closeable without a subprocess test harness this project doesn't have yet (see Section 5).
@@ -713,9 +720,12 @@ CreateSoundBuffer's dwBufferBytes - the most concretely evidenced robustness gap
 audits, since both games read this value unvalidated from an on-disk .wav file), then
 TASK-24H-0172 (Send()'s self-send path validation order). Note: every DirectPlay audit finding is
 confirmed unreachable by free-eggbert's actual running code today - its multiplayer packet pump,
-CDecor::TreatNetData(), has its one call site commented out (docs/audit_dplay.md §4) - so that
-whole batch is real-but-low-urgency by construction, not just by individual-finding assessment.
-Standalone build: `cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
+CDecor::TreatNetData(), has its one call site commented out (docs/audit_dplay.md §4) - but this is
+TEMPORARY: the user has confirmed free-eggbert's source is an active, ongoing decompilation and
+DirectPlay will actually be used once it's complete, so do not treat these findings as
+indefinitely deferrable just because they're unreachable today (see the memory file
+project_free_eggbert_decompilation_in_progress.md). TASK-24H-0176 and 0178 were raised from P2 to
+P1 for exactly this reason. Standalone build: `cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
 not touch ../free-eggbert or ../planetblupi source. Do not resolve any DirectPlay design question
 unilaterally if a new one ever comes up.
 ```

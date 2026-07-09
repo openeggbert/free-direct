@@ -7284,8 +7284,12 @@ design Decisions and extensive prior documentation, so this batch is narrower th
 DirectSound ones and written more tersely per explicit request. **Every item below is confirmed
 unreachable by free-eggbert's actual running code today** (`docs/audit_dplay.md` §4:
 `CDecor::TreatNetData()`, the only call site that would drive `Send()`/`Receive()` during a session,
-is commented out in `event.cpp:2045`) — real defects, none urgent. Numbering continues from
-`TASK-24H-0171`.
+is commented out in `event.cpp:2045`). **This is temporary, not permanent — confirmed by the user:
+`../free-eggbert`'s source is an active, ongoing decompilation, and DirectPlay will actually be used
+once it's complete.** Priorities below reflect that these are real, near-term-relevant fixes, not
+indefinitely-deferrable cleanup (the one exception is `TASK-24H-0175`, whose unreachability is an
+internal FreeDirect architecture fact unrelated to free-eggbert's decompilation state). Numbering
+continues from `TASK-24H-0171`.
 
 ### TASK-24H-0172: Validate dwDataSize before reading lpData in Send()'s self-send path
 Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
@@ -7325,14 +7329,17 @@ Delete both files if nothing near-term needs them, or add a comment explaining w
 despite being unused, per this project's policy against unexplained unused surface.
 
 ### TASK-24H-0176: Decide whether to validate wire-header magic/version on receive
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §6.4 (D6) — `TryDeserializeDirectPlayWireHeader`'s magic/version
 skip was deliberately deferred "once a real transport actually receives packets"
 (`DirectPlayWireProtocol.hpp:10-16`); `EnetDirectPlayTransport` now is that real transport.
 Depends on: None.
 Either add the check (with a `DPERR_*` mapping for a rejected packet) or record a fresh, current
 rationale for continuing to defer it — the original comment's own precondition has been met and
-deserves a decision either way, not silence.
+deserves a decision either way, not silence. Raised to P1: this is a real protocol-robustness gap
+that will matter for actual peer traffic once free-eggbert's decompilation reconnects
+`TreatNetData()` (docs/audit_dplay.md §2's decompilation-in-progress caveat) - not indefinitely
+deferrable cleanup.
 
 ### TASK-24H-0177: Document the LAN discovery responder's reflection-primitive characteristic
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
@@ -7344,14 +7351,17 @@ Add an entry to `docs/directplay-limitations.md`. No code change proposed — th
 is explicitly LAN-only casual discovery, not an internet-facing service.
 
 ### TASK-24H-0178: Cap Service()'s and RespondToPendingRequests()'s drain-loop iterations
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
+Status: TODO | Priority: P1 | Area: DirectPlay | Type: Implementation
 Evidence: docs/audit_dplay.md §7.4 (D8) — `EnetDirectPlayTransport::Service()`
 (`EnetDirectPlayTransport.cpp:165`) and `DirectPlayDiscoveryService::RespondToPendingRequests()`
 (`DirectPlayDiscovery.cpp:108`) both drain "everything pending" with no per-call cap; a high
 incoming-packet rate has no bound on how long one call can take. Depends on: None.
 Add a bounded iteration count per call, leaving any remainder to be drained on a subsequent call
 (both are already called repeatedly from `Receive()`'s polling pattern, so nothing is lost by
-spreading a large drain across multiple calls).
+spreading a large drain across multiple calls). Raised to P1: the one part of this codebase
+genuinely exposed to arbitrary network input volume, and will matter for real once free-eggbert's
+decompilation reconnects actual gameplay traffic (docs/audit_dplay.md §2's decompilation-in-progress
+caveat).
 
 ### TASK-24H-0179: Reuse a persistent wireBuf member in Receive() instead of allocating per call
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Implementation
@@ -7364,12 +7374,17 @@ performance need.
 ---
 
 **Update (2026-07-09)**: 8 more atomic tasks added, `TASK-24H-0172` through `TASK-24H-0179`, from a
-fresh DirectPlay-only audit (`docs/audit_dplay.md`), all `Status: TODO`, none `BLOCKED`. Highest
-priority: `TASK-24H-0172` (self-send size-check ordering) is the only P1 — the sole genuinely novel
-correctness gap this audit found; everything else is P2 documentation fixes and low-urgency
-robustness/cleanup items, all confirmed unreachable by free-eggbert's current code (its multiplayer
-packet pump, `CDecor::TreatNetData()`, is commented out — see `docs/audit_dplay.md` §4). New running
-total: **179 atomic tasks** (`TASK-24H-0001` through `TASK-24H-0179`).
+fresh DirectPlay-only audit (`docs/audit_dplay.md`), all `Status: TODO`, none `BLOCKED`. Three P1s:
+`TASK-24H-0172` (self-send size-check ordering, the sole genuinely novel correctness gap this audit
+found), `TASK-24H-0176` (wire-header magic/version validation decision), and `TASK-24H-0178`
+(unbounded drain-loop iteration cap) — the latter two raised from an initial P2 after the user
+clarified that free-eggbert's DirectPlay unreachability (`docs/audit_dplay.md` §4,
+`CDecor::TreatNetData()`'s call site being commented out) is a temporary state tied to an ongoing
+decompilation effort, not a permanent one, so real protocol-robustness/network-input-volume gaps
+should not be deprioritized purely on today's reachability. Everything else (`TASK-24H-0173`-`0175`,
+`0177`, `0179`) remains P2: documentation fixes and one internal-architecture dead-code cleanup
+genuinely unaffected by free-eggbert's decompilation status. New running total: **179 atomic tasks**
+(`TASK-24H-0001` through `TASK-24H-0179`).
 
 ---
 

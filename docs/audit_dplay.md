@@ -41,7 +41,7 @@ surfaces one framing fact that changes how every other finding in this document 
 
 | # | Finding | Impact | Reachable today? | Section |
 |---|---|---|---|---|
-| D1 | **Framing fact, not a defect**: `CDecor::TreatNetData()` — the per-frame packet pump that would drive `Send()`/`Receive()` during an active session — has its one call site commented out (`event.cpp:2045`) | N/A | This is *why* everything below is unreachable, not a finding to fix | 4 |
+| D1 | **Framing fact, not a defect**: `CDecor::TreatNetData()` — the per-frame packet pump that would drive `Send()`/`Receive()` during an active session — has its one call site commented out (`event.cpp:2045`) | N/A | This is *why* everything below is unreachable *today* — but free-eggbert's decompilation is ongoing, not finished, and the user has confirmed DirectPlay will actually be used once it completes. Not a finding to fix, but not a reason to deprioritize the rest of this table either | 4 |
 | D2 | `Send()`'s self-send path reads `dwDataSize` bytes from `lpData` *before* checking it against `kMaxPayloadBytes`, unlike the broadcast/unicast paths, which check first | High if triggered — an out-of-bounds read if `dwDataSize` lies about the buffer's real size | **No** — free-eggbert's one real `Send()` call site always passes `idTo=0` (broadcast), never reaching self-send; the existing oversized-self-send test uses an honestly-sized buffer, so it doesn't exercise this either | 5.1 |
 | D3 | `include/dplay.h`'s top-of-file comment ("Broadcast delivery... does not work correctly yet") contradicts the `Send()` method's own doc comment 270 lines below it (broadcast is real) | Low — stale documentation, not a behavior bug | N/A | 6.1 |
 | D4 | `docs/networking-backends.md` claims ENet joining/discovery "does not work today," contradicted by Decisions 22/23 (already implemented) | Low — stale documentation | N/A | 6.2 |
@@ -62,6 +62,16 @@ never *open* a network session through free-eggbert's UI, the gameplay-loop mech
 *drive* an already-open session don't run either. Every runtime-behavior finding below (D2, D6-D10)
 is therefore confirmed unreachable by any current free-eggbert code path today, full stop — not
 merely "unreachable via specific menu screens."
+
+**This unreachability is temporary, not permanent, and must not be read as license to defer these
+findings indefinitely.** `../free-eggbert`'s source is an active, ongoing decompilation/
+reconstruction effort, not a finished, frozen codebase — confirmed directly by the user: DirectPlay
+*will* be used by free-eggbert once that decompilation effort is complete. The commented-out
+`TreatNetData()` call and the empty `WM_PHASE_DP_*` handlers are gaps expected to close as that work
+progresses, unlike, say, `DirectPlayPlayer`'s dead scaffolding (D5), which is unreachable because it
+was architecturally superseded inside FreeDirect itself and has no relationship to free-eggbert's
+decompilation status at all. Every "reachable today: No (but see D1)" verdict in this document
+should be read as "not yet, pending decompilation completion," not as "structurally irrelevant."
 
 ## 3. What's already solid (checked, not just assumed)
 
@@ -144,7 +154,10 @@ actually invoke multiplayer hosting/joining"). What's new here: it's not just th
 path that's unreachable — the gameplay-loop packet pump that would exercise an already-open
 session's `Send()`/`Receive()` is structurally disabled in the source too, not merely gated behind
 unreachable menu state. Per `CLAUDE.md`, this is a free-eggbert source-completeness fact, not
-something this project modifies game source to work around.
+something this project modifies game source to work around — and, per the user's own confirmation,
+a fact expected to change as free-eggbert's decompilation continues, not a permanent one. FreeDirect
+should keep treating this DirectPlay surface as a real, near-term-live target, not as a corner it
+can afford to leave soft indefinitely.
 
 One concrete consequence worth naming: real `dwDataSize` values observed at free-eggbert's other
 `CNetwork::Send`-wrapper call sites (`decnet.cpp:83`, `event.cpp:2159,2176,2212,2247,2281,4708`) are
@@ -474,37 +487,44 @@ change that conclusion.
 
 ## 9. Proposed tasks
 
-Priority reflects Impact × Reachability per Section 2. Every "reachable today" item in this audit
-is reachable *only* in the "the code would run if the packet pump ran" sense (D1) — none of them
-are live risks against free-eggbert's actual current code. That changes urgency, not validity: these
-are still real, worth fixing opportunistically, not urgent production incidents.
+Priority reflects Impact × Reachability per Section 2 — **with Reachability read as "not yet, per
+Section 4's decompilation-in-progress caveat," not "structurally irrelevant."** None of these are
+live risks against free-eggbert's actual current code *today*, but that code is a work in progress,
+not a finished target, so these are real, near-term-relevant fixes, not indefinitely-deferrable
+cleanup.
 
 1. **Fix `Send()`'s self-send path to validate `dwDataSize` before reading `lpData`** (D2, §6.5).
    Highest priority in this audit — move the existing `kMaxPayloadBytes` check up, matching the
    other two paths. Small, self-contained, and closes this audit's only genuinely novel correctness
    gap. Add a test with a `dwDataSize` that overstates a real, smaller buffer's actual size
    (distinct from the existing honestly-sized oversized-payload test).
-2. **Fix `include/dplay.h`'s stale top-of-file broadcast comment** (D3, §6.1) — documentation-only,
+2. **Decide (and record) whether wire-header `magic`/`version` validation should be added now that
+   ENet is real** (D6, §6.4) — real protocol-robustness gap that will matter for actual peer traffic
+   once free-eggbert's decompilation reconnects `TreatNetData()`; a small decision-plus-
+   implementation task if the answer is "add it," or a one-line comment update citing this audit if
+   the answer is "still defer, here's why."
+3. **Add an iteration cap to `Service()`'s and `RespondToPendingRequests()`'s drain loops** (D8,
+   §7.4) — the other genuine robustness gap that only matters once real network traffic actually
+   flows; bound the per-call work, returning "more still pending" state to be drained on a
+   subsequent call rather than looping unboundedly in one call.
+4. **Fix `include/dplay.h`'s stale top-of-file broadcast comment** (D3, §6.1) — documentation-only,
    trivial, but actively misleading to a reader who trusts the file-level summary over the specific
-   method doc below it.
-3. **Update `docs/networking-backends.md`'s ENet section** to reflect Decisions 22/23 (D4, §6.2) —
+   method doc below it, and increasingly likely to be read by someone actually wiring up
+   `TreatNetData()` again.
+5. **Update `docs/networking-backends.md`'s ENet section** to reflect Decisions 22/23 (D4, §6.2) —
    documentation-only.
-4. **Remove `DirectPlayPlayer.hpp`/`.cpp`** (D5, §6.3), or, if there's a near-term reason to keep
-   the scaffolding, add a comment explaining why it's being kept despite being unused — matching
-   this project's stated preference for not accumulating unexplained unused surface.
-5. **Decide (and record) whether wire-header `magic`/`version` validation should be added now that
-   ENet is real** (D6, §6.4) — a small decision-plus-implementation task if the answer is "add it,"
-   or a one-line comment update citing this audit if the answer is "still defer, here's why."
 6. **Document the discovery responder's reflection-primitive characteristic** in
    `docs/directplay-limitations.md` (D7, §7.3) — documentation-only; add a bound on response rate
    only if this is ever exposed beyond a trusted LAN, which is not this project's current scope.
-7. **Add an iteration cap to `Service()`'s and `RespondToPendingRequests()`'s drain loops** (D8,
-   §7.4) — bound the per-call work, returning "more still pending" state to be drained on a
-   subsequent call rather than looping unboundedly in one call.
+7. **Remove `DirectPlayPlayer.hpp`/`.cpp`** (D5, §6.3), or, if there's a near-term reason to keep
+   the scaffolding, add a comment explaining why it's being kept despite being unused — matching
+   this project's stated preference for not accumulating unexplained unused surface. Unlike items
+   1-3, this one's priority is genuinely unaffected by decompilation progress (§4's caveat doesn't
+   apply — it's dead because of an internal FreeDirect design change, not free-eggbert's state).
 8. **Consider a persistent `wireBuf` member for `Receive()`** instead of a fresh per-call allocation
-   (D10, §5.2) — lowest priority in this list; empirically negligible today, proposed purely for
-   consistency with this project's established buffer-reuse pattern elsewhere, not for a measured
-   performance need.
+   (D10, §5.2) — lowest priority in this list; empirically negligible even under realistic call
+   frequency, proposed purely for consistency with this project's established buffer-reuse pattern
+   elsewhere, not for a measured performance need.
 
 Not proposed as a task: `EnetDirectPlayTransport::Shutdown()`'s bounded wait (D9, §5.3) is already
 a deliberate, documented, reasonable design choice (generous-but-small, per its own comment) — this
