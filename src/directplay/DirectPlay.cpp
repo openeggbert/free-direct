@@ -569,15 +569,46 @@ namespace {
     private:
         std::atomic<ULONG> refCount_;
     };
+
+    // FreeDirect-internal placeholder service provider (docs/directplay-design.md Decision 1,
+    // TASK-24H-0100). Not a real Microsoft service-provider GUID - this project is explicitly not
+    // wire-compatible with real DirectPlay (CLAUDE.md), so there is no external registry this needs
+    // to match. Distinct from IID_IDirectPlay/IID_IDirectPlay2A (dplay.h, Data1 1 and 0) so it can
+    // never be mistaken for either COM interface ID if ever compared.
+    const GUID kFreeDirectServiceProviderGuid = {2};
+
+    // "FreeDirect" in both encodings the two callback signatures need. free-eggbert's own
+    // EnumProvidersCallback (src/network.cpp) strcpy()s this into a 100-byte buffer
+    // (NamedGUID::name, include/network.hpp) and later exposes it verbatim via
+    // CNetwork::GetProviderName() to the game's UI text rendering (Decision 1's own note), so it
+    // must be a short, human-readable, null-terminated string - not a placeholder-looking token.
+    const char kFreeDirectServiceProviderNameA[] = "FreeDirect";
+    // WCHAR is uint16_t (free-api/include/winnt.h), not the native (4-byte) wchar_t on this
+    // platform - a plain L"..." literal would be the wrong width, so this is spelled out
+    // char-by-char instead of relying on a wide-string-literal prefix.
+    const WCHAR kFreeDirectServiceProviderNameW[] = {
+        'F', 'r', 'e', 'e', 'D', 'i', 'r', 'e', 'c', 't', 0
+    };
 }
 
 HRESULT WINAPI DirectPlayEnumerateA(LPDPENUMDPCALLBACKA lpEnumCallback, LPVOID lpContext) {
-    (void)lpEnumCallback; (void)lpContext;
+    if (!lpEnumCallback) return DPERR_INVALIDPARAMS;
+    // Exactly one invocation, describing the single FreeDirect-internal placeholder provider
+    // (Decision 1) - enough to satisfy free-eggbert's CNetwork::CreateProvider(0), the only index
+    // its reconstructed source ever constructs. The callback's own return value is intentionally
+    // not consulted: with only one provider to report, "stop enumerating" and "finished
+    // enumerating" are the same outcome either way.
+    lpEnumCallback(const_cast<LPGUID>(&kFreeDirectServiceProviderGuid),
+                   const_cast<LPSTR>(kFreeDirectServiceProviderNameA),
+                   1, 0, lpContext);
     return DP_OK;
 }
 
 HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID lpContext) {
-    (void)lpEnumCallback; (void)lpContext;
+    if (!lpEnumCallback) return DPERR_INVALIDPARAMS;
+    lpEnumCallback(const_cast<LPGUID>(&kFreeDirectServiceProviderGuid),
+                   const_cast<LPWSTR>(kFreeDirectServiceProviderNameW),
+                   1, 0, lpContext);
     return DP_OK;
 }
 

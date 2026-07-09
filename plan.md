@@ -4929,7 +4929,7 @@ comment above `Test_EnumSessions_FindsOneHostedSession` in `tests/directplay_tes
 the "document why, citing this task ID" acceptance criteria without a code/behavior change.
 
 ### TASK-24H-0100: Implement real DirectPlayEnumerateA/W provider enumeration
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectPlay
 Type: Implementation
@@ -4953,6 +4953,28 @@ Acceptance criteria:
 
 Out of scope:
 - Do not enumerate more than one provider. Do not implement real Windows service-provider discovery.
+
+Verified: Implemented per Decision 1's exact already-decided shape - `DirectPlayEnumerateA`/`W`
+(`DirectPlay.cpp`) now invoke their callback exactly once with a FreeDirect-internal placeholder
+GUID (`kFreeDirectServiceProviderGuid = {2}`, distinct from `IID_IDirectPlay`/`IID_IDirectPlay2A`'s
+`{1}`/`{0}`) and the human-readable name `"FreeDirect"` (both ANSI and manually-spelled-out
+`WCHAR`/UTF-16 encodings - `WCHAR` is `uint16_t` per `free-api`, not the native 4-byte `wchar_t`,
+so a plain `L"..."` literal would have been the wrong width). Both functions now return
+`DPERR_INVALIDPARAMS` for a null callback, matching every other callback-taking method in this
+file. Updated `include/dplay.h`'s two `@note Status:` tags from `STUB` to `IMPLEMENTED` with
+accurate descriptions. Verified against `free-eggbert/src/network.cpp`'s real
+`EnumProvidersCallback`/`GetProviderName`/`CreateProvider` call chain: the callback
+`strcpy()`s the name into a 100-byte `NamedGUID::name` buffer (`"FreeDirect"` trivially fits) and
+dereferences the GUID pointer directly (must be non-null, confirmed by the new implementation).
+TASK-24H-0093's two "invokes callback zero times" tests were rewritten (not left stale) into
+`Test_DirectPlayEnumerateA/W_InvokesCallbackExactlyOnceWithValidProvider` (asserting exactly one
+call, a non-null non-zero GUID, and the correct name/length) plus two new null-callback tests
+(61→63 total `directplay_tests`). Verified via the fast standalone `g++` loop (63/63 pass), a full
+CMake build+`ctest` (7/7), an ASan+UBSan build+`ctest` (7/7 clean, zero diagnostics - deliberately
+re-checked given this session's earlier real bug in this same file), a full out-of-tree
+`../free-eggbert` rebuild (`SPEEDY_BLUPI_WINDOWS`, exit 0), and `header_hygiene` (clean). This was
+the last remaining safe TODO task from this session's backlog - see Section 8 of `NEXT.md` for
+what remains (Track B's 7 BLOCKED questions, and the `TASK-24H-0057` PARTIAL item).
 
 ### TASK-24H-0101: Add a test asserting Close() is idempotent
 Status: DONE

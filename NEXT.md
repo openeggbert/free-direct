@@ -17,12 +17,13 @@ charter).
   wire-compatible with real Microsoft DirectPlay — FreeDirect-to-FreeDirect only.
 - **Current development phase**: `plan.md`'s original Phases 0–18 and the 24-Hour Stabilization
   Backlog are both now deep - the backlog carries **147 atomic `TASK-24H-XXXX` tasks**. As of this
-  session's final count (real count, `grep`-verified against `plan.md`, not estimated): **137
-  DONE, 1 TODO, 1 PARTIAL, 8 BLOCKED** pending a human decision. Session 1 ended at 64 DONE - this
-  session closed **73 more**, leaving only one safe TODO task remaining
-  (`TASK-24H-0100`, real `DirectPlayEnumerateA`/`W` implementation - see Section 8) plus the
-  1 PARTIAL and 8 BLOCKED items, which are genuinely not closeable without either a subprocess
-  test harness (`TASK-24H-0057`) or a human design decision (Track B).
+  session's final count (real count, `grep`-verified against `plan.md`, not estimated): **138
+  DONE, 0 TODO, 1 PARTIAL, 8 BLOCKED** pending a human decision. Session 1 ended at 64 DONE - this
+  session closed **74 more**, including `TASK-24H-0100` (real `DirectPlayEnumerateA`/`W`
+  implementation, the last safe task in the entire backlog - see Section 3). **Zero safe TODO
+  tasks remain.** Only the 1 PARTIAL and 8 BLOCKED items are left, which are genuinely not
+  closeable without either a subprocess test harness (`TASK-24H-0057`) or a human design decision
+  (Track B, Section 8).
 - **Important architectural decisions** (full narrative + rationale for the DirectPlay ones lives
   in `docs/directplay-design.md`, Decisions 1–19; deviation summary in
   `docs/directplay-limitations.md`, new this session):
@@ -70,7 +71,7 @@ charter).
 
 **Test status: real counts, `grep`-verified against the actual test files, not recalled from
 memory:**
-- `directplay_tests` (label `directplay`) — **61/61** passing (was 49 at session-1 end).
+- `directplay_tests` (label `directplay`) — **63/63** passing (was 49 at session-1 end).
 - `header_smoke_ddraw` / `header_smoke_dsound` / `header_smoke_dplay` / `header_hygiene` (label
   `headers`) — all passing.
 - `directdraw_tests` (label `directdraw`) — **53/53** passing (was 45).
@@ -78,7 +79,7 @@ memory:**
 - `enet_directplay_tests` (label `enet`, opt-in, only built with `FREE_DIRECT_ENABLE_ENET=ON`) —
   **4/4** passing, new this session.
 
-Total: **148 individual `Test_*` functions** across four hand-written test binaries (61 + 53 + 30 +
+Total: **150 individual `Test_*` functions** across four hand-written test binaries (63 + 53 + 30 +
 4), all passing, plus the 4 header-compile/hygiene checks.
 
 The `ctest`-only-discoverable-from-inside-`FREE_DIRECT`-subdirectory caveat for target-game builds
@@ -104,8 +105,9 @@ session - no BLOCKED question was resolved):
 
 ## 3. Recent changes
 
-**This session** (2026-07-08, continuation implementation session - closed 73 more `TASK-24H-XXXX`
-tasks, from 64 to 137 DONE; no new audit, no new plan created, per explicit instruction):
+**This session** (2026-07-08, continuation implementation session - closed 74 more `TASK-24H-XXXX`
+tasks, from 64 to 138 DONE (every safe task in the backlog); no new audit, no new plan created, per
+explicit instruction):
 
 1. **DirectDraw**: added `Flip`/presentation-throttle/clipper-one-time-init tests (45→53), closing
    `TASK-24H-0046`/`0047`/`0050`-`0055`. Introduced `ReadPresentedPixel()` (a genuine black-box
@@ -186,6 +188,19 @@ tasks, from 64 to 137 DONE; no new audit, no new plan created, per explicit inst
     (`PLANET_BLUPI_WINDOWS`, exit 0), and a final `header_hygiene` re-check (clean). Confirmed
     `git status` clean and fully pushed to `origin/develop` before writing this final `NEXT.md`
     update.
+13. **`TASK-24H-0100`: real `DirectPlayEnumerateA`/`W` implementation** - the last safe TODO task
+    in the entire backlog, done after a user check-in following item 12's final report. Both
+    functions now invoke their callback exactly once with a FreeDirect-internal placeholder
+    provider (GUID `{2}`, name `"FreeDirect"` in both ANSI and manually-spelled-`WCHAR` UTF-16
+    encodings - `WCHAR` is `uint16_t` per `free-api`, not the native 4-byte `wchar_t`, so a plain
+    `L"..."` literal would have been the wrong width), matching Decision 1's already-decided shape
+    exactly. Return `DPERR_INVALIDPARAMS` for a null callback, matching every other callback-taking
+    method in this file. `include/dplay.h`'s two `@note Status:` tags updated `STUB`→`IMPLEMENTED`.
+    `TASK-24H-0093`'s two stale "invokes callback zero times" tests were rewritten (not left
+    stale) into 4 new tests asserting the real behavior (61→63 `directplay_tests`). Verified: fast
+    `g++` loop (63/63), full CMake `ctest` (7/7), ASan+UBSan `ctest` (7/7 clean - re-checked given
+    this session's earlier real bug in this same file), a full out-of-tree `../free-eggbert`
+    rebuild (exit 0), and `header_hygiene` (clean).
 
 **Prior session (2)** (DirectDraw/DirectSound test-coverage focus - condensed; full detail was
 here before this rewrite, still in `git log`): added `tests/directdraw_tests.cpp` (45 tests) and
@@ -203,8 +218,8 @@ collision characterization test.
 
 ## 4. Current blocker / main problem
 
-**There is still no build- or test-breaking blocker.** Everything builds, all 148 committed
-`Test_*` checks pass (61 directplay + 53 directdraw + 30 directsound + 4 ENet, opt-in), plus 4
+**There is still no build- or test-breaking blocker.** Everything builds, all 150 committed
+`Test_*` checks pass (63 directplay + 53 directdraw + 30 directsound + 4 ENet, opt-in), plus 4
 header-level checks, across every verified configuration (default, ENet, ASan+UBSan, and both
 target games).
 
@@ -214,13 +229,12 @@ player names, duplicate-player semantics, player-lost state) still need a human 
 session deliberately did not touch any of them, per explicit instruction - see
 `docs/directplay-limitations.md`'s dedicated section for all 7 listed together with citations.
 
-**What's different now**: 73 more tasks closed, two real memory-safety/UB bugs found and fixed via
+**What's different now**: 74 more tasks closed, two real memory-safety/UB bugs found and fixed via
 systematic sweeps (one manual, one sanitizer-driven), one stale task premise caught and corrected
 rather than blindly executed, one real documentation math error (GUID wire size) caught before
-publishing, and both target games freshly re-verified building clean. Exactly **one** safe TODO
-task remains (`TASK-24H-0100`, real count) - `DirectPlayEnumerateA`/`W` implementation, already
-decided in shape (Decision 1), just not yet coded; every recurring-verification and end-of-session
-task has now been formally closed with citations.
+publishing, both target games freshly re-verified building clean, and - the last item -
+`DirectPlayEnumerateA`/`W` implemented for real per Decision 1's already-decided shape.
+**Zero safe TODO tasks remain in the entire 147-task backlog.**
 
 **Minor, unchanged**: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` still unexercised in this environment (no
 system `libenet` package) - the vendored `third_party/enet` path is the one actually verified.
@@ -364,19 +378,17 @@ No lint/format tooling is configured in this repository.
 
 ## 8. Next smallest tasks
 
-**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **1**):
-1. `TASK-24H-0100`: Implement real `DirectPlayEnumerateA`/`W` provider enumeration - Decision 1
-   already decided the exact shape (invoke the callback once, describing a FreeDirect-internal
-   placeholder provider); genuinely just not yet coded. Not attempted this session since it's new
-   behavior, not a test/cleanup task, and wasn't in this session's explicit DirectPlay-safe-tasks
-   list. This is the natural next task for a future session to pick up first.
+**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **0**).
+Every safe task in the 147-task backlog is now DONE, including `TASK-24H-0100`
+(`DirectPlayEnumerateA`/`W`, closed after Track A's last item was picked up on request following
+this session's own final report). The only two items left anywhere in the backlog are:
+- `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not closeable without a
+  subprocess test harness this project doesn't have yet (see Section 5).
+- Track B, below (8 `BLOCKED` tasks, all need a human decision).
 
-All of `TASK-24H-0005`/`0006`/`0007`/`0008`/`0013`-`0015`/`0076`/`0138`-`0141` (the recurring
-process-verification and end-of-session final-integration tasks) were formally closed this session,
-each with a citation to real evidence - see `plan.md` for the individual `Verified:` notes. The
-`TASK-24H-0057` (`DSERR_NODRIVER`) `PARTIAL` item remains genuinely not closeable without a
-subprocess test harness this project doesn't have yet (see Section 5) - a reasonable next-next
-task if that observability gap is ever worth closing.
+A future session picking this up has no safe backlog work left to do on autopilot - the next real
+progress requires either building the subprocess harness for `TASK-24H-0057`, or a human decision
+on one of Track B's 7 questions.
 
 **Track B — needs a human decision first** (`plan.md`'s 8 `BLOCKED` tasks,
 `TASK-24H-0091, 0131..0137`): DPID-0 broadcast/self-send semantics (proven, not just suspected -
@@ -420,18 +432,16 @@ without asking.
 ```
 Read NEXT.md first (this file), especially Sections 4 and 8, then docs/directplay-limitations.md
 (the 7 BLOCKED design questions, listed together) and plan.md's "24-Hour Autonomous Stabilization
-Backlog" section for full task detail. 137 of 147 TASK-24H-XXXX tasks are DONE, 1 PARTIAL, 8
-BLOCKED (do not start those without asking), and exactly 1 TODO remains (TASK-24H-0100). DirectDraw
-(53 tests), DirectSound (30 tests), DirectPlay (61 tests + 4 opt-in ENet transport tests) all have
+Backlog" section for full task detail. 138 of 147 TASK-24H-XXXX tasks are DONE, 1 PARTIAL, 8
+BLOCKED (do not start those without asking), and ZERO TODO remain - every safe task in the entire
+backlog is closed, including TASK-24H-0100 (DirectPlayEnumerateA/W real implementation). DirectDraw
+(53 tests), DirectSound (30 tests), DirectPlay (63 tests + 4 opt-in ENet transport tests) all have
 solid coverage now; two real memory-safety/UB bugs were found and fixed this session (one via
-manual sweep, one via a new ASan/UBSan sanitizer build - TASK-24H-0010). The only remaining Track A
-work (Section 8) is TASK-24H-0100 (DirectPlayEnumerateA/W real implementation, shape already
-decided by Decision 1) - implement it, verify with a real build+test run in a fresh /tmp scratch
-dir, mark it DONE in plan.md with a Verified note citing what you actually ran, commit+push, then
-update this file's Sections 2/3/5/8 to match (Track A will then be empty - the only remaining work
-will be Track B's 7 BLOCKED design questions, which need a human decision, and the TASK-24H-0057
-DSERR_NODRIVER PARTIAL item, which needs a subprocess test harness this project doesn't have yet).
-Standalone build: `cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
+manual sweep, one via a new ASan/UBSan sanitizer build - TASK-24H-0010). There is no more safe
+backlog work to pick up on autopilot: the only remaining items are Track B's 7 BLOCKED design
+questions (Section 8), which need a human decision, and TASK-24H-0057 (DSERR_NODRIVER, PARTIAL),
+which needs a subprocess test harness this project doesn't have yet. Standalone build:
+`cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
 not touch ../free-eggbert or ../planetblupi source. Do not resolve any Track B question
 unilaterally.
 ```

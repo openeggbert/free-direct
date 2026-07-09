@@ -39,6 +39,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -1465,32 +1466,82 @@ void Test_CreatePlayer_MalformedDpNameSize_ReturnsInvalidParams() {
 }
 
 namespace {
-BOOL FailIfCalledEnumDpCallbackA(LPGUID, LPSTR, DWORD, DWORD, LPVOID lpContext) {
-    auto* callCount = static_cast<int*>(lpContext);
-    ++(*callCount);
+struct EnumDpCallbackRecordA {
+    int callCount = 0;
+    GUID lastGuid{};
+    bool lastGuidWasNull = true;
+    std::string lastName;
+};
+BOOL RecordingEnumDpCallbackA(LPGUID lpguidSP, LPSTR lpSPName, DWORD, DWORD, LPVOID lpContext) {
+    auto* record = static_cast<EnumDpCallbackRecordA*>(lpContext);
+    ++record->callCount;
+    record->lastGuidWasNull = (lpguidSP == nullptr);
+    if (lpguidSP) record->lastGuid = *lpguidSP;
+    record->lastName = lpSPName ? lpSPName : "";
     return TRUE;
 }
-BOOL FailIfCalledEnumDpCallbackW(LPGUID, LPWSTR, DWORD, DWORD, LPVOID lpContext) {
-    auto* callCount = static_cast<int*>(lpContext);
-    ++(*callCount);
+
+struct EnumDpCallbackRecordW {
+    int callCount = 0;
+    GUID lastGuid{};
+    bool lastGuidWasNull = true;
+    bool lastNameWasNull = true;
+    std::size_t lastNameLength = 0;
+};
+BOOL RecordingEnumDpCallbackW(LPGUID lpguidSP, LPWSTR lpSPName, DWORD, DWORD, LPVOID lpContext) {
+    auto* record = static_cast<EnumDpCallbackRecordW*>(lpContext);
+    ++record->callCount;
+    record->lastGuidWasNull = (lpguidSP == nullptr);
+    if (lpguidSP) record->lastGuid = *lpguidSP;
+    record->lastNameWasNull = (lpSPName == nullptr);
+    if (lpSPName) {
+        std::size_t len = 0;
+        while (lpSPName[len] != 0) ++len;
+        record->lastNameLength = len;
+    }
     return TRUE;
 }
 } // namespace
 
-// 24-Hour Stabilization Backlog TASK-24H-0093 (plan.md): DirectPlayEnumerateA/W are genuinely
-// still stubs (docs/directplay-design.md Decision 1: decided, not yet implemented) - these tests
-// document today's exact behavior (DP_OK, callback invoked zero times) so a future implementation
-// of Decision 1 is a deliberate, visible diff here, not a silent behavior change.
-void Test_DirectPlayEnumerateA_InvokesCallbackZeroTimes() {
-    int callCount = 0;
-    CHECK(DirectPlayEnumerateA(FailIfCalledEnumDpCallbackA, &callCount) == DP_OK);
-    CHECK(callCount == 0);
+// 24-Hour Stabilization Backlog TASK-24H-0100 (plan.md): DirectPlayEnumerateA/W now implement
+// Decision 1's already-decided shape for real (previously TASK-24H-0093's tests here documented
+// the interim zero-invocation stub, per that task's own now-superseded doc comment). Asserts the
+// callback fires exactly once with a non-null, non-zero (i.e. distinguishable, not a default-
+// constructed empty GUID) provider GUID and a non-empty, human-readable name - matching this
+// task's own acceptance criteria wording exactly.
+void Test_DirectPlayEnumerateA_InvokesCallbackExactlyOnceWithValidProvider() {
+    EnumDpCallbackRecordA record;
+    CHECK(DirectPlayEnumerateA(RecordingEnumDpCallbackA, &record) == DP_OK);
+    CHECK(record.callCount == 1);
+    CHECK(!record.lastGuidWasNull);
+    const GUID zeroGuid{};
+    CHECK(std::memcmp(&record.lastGuid, &zeroGuid, sizeof(GUID)) != 0);
+    CHECK(record.lastName == "FreeDirect");
 }
 
-void Test_DirectPlayEnumerateW_InvokesCallbackZeroTimes() {
-    int callCount = 0;
-    CHECK(DirectPlayEnumerateW(FailIfCalledEnumDpCallbackW, &callCount) == DP_OK);
-    CHECK(callCount == 0);
+void Test_DirectPlayEnumerateW_InvokesCallbackExactlyOnceWithValidProvider() {
+    EnumDpCallbackRecordW record;
+    CHECK(DirectPlayEnumerateW(RecordingEnumDpCallbackW, &record) == DP_OK);
+    CHECK(record.callCount == 1);
+    CHECK(!record.lastGuidWasNull);
+    const GUID zeroGuid{};
+    CHECK(std::memcmp(&record.lastGuid, &zeroGuid, sizeof(GUID)) != 0);
+    CHECK(!record.lastNameWasNull);
+    CHECK(record.lastNameLength == 10); // "FreeDirect"
+
+    // Both encodings must describe the same underlying placeholder provider.
+    EnumDpCallbackRecordA recordA;
+    CHECK(DirectPlayEnumerateA(RecordingEnumDpCallbackA, &recordA) == DP_OK);
+    CHECK(std::memcmp(&record.lastGuid, &recordA.lastGuid, sizeof(GUID)) == 0);
+}
+
+// 24-Hour Stabilization Backlog TASK-24H-0100: a null callback must not be dereferenced/called.
+void Test_DirectPlayEnumerateA_NullCallback_ReturnsInvalidParams() {
+    CHECK(DirectPlayEnumerateA(nullptr, nullptr) == DPERR_INVALIDPARAMS);
+}
+
+void Test_DirectPlayEnumerateW_NullCallback_ReturnsInvalidParams() {
+    CHECK(DirectPlayEnumerateW(nullptr, nullptr) == DPERR_INVALIDPARAMS);
 }
 
 // 24-Hour Stabilization Backlog TASK-24H-0101 (plan.md): no test verified calling Close() twice
@@ -1651,8 +1702,10 @@ int main() {
     Test_QueryInterface_UnknownGuid_ReturnsNoInterfaceAndNullsOutParam();
     Test_QueryInterface_NullOutParam_ReturnsInvalidParams();
     Test_CreatePlayer_MalformedDpNameSize_ReturnsInvalidParams();
-    Test_DirectPlayEnumerateA_InvokesCallbackZeroTimes();
-    Test_DirectPlayEnumerateW_InvokesCallbackZeroTimes();
+    Test_DirectPlayEnumerateA_InvokesCallbackExactlyOnceWithValidProvider();
+    Test_DirectPlayEnumerateW_InvokesCallbackExactlyOnceWithValidProvider();
+    Test_DirectPlayEnumerateA_NullCallback_ReturnsInvalidParams();
+    Test_DirectPlayEnumerateW_NullCallback_ReturnsInvalidParams();
     Test_Close_CalledTwice_SecondCallIsSafe();
     Test_SelfSend_OversizedPayload_ReturnsSendTooBig();
     Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams();
