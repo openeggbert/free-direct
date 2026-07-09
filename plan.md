@@ -3705,7 +3705,7 @@ standalone free-direct build (system SDL3 available, see NEXT.md) and full build
 `../free-eggbert` and `../planetblupi`, under `SDL_AUDIODRIVER=dummy`.
 
 ### TASK-24H-0057: Add DirectSoundCreate smoke test incl. graceful no-driver path
-Status: PARTIAL
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Test
@@ -3727,19 +3727,26 @@ Acceptance criteria:
 Out of scope:
 - Do not test real hardware audio device enumeration.
 
-Partially verified: `Test_DirectSoundCreate_ReturnsOk` covers the success path under
+Originally partially verified: `Test_DirectSoundCreate_ReturnsOk` covers the success path under
 `SDL_AUDIODRIVER=dummy` (plus `Test_DirectSoundCreate_NullOutParam_ReturnsInvalidParam`/
 `_NonNullOuter_ReturnsInvalidParam`, exceeding the original ask on the validation side). The
-`DSERR_NODRIVER` graceful-failure path was **not** forced in-process: `SharedAudioDevice` is a
+`DSERR_NODRIVER` graceful-failure path could **not** be forced in-process: `SharedAudioDevice` is a
 process-wide singleton whose chosen SDL audio driver is sticky for the process's lifetime once
 `SDL_InitSubSystem(SDL_INIT_AUDIO)` first runs (nothing ever calls `SDL_QuitSubSystem`), so
 changing `SDL_AUDIODRIVER` mid-run after a real driver is already selected would not reliably
-retrigger driver selection - reproducing the no-driver path deterministically would need a
-subprocess harness this test file doesn't have. The code path itself
-(`SharedAudioDevice::open()` returning `false` when `SDL_InitSubSystem`/`SDL_OpenAudioDevice`
-fail, `DirectSoundCreate` translating that to `DSERR_NODRIVER`) was verified by reading
-`DirectSound.cpp` directly rather than by an automated test. Marked PARTIAL, not DONE, since the
-acceptance criteria's "both scenarios" is not fully met - a genuine gap, not a downgrade.
+retrigger driver selection. Left `PARTIAL` at the time since the acceptance criteria's "both
+scenarios" was not fully met - a genuine gap, not a downgrade.
+
+**Closed for real by `TASK-24H-0181`** (2026-07-09): a standalone probe confirmed hard evidence for
+*why* no in-process trick was ever going to work (the sticky outcome survives even an explicit
+`SDL_QuitSubSystem`+re-`SDL_InitSubSystem` cycle with a different driver), then added a dedicated,
+separate CTest binary (`tests/directsound_nodriver_test.cpp`) that launches as a genuinely fresh
+process with `SDL_AUDIODRIVER` set to an unresolvable name, so its first-ever `DirectSoundCreate`
+call is guaranteed to hit the no-driver path. Both scenarios from this task's original acceptance
+criteria are now covered: the success path (this file's own tests, under `SDL_AUDIODRIVER=dummy`)
+and the graceful-failure path (the new dedicated binary). See `TASK-24H-0181`'s own `Verified:` note
+for the full build/test record. Updated `Status` from `PARTIAL` to `DONE` - this was the last
+non-`DONE` item anywhere in the entire backlog.
 
 ### TASK-24H-0058: Add SetCooperativeLevel test
 Status: DONE
@@ -7732,7 +7739,7 @@ sanitizer diagnostics from the new combined-subsystem teardown-ordering tests sp
 scenario most likely to expose a real use-after-free/double-free if one existed).
 
 ### TASK-24H-0181: Close TASK-24H-0057 via a dedicated fresh-process CTest binary for DSERR_NODRIVER
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectSound
 Type: Implementation
@@ -7772,6 +7779,26 @@ Acceptance criteria:
 Out of scope:
 - Do not add a general-purpose subprocess-testing harness/framework — this is one narrowly-scoped
   new CTest binary, not new test infrastructure for arbitrary future subprocess needs.
+
+Verified: added `tests/directsound_nodriver_test.cpp` (new file, single-purpose: one
+`DirectSoundCreate` call, asserts `DSERR_NODRIVER` and a null `*ppDS`, matching
+`DirectSoundCreate`'s own confirmed code path at `DirectSound.cpp:784-787`). Wired into
+`tests/CMakeLists.txt` with `ENVIRONMENT "SDL_AUDIODRIVER=freedirect-test-nonexistent-driver"` (a
+name chosen specifically to not collide with any real SDL3 driver, including the real `disabled`
+driver name, which behaves differently from a truly unresolvable one) and label `directsound`;
+added to the ASan/UBSan sanitized-target list. Proved the test has real teeth, not just a
+vacuously-true assertion, the same way `TASK-24H-0172` proved its ASan regression test did: ran the
+binary manually with `SDL_AUDIODRIVER=dummy` (a real, resolvable driver) and confirmed it correctly
+*fails* (`DirectSoundCreate` returns `DS_OK`, not `DSERR_NODRIVER`), then with the bogus driver name
+and confirmed it passes — the test genuinely discriminates between the two states, it doesn't just
+always report success. `TASK-24H-0057` updated from `PARTIAL` to `DONE` — this closes the last
+non-`DONE` item anywhere in the 182-task backlog. Verified across three configurations, all clean:
+default build `ctest` 9/9 (was 8/8, after `TASK-24H-0180`); `-DFREE_DIRECT_ENABLE_ENET=ON` build
+`ctest -L enet` 1/1 (unaffected); `-DFREE_DIRECT_ENABLE_ASAN=ON -DFREE_DIRECT_ENABLE_UBSAN=ON` build
+`ctest` 9/9 clean, zero sanitizer diagnostics. Also confirmed the new test's `ENVIRONMENT` property
+is correctly process-scoped and does not leak into sibling tests: the full default-build `ctest`
+run above includes `directsound_tests` (which needs a real, working `dummy` driver) passing
+immediately before `directsound_nodriver_test` runs in the same `ctest` invocation.
 
 ### TASK-24H-0182: Update NEXT.md — FREE_DIRECT demo confirmed running correctly, not just compiling
 Status: TODO

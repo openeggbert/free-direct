@@ -78,6 +78,27 @@ set_tests_properties(directsound_tests PROPERTIES
         ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
 )
 
+# DirectSound DSERR_NODRIVER graceful-failure path: its own tiny, separate binary rather than a
+# test appended to directsound_tests.cpp, because SharedAudioDevice's chosen SDL audio driver is
+# sticky for a process's entire lifetime once first selected - forcing the no-driver path requires
+# a genuinely fresh process whose very first DirectSoundCreate call sees an unresolvable
+# SDL_AUDIODRIVER, which only a dedicated CTest binary with its own ENVIRONMENT can guarantee.
+# Closes out TASK-24H-0057 (previously PARTIAL). 24-Hour Stabilization Backlog TASK-24H-0181
+# (plan.md).
+add_executable(directsound_nodriver_test directsound_nodriver_test.cpp)
+target_link_libraries(directsound_nodriver_test
+        PRIVATE
+        free-direct
+        SDL3::SDL3
+        SDL3_image::SDL3_image
+        SDL3_mixer::SDL3_mixer
+)
+add_test(NAME directsound_nodriver_test COMMAND directsound_nodriver_test)
+set_tests_properties(directsound_nodriver_test PROPERTIES
+        LABELS "directsound"
+        ENVIRONMENT "SDL_AUDIODRIVER=freedirect-test-nonexistent-driver"
+)
+
 # Integration tests: DirectDraw + DirectSound both live in one process at once, matching both
 # target games' real unconditional startup behavior. Needs both dummy drivers, same as the two
 # single-subsystem suites above. 24-Hour Stabilization Backlog TASK-24H-0180 (plan.md).
@@ -123,7 +144,7 @@ endif()
 if(FREE_DIRECT_SANITIZER_FLAGS)
     set(FREE_DIRECT_SANITIZED_TEST_TARGETS
             directplay_tests header_smoke_ddraw header_smoke_dsound header_smoke_dplay
-            directdraw_tests directsound_tests integration_tests)
+            directdraw_tests directsound_tests integration_tests directsound_nodriver_test)
     if(FREE_DIRECT_ENABLE_ENET)
         list(APPEND FREE_DIRECT_SANITIZED_TEST_TARGETS enet_directplay_tests)
     endif()
