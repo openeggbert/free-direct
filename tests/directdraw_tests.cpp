@@ -54,109 +54,14 @@ void Check(bool condition, const char* expr, const char* file, int line) {
 
 #define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
 
-namespace {
-
-// Shared helper: a fresh IDirectDraw with no window/renderer attached (SetCooperativeLevel never
-// called). Sufficient for every surface/blit/lock/color-key/palette/DC test — see the file header
-// comment for why no renderer is needed for those.
-LPDIRECTDRAW CreateDirectDrawNoWindow() {
-    LPDIRECTDRAW dd = nullptr;
-    CHECK(DirectDrawCreate(nullptr, &dd, nullptr) == DD_OK);
-    return dd;
-}
-
-LPDIRECTDRAWSURFACE CreateOffscreenSurface(LPDIRECTDRAW dd, int width, int height, int bpp) {
-    DDSURFACEDESC desc{};
-    std::memset(&desc, 0, sizeof(desc));
-    desc.dwSize = sizeof(DDSURFACEDESC);
-    desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
-    desc.dwWidth = static_cast<DWORD>(width);
-    desc.dwHeight = static_cast<DWORD>(height);
-    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
-    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
-    desc.ddpfPixelFormat.dwFlags = (bpp == 8) ? DDPF_PALETTEINDEXED8 : DDPF_RGB;
-    desc.ddpfPixelFormat.dwRGBBitCount = static_cast<DWORD>(bpp);
-
-    LPDIRECTDRAWSURFACE surface = nullptr;
-    CHECK(dd->CreateSurface(&desc, &surface, nullptr) == DD_OK);
-    return surface;
-}
-
-LPDIRECTDRAWSURFACE CreatePrimarySurface(LPDIRECTDRAW dd) {
-    DDSURFACEDESC desc{};
-    std::memset(&desc, 0, sizeof(desc));
-    desc.dwSize = sizeof(DDSURFACEDESC);
-    desc.dwFlags = DDSD_CAPS;
-    desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
-
-    LPDIRECTDRAWSURFACE surface = nullptr;
-    CHECK(dd->CreateSurface(&desc, &surface, nullptr) == DD_OK);
-    return surface;
-}
-
-// Only used by the two SetCooperativeLevel tests, which are the only tests that genuinely need a
-// real SDL window/renderer (see the file header comment). Registers the window class once
-// (RegisterClassA is idempotent - free-api just overwrites the same map entry - so calling it
-// again per test is harmless, but a single static-guarded registration keeps intent clear).
-LRESULT CALLBACK TestWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    return DefWindowProc(hWnd, message, wParam, lParam);
-}
-
-HWND CreateTestWindow() {
-    static bool registered = false;
-    if (!registered) {
-        WNDCLASSA windowClass{};
-        windowClass.lpfnWndProc = TestWindowProc;
-        windowClass.lpszClassName = "FreeDirectDdrawTestWindow";
-        CHECK(RegisterClassA(&windowClass) != 0);
-        registered = true;
-    }
-    HWND hwnd = CreateWindowExA(0, "FreeDirectDdrawTestWindow", "ddraw test", WS_OVERLAPPEDWINDOW,
-                                 0, 0, 320, 240, NULL, NULL, NULL, NULL);
-    CHECK(hwnd != nullptr);
-    return hwnd;
-}
-
-// Reads back a single presented pixel as packed 0xAABBGGRR (SDL_PIXELFORMAT_RGBA32 byte order:
-// byte0=R,1=G,2=B,3=A) via the real SDL renderer DirectDrawImpl::SetCooperativeLevel created for
-// this window. `SDL_GetRenderer(window)` is public SDL3 API - it works here (not a whitebox
-// hack) because CreateWindowExA/SetCooperativeLevel already establish HWND == SDL_Window* as a
-// real, confirmed convention in this codebase (see free-api's own CreateWindowExA implementation),
-// and SDL3 itself tracks one renderer per window, retrievable by anyone holding the window
-// pointer. This is the only way to observe the *rendered* (as opposed to CPU-buffer) output of
-// presentation-path behavior through this file's black-box-only testing approach.
-uint32_t ReadPresentedPixel(HWND hwnd, int x, int y) {
-    auto* window = reinterpret_cast<SDL_Window*>(hwnd);
-    SDL_Renderer* renderer = SDL_GetRenderer(window);
-    if (!renderer) return 0;
-    SDL_Rect rect{x, y, 1, 1};
-    SDL_Surface* raw = SDL_RenderReadPixels(renderer, &rect);
-    if (!raw) return 0;
-    SDL_Surface* converted = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
-    SDL_DestroySurface(raw);
-    if (!converted) return 0;
-    auto* p = static_cast<uint8_t*>(converted->pixels);
-    const uint32_t pixel = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-                            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-    SDL_DestroySurface(converted);
-    return pixel;
-}
-
-// Fills the *entire* primary surface (NULL dest rect - whatever its actual size is, normally
-// 640x480 by default since no SetDisplayMode call is involved here) with a solid 0x00RRGGBB
-// color via Blt/DDBLT_COLORFILL. Filling the whole surface, not an arbitrary sub-rect, means any
-// physical pixel read back via ReadPresentedPixel must show this color regardless of the
-// letterbox scale/offset math SDL_SetRenderLogicalPresentation applies between the primary's
-// logical size and the test window's physical size.
-void FillPrimaryWithColor(LPDIRECTDRAWSURFACE primary, DWORD rgb) {
-    DDBLTFX fx{};
-    std::memset(&fx, 0, sizeof(fx));
-    fx.dwSize = sizeof(DDBLTFX);
-    fx.dwFillColor = rgb;
-    CHECK(primary->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
-}
-
-} // namespace
+// TestHelpers.hpp's own functions use CHECK, so it must be included after the macro above is
+// defined (see that header's own "Contract" note). CreateDirectDrawNoWindow/CreateOffscreenSurface/
+// CreatePrimarySurface/TestWindowProc/CreateTestWindow/ReadPresentedPixel/FillPrimaryWithColor
+// used to be defined locally in this file - consolidated into the shared header (TASK-24H-0185)
+// since they were byte-for-byte (or near enough) duplicated in directsound_tests.cpp/
+// integration_tests.cpp too, which had already caused one real, silent divergence.
+#include "TestHelpers.hpp"
+using namespace free_direct_test_helpers;
 
 // ===== Group 2: creation/lifecycle =====
 

@@ -55,41 +55,12 @@ void Check(bool condition, const char* expr, const char* file, int line) {
 
 #define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
 
-namespace {
-
-LPDIRECTSOUND CreateDirectSoundNoWindow() {
-    LPDIRECTSOUND ds = nullptr;
-    CHECK(DirectSoundCreate(nullptr, &ds, nullptr) == DS_OK);
-    return ds;
-}
-
-// Builds a real PCMWAVEFORMAT (not WAVEFORMATEX - see file header comment) and creates a buffer
-// with it. Matches README's documented supported-format table: 8-bit unsigned / 16-bit signed
-// LE, mono/stereo, 11025/22050/44100 Hz.
-LPDIRECTSOUNDBUFFER CreatePcmBuffer(LPDIRECTSOUND ds, DWORD bufferBytes, WORD bits, WORD channels,
-                                     DWORD freq) {
-    PCMWAVEFORMAT fmt{};
-    std::memset(&fmt, 0, sizeof(fmt));
-    fmt.wf.wFormatTag = WAVE_FORMAT_PCM;
-    fmt.wf.nChannels = channels;
-    fmt.wf.nSamplesPerSec = freq;
-    fmt.wf.nBlockAlign = static_cast<WORD>(channels * (bits / 8));
-    fmt.wf.nAvgBytesPerSec = freq * fmt.wf.nBlockAlign;
-    fmt.wBitsPerSample = bits;
-
-    DSBUFFERDESC desc{};
-    std::memset(&desc, 0, sizeof(desc));
-    desc.dwSize = sizeof(DSBUFFERDESC);
-    desc.dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN | DSBCAPS_CTRLFREQUENCY;
-    desc.dwBufferBytes = bufferBytes;
-    desc.lpwfxFormat = &fmt;
-
-    LPDIRECTSOUNDBUFFER buf = nullptr;
-    CHECK(ds->CreateSoundBuffer(&desc, &buf, nullptr) == DS_OK);
-    return buf;
-}
-
-} // namespace
+// TestHelpers.hpp's own functions use CHECK, so it must be included after the macro above is
+// defined (see that header's own "Contract" note). CreateDirectSoundNoWindow/CreatePcmBuffer used
+// to be defined locally in this file - consolidated into the shared header (TASK-24H-0185) since
+// they were byte-for-byte duplicated in integration_tests.cpp too.
+#include "TestHelpers.hpp"
+using namespace free_direct_test_helpers;
 
 // ===== DirectSoundCreate =====
 

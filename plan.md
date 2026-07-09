@@ -7991,7 +7991,7 @@ Out of scope:
   the two changes independent and separately reviewable/revertable.
 
 ### TASK-24H-0185: Add a shared tests/TestHelpers.hpp, consolidating DirectDraw/DirectSound test scaffolding
-Status: TODO
+Status: DONE
 Priority: P2
 Area: Tests
 Type: Implementation
@@ -8043,6 +8043,43 @@ Out of scope:
   overlap with the DirectDraw/DirectSound helpers being consolidated here.
 - Do not use this header as a place to add new test-only production-code hooks or whitebox
   accessors — it is purely a consolidation of existing black-box test scaffolding.
+
+Verified: added `tests/TestHelpers.hpp` (new file, 9 functions:
+`CreateDirectDrawNoWindow`/`CreateOffscreenSurface`/`CreatePrimarySurface`/`TestWindowProc`/
+`CreateTestWindow`/`ReadPresentedPixel`/`FillPrimaryWithColor`/`CreateDirectSoundNoWindow`/
+`CreatePcmBuffer`), documented with an explicit `CHECK`-must-be-defined-first contract since it
+uses the including file's own failure-reporting macro rather than owning its own. Updated
+`tests/directdraw_tests.cpp`/`tests/directsound_tests.cpp`/`tests/integration_tests.cpp` to
+`#include` it (after their own `CHECK` definition) instead of defining local copies; `grep`
+confirms each of the 9 functions is now defined exactly once, only in `TestHelpers.hpp`. No
+`tests/CMakeLists.txt` change was needed - the header lives alongside the `.cpp` files that
+include it, on the default per-directory include path.
+
+**Important correction to this task's own Evidence/Problem framing, found while writing this
+task's own regression test - not assumed from the original audit finding:** the `CreateOffscreenSurface`
+`dwFlags` divergence does **not** actually drop 8-bit surface support or cause any observable
+behavioral difference in this codebase today. Read `DirectDraw.cpp` directly to check: `CreateSurface`
+only ever reads `ddpfPixelFormat.dwRGBBitCount` from a caller-supplied descriptor (never `dwFlags`),
+and `GetSurfaceDesc` derives the `dwFlags` it reports purely from the surface's own internal `bpp_`,
+never from whatever was originally passed at creation time - confirmed by grepping the entire file
+for `DDPF_PALETTEINDEXED8`/`DDPF_RGB` (exactly one match, `GetSurfaceDesc`'s own derivation) and for
+every `ddpfPixelFormat`-related read in `CreateSurface`. Proved this empirically too, not just by
+code reading: temporarily reintroduced the unconditional-`DDPF_RGB` bug in `TestHelpers.hpp`,
+rebuilt, and the originally-planned "prove the fix" test (`GetSurfaceDesc`-based, checking
+`dwFlags`) **still passed** - because `GetSurfaceDesc` recomputes `dwFlags` from `bpp_` regardless
+of what `CreateOffscreenSurface`'s own descriptor said, so that check could never have distinguished
+the buggy version from the fixed one. The fix itself is still correct and worth keeping (accurate
+`DDSURFACEDESC` construction, defensive against a future `DirectDraw.cpp` change that might start
+reading this field, and a test helper silently building the wrong descriptor is a real
+correctness-of-intent problem even when currently inert) - but this is a code-quality fix, not the
+functional-behavior bug fix originally described. Corrected the doc comments in `TestHelpers.hpp`
+and `integration_tests.cpp` to state this accurately, and replaced the planned
+`Test_CreateOffscreenSurface_8Bit_UsesCorrectPixelFormat` (whose name and comment claimed something
+untrue) with `Test_CreateOffscreenSurface_8Bit_HasCorrectBitDepthAndPitch`, which verifies genuine,
+real 8-bit behavior (bit count, pitch) survives the consolidation instead. Verified across three
+configurations, all clean: default build `ctest` 9/9 (`integration_tests` grew from 4 to 5 tests);
+`-DFREE_DIRECT_ENABLE_ENET=ON` build `ctest -L enet` 1/1 (unaffected); `-DFREE_DIRECT_ENABLE_ASAN=ON
+-DFREE_DIRECT_ENABLE_UBSAN=ON` build `ctest` 9/9 clean.
 
 ### TASK-24H-0186: Replace plan.md's stale "Priority summary" section with a self-verifying pointer
 Status: DONE

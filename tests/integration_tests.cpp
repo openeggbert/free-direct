@@ -52,117 +52,16 @@ void Check(bool condition, const char* expr, const char* file, int line) {
 
 #define CHECK(expr) Check((expr), #expr, __FILE__, __LINE__)
 
-namespace {
-
-// ===== DirectDraw-side helpers (mirror directdraw_tests.cpp's own, kept file-local per this
-// project's existing no-shared-test-header convention - see directplay_tests.cpp/
-// directdraw_tests.cpp/directsound_tests.cpp, none of which share helpers either). =====
-
-LPDIRECTDRAW CreateDirectDrawNoWindow() {
-    LPDIRECTDRAW dd = nullptr;
-    CHECK(DirectDrawCreate(nullptr, &dd, nullptr) == DD_OK);
-    return dd;
-}
-
-LRESULT CALLBACK TestWindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
-    return DefWindowProc(hWnd, message, wParam, lParam);
-}
-
-HWND CreateTestWindow() {
-    static bool registered = false;
-    if (!registered) {
-        WNDCLASSA windowClass{};
-        windowClass.lpfnWndProc = TestWindowProc;
-        windowClass.lpszClassName = "FreeDirectIntegrationTestWindow";
-        CHECK(RegisterClassA(&windowClass) != 0);
-        registered = true;
-    }
-    HWND hwnd = CreateWindowExA(0, "FreeDirectIntegrationTestWindow", "integration test",
-                                 WS_OVERLAPPEDWINDOW, 0, 0, 320, 240, NULL, NULL, NULL, NULL);
-    CHECK(hwnd != nullptr);
-    return hwnd;
-}
-
-LPDIRECTDRAWSURFACE CreatePrimarySurface(LPDIRECTDRAW dd) {
-    DDSURFACEDESC desc{};
-    std::memset(&desc, 0, sizeof(desc));
-    desc.dwSize = sizeof(DDSURFACEDESC);
-    desc.dwFlags = DDSD_CAPS;
-    desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
-
-    LPDIRECTDRAWSURFACE surface = nullptr;
-    CHECK(dd->CreateSurface(&desc, &surface, nullptr) == DD_OK);
-    return surface;
-}
-
-LPDIRECTDRAWSURFACE CreateOffscreenSurface(LPDIRECTDRAW dd, int width, int height, int bpp) {
-    DDSURFACEDESC desc{};
-    std::memset(&desc, 0, sizeof(desc));
-    desc.dwSize = sizeof(DDSURFACEDESC);
-    desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
-    desc.dwWidth = static_cast<DWORD>(width);
-    desc.dwHeight = static_cast<DWORD>(height);
-    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
-    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
-    desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
-    desc.ddpfPixelFormat.dwRGBBitCount = static_cast<DWORD>(bpp);
-
-    LPDIRECTDRAWSURFACE surface = nullptr;
-    CHECK(dd->CreateSurface(&desc, &surface, nullptr) == DD_OK);
-    return surface;
-}
-
-// Same technique as directdraw_tests.cpp's ReadPresentedPixel - see that file's header comment
-// for why this is a genuine black-box read of *rendered* output, not a whitebox hack.
-uint32_t ReadPresentedPixel(HWND hwnd, int x, int y) {
-    auto* window = reinterpret_cast<SDL_Window*>(hwnd);
-    SDL_Renderer* renderer = SDL_GetRenderer(window);
-    if (!renderer) return 0;
-    SDL_Rect rect{x, y, 1, 1};
-    SDL_Surface* raw = SDL_RenderReadPixels(renderer, &rect);
-    if (!raw) return 0;
-    SDL_Surface* converted = SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32);
-    SDL_DestroySurface(raw);
-    if (!converted) return 0;
-    auto* p = static_cast<uint8_t*>(converted->pixels);
-    const uint32_t pixel = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-                            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
-    SDL_DestroySurface(converted);
-    return pixel;
-}
-
-// ===== DirectSound-side helpers (mirror directsound_tests.cpp's own). =====
-
-LPDIRECTSOUND CreateDirectSoundNoWindow() {
-    LPDIRECTSOUND ds = nullptr;
-    CHECK(DirectSoundCreate(nullptr, &ds, nullptr) == DS_OK);
-    return ds;
-}
-
-LPDIRECTSOUNDBUFFER CreatePcmBuffer(LPDIRECTSOUND ds, DWORD bufferBytes, WORD bits, WORD channels,
-                                     DWORD freq) {
-    PCMWAVEFORMAT fmt{};
-    std::memset(&fmt, 0, sizeof(fmt));
-    fmt.wf.wFormatTag = WAVE_FORMAT_PCM;
-    fmt.wf.nChannels = channels;
-    fmt.wf.nSamplesPerSec = freq;
-    fmt.wf.nBlockAlign = static_cast<WORD>(channels * (bits / 8));
-    fmt.wf.nAvgBytesPerSec = freq * fmt.wf.nBlockAlign;
-    fmt.wBitsPerSample = bits;
-
-    DSBUFFERDESC desc{};
-    std::memset(&desc, 0, sizeof(desc));
-    desc.dwSize = sizeof(DSBUFFERDESC);
-    desc.dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN | DSBCAPS_CTRLFREQUENCY;
-    desc.dwBufferBytes = bufferBytes;
-    desc.lpwfxFormat = &fmt;
-
-    LPDIRECTSOUNDBUFFER buf = nullptr;
-    CHECK(ds->CreateSoundBuffer(&desc, &buf, nullptr) == DS_OK);
-    return buf;
-}
-
-} // namespace
+// TestHelpers.hpp's own functions use CHECK, so it must be included after the macro above is
+// defined (see that header's own "Contract" note). Every helper this file used to define locally
+// (CreateDirectDrawNoWindow/CreateTestWindow/CreatePrimarySurface/CreateOffscreenSurface/
+// ReadPresentedPixel/CreateDirectSoundNoWindow/CreatePcmBuffer) is now shared (TASK-24H-0185).
+// This also fixes a real inconsistency this file's own prior local copy of CreateOffscreenSurface
+// had: it hardcoded DDPF_RGB unconditionally instead of matching directdraw_tests.cpp's original
+// bpp-conditional DDPF_PALETTEINDEXED8/DDPF_RGB logic - see TestHelpers.hpp's own top-of-file
+// comment for the correction on what that inconsistency actually did (and didn't) affect.
+#include "TestHelpers.hpp"
+using namespace free_direct_test_helpers;
 
 // Mirrors both target games' actual unconditional startup sequence
 // (`free-eggbert/src/pixmap.cpp:178` DirectDrawCreate, `free-eggbert/src/sound.cpp:373`
@@ -178,6 +77,32 @@ void Test_DirectDrawAndDirectSound_BothCreateSuccessfully_InSameProcess() {
     CHECK(ds != nullptr);
 
     ds->Release();
+    dd->Release();
+}
+
+// Regression coverage for the now-shared CreateOffscreenSurface, exercised from this translation
+// unit specifically (not just directdraw_tests.cpp, which already covers 8-bit surfaces
+// extensively). NOT a test of the dwFlags divergence TASK-24H-0185 fixed in CreateOffscreenSurface
+// itself - tried that first, and found (by reading DirectDraw.cpp directly) that CreateSurface
+// never reads ddpfPixelFormat.dwFlags from the caller at all, and GetSurfaceDesc derives the
+// dwFlags it reports purely from the surface's own internal bpp_ - so a GetSurfaceDesc-based check
+// would report DDPF_PALETTEINDEXED8 correctly regardless of what CreateOffscreenSurface's own
+// descriptor said, and could never have caught that divergence. See TestHelpers.hpp's top-of-file
+// comment for the full correction. This test instead confirms genuine 8-bit behavior (correct bit
+// count and pitch) survives the consolidation.
+void Test_CreateOffscreenSurface_8Bit_HasCorrectBitDepthAndPitch() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 16, 16, 8);
+
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->GetSurfaceDesc(&desc) == DD_OK);
+    CHECK(desc.ddpfPixelFormat.dwFlags == DDPF_PALETTEINDEXED8); // GetSurfaceDesc's own derivation
+    CHECK(desc.ddpfPixelFormat.dwRGBBitCount == 8);
+    CHECK(desc.lPitch == 16); // 8bpp: 1 byte/pixel
+
+    surface->Release();
     dd->Release();
 }
 
@@ -291,6 +216,7 @@ void Test_ReleaseDirectDrawFirst_DirectSoundStillPlaysCorrectly() {
 
 int main() {
     Test_DirectDrawAndDirectSound_BothCreateSuccessfully_InSameProcess();
+    Test_CreateOffscreenSurface_8Bit_HasCorrectBitDepthAndPitch();
     Test_DirectDrawBltFastAndPresent_WorksCorrectly_WhileDirectSoundBufferIsPlaying();
     Test_ReleaseDirectSoundFirst_DirectDrawStillPresentsCorrectly();
     Test_ReleaseDirectDrawFirst_DirectSoundStillPlaysCorrectly();
