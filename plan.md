@@ -7288,7 +7288,7 @@ mirroring `TASK-24H-0162`'s DirectDraw equivalent. No code change. Full suite pa
 unchanged.
 
 ### TASK-24H-0168: Document Lock()'s offset clamp and Unlock()'s pointer-lifetime behavior as deliberate
-Status: TODO
+Status: DONE
 Priority: P2
 Area: DirectSound
 Type: Documentation
@@ -7321,6 +7321,11 @@ Out of scope:
 - Do not change `Lock()`/`Unlock()`'s actual behavior in this task — if a future call site needs
   `DSERR_INVALIDPARAM` semantics instead of clamping, that's a separate task with its own driving
   need, not a speculative change here.
+
+Verified: added two entries to `docs/directsound-limitations.md` ("Lock(): out-of-range offset is
+clamped, not rejected" and "Unlock(): never invalidates the pointer Lock() returned"), each
+recording the behavior as a deliberate, considered choice with its reachability caveat. No code
+change - documentation-only, nothing to build or test.
 
 ### TASK-24H-0169: Clamp/validate nSamplesPerSec before it reaches SDL_CreateAudioStream
 Status: TODO

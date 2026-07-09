@@ -46,6 +46,26 @@ this simplified model satisfies exactly - `tests/directsound_tests.cpp`'s
 (`Test_SetCurrentPosition_OutOfRange_ClampsAndPlaySucceeds`) confirms an out-of-range position is
 clamped back to 0 rather than causing an out-of-bounds read on the next `Play()`.
 
+## Lock(): out-of-range offset is clamped, not rejected
+
+`Lock()`'s `dwOffset >= bufferBytes_` case silently redirects to offset `0` instead of returning
+`DSERR_INVALIDPARAM` (`DirectSound.cpp`). This is a deliberate choice, matching this project's
+general clamp-don't-error philosophy used elsewhere (e.g. DirectDraw's `ClampRect`) - considered and
+not changed to error-returning behavior (`docs/audit_dsound.md` §6.4/§7.1, S6, TASK-24H-0168).
+Confirmed not currently exercised with an out-of-range offset by either target game: both always
+call `Lock(0, ...)` with `DSBLOCK_FROMWRITECURSOR`, which ignores the offset argument entirely.
+
+## Unlock(): never invalidates the pointer Lock() returned
+
+`Unlock()` ignores all of its parameters and always returns `DS_OK` - since `Lock()` hands out a
+raw pointer directly into the buffer's own storage (no staging buffer to copy back from), there is
+nothing for `Unlock()` to do. Real DirectSound documents the pointer `Lock()` returns as invalid
+after the matching `Unlock()` call; this implementation's pointer stays valid and writable for the
+buffer's entire lifetime regardless (`docs/audit_dsound.md` §7.4, S5, TASK-24H-0168). Not a safety
+bug (no dangling pointer, no use-after-free is created by this), just a real semantic looseness
+relative to the documented DirectSound contract - no known call site in either target game relies
+on writes after `Unlock()` being rejected.
+
 ## No looping
 
 `DSBPLAY_LOOPING` is accepted as a bit position in `Play()`'s `dwFlags` parameter but is not
