@@ -7501,12 +7501,18 @@ Restored the fix, rebuilt, re-ran under the same ASan+UBSan config: clean, 0 dia
 `ctest` 7/7. Default (non-sanitizer) build also passes 7/7 unchanged.
 
 ### TASK-24H-0173: Fix dplay.h's stale top-of-file broadcast-status comment
-Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation
+Status: DONE | Priority: P2 | Area: DirectPlay | Type: Documentation
 Evidence: docs/audit_dplay.md §6.1 (D3) — `include/dplay.h:9-11` says broadcast "does not work
 correctly yet"; `Send()`'s own doc comment 270 lines below (`dplay.h:281-282`) says it's real,
 correctly. Depends on: None.
 Update or remove the stale file-level paragraph so it doesn't contradict the accurate, more
 specific method doc in the same file.
+
+Verified: rewrote the paragraph (`dplay.h:6-13`). Found and fixed a second stale claim in the same
+paragraph while already there: it also said `DirectPlayEnumerateA`/`W` "remain genuine stubs,"
+contradicting their own function-level doc comments a few dozen lines below, which already say
+`IMPLEMENTED` (`TASK-24H-0100`). Documentation-only, no code change. Full suite passes 7/7
+unchanged.
 
 ### TASK-24H-0174: Update networking-backends.md's stale ENet section
 Status: TODO | Priority: P2 | Area: DirectPlay | Type: Documentation

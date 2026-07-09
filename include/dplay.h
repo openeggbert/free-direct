@@ -4,11 +4,12 @@
  *        transport.
  *
  * Most of `IDirectPlay2A` is implemented against real session/player/message-queue state (see
- * `src/directplay/DirectPlay.cpp` and `docs/directplay-design.md`'s Decisions 1-19), not
- * unconditional dummy values. `DirectPlayEnumerateA`/`DirectPlayEnumerateW` remain genuine stubs
- * (Decision 1: decided, not yet implemented). Broadcast delivery (`Send` with `idTo == 0`) does
- * not work correctly yet - see `Send`'s own doc comment below and
- * `docs/audit-24h-free-direct.md`.
+ * `src/directplay/DirectPlay.cpp` and `docs/directplay-design.md`'s Decisions 1-26).
+ * `DirectPlayEnumerateA`/`DirectPlayEnumerateW` are implemented (Decision 1, `TASK-24H-0100`) -
+ * see their own doc comments below for exactly what they do. Broadcast delivery (`Send` with
+ * `idTo == DPID_ALLPLAYERS`) is implemented too (Decisions 20/21) - see `Send`'s own doc comment
+ * below (docs/audit_dplay.md §6.1, D3, TASK-24H-0173: this paragraph was stale, contradicting the
+ * accurate, more specific method docs elsewhere in this same file).
  * @note Status: PARTIAL
  */
 #ifndef FREE_DIRECT_DPLAY_H
