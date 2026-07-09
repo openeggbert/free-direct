@@ -16,14 +16,16 @@ charter).
   implementation can host/join/exchange messages with each other. This is explicitly **not**
   wire-compatible with real Microsoft DirectPlay — FreeDirect-to-FreeDirect only.
 - **Current development phase**: `plan.md`'s original Phases 0–18 and the 24-Hour Stabilization
-  Backlog are both effectively closed out - the backlog carries **150 atomic `TASK-24H-XXXX`
-  tasks** (147 + 3 added mid-session once Track B was decided). As of this session's true final
-  count (real count, `grep`-verified against `plan.md`, not estimated): **149 DONE, 0 TODO, 1
-  PARTIAL, 0 BLOCKED**. Session 1 ended at 64 DONE. **All 7 of the project's standing BLOCKED
-  DirectPlay design questions (Track B) were asked of, answered by, and implemented for the user
-  in this session** - never decided unilaterally (see Section 3 and
-  `docs/directplay-design.md` Decisions 20-26). The only item left anywhere in the backlog is
-  `TASK-24H-0057` (`PARTIAL`), which needs a subprocess test harness this project doesn't have.
+  Backlog are both effectively closed out for implementation, plus a **new DirectDraw-only audit**
+  (`docs/audit_ddraw.md`, 2026-07-09) added **13 more atomic tasks, `TASK-24H-0151`-`0163`, all
+  `TODO`** - not yet implemented, see Section 3. Backlog now carries **163 atomic `TASK-24H-XXXX`
+  tasks** total. As of this update (real count, `grep`-verified against `plan.md`, not estimated):
+  **149 DONE, 13 TODO, 1 PARTIAL, 0 BLOCKED**. Session 1 ended at 64 DONE. **All 7 of the project's
+  standing BLOCKED DirectPlay design questions (Track B) were asked of, answered by, and
+  implemented for the user in an earlier session** - never decided unilaterally (see Section 3 and
+  `docs/directplay-design.md` Decisions 20-26). `TASK-24H-0057` (`PARTIAL`) still needs a subprocess
+  test harness this project doesn't have; the 13 new `TODO` tasks are all freshly added, unstarted
+  DirectDraw hardening work (Section 8).
 - **Important architectural decisions** (full narrative + rationale for the DirectPlay ones lives
   in `docs/directplay-design.md`, Decisions 1–19; deviation summary in
   `docs/directplay-limitations.md`, new this session):
@@ -105,9 +107,43 @@ session - no BLOCKED question was resolved):
 
 ## 3. Recent changes
 
-**This session** (2026-07-08, continuation implementation session - closed 74 more `TASK-24H-XXXX`
-tasks, from 64 to 138 DONE (every safe task in the backlog); no new audit, no new plan created, per
-explicit instruction):
+**This session** (2026-07-09, audit + planning only - no implementation, no game/library behavior
+changed):
+
+1. **Deep DirectDraw-only audit** (`docs/audit_ddraw.md`, new file): performance, memory safety,
+   correctness-against-DirectDraw-semantics, and code-quality analysis of `src/directdraw/
+   DirectDraw.cpp`/`include/ddraw.h`, cross-checked against real call sites in both
+   `../free-eggbert` and `../planetblupi` (never assumed from memory). Two findings were measured
+   empirically against the real compiled library, not just reasoned about:
+   - The project's own default build (`cmake ..`, no `CMAKE_BUILD_TYPE` set anywhere in
+     `CMakeLists.txt`) compiles with **no optimization flags at all** - measured **6.6x** slower
+     than `-DCMAKE_BUILD_TYPE=Release` on the same hot path. Affects the whole library, not just
+     DirectDraw.
+   - `BlitFrom` (shared by `Blt`/`BltFast`) has no 1:1 (no-scale) fast path - measured **29x**
+     slower than a raw `memcpy` of the same bytes at `-O3` (**206x** at the project's actual
+     default/unoptimized build) for a 640x480 1:1 `BltFast` call. Confirmed reachable by both
+     games' real, everyday code paths (every present, every sprite draw), unlike most other
+     findings in this audit.
+   - Several further real, code-confirmed defects were found and are currently latent (not
+     reachable by either game's actual call sites today, verified by tracing, not assumed): an
+     integer-overflow bypass of `DirectDrawPaletteImpl::GetEntries`/`SetEntries`'s bounds check (an
+     out-of-bounds write in the `SetEntries` case), `CreateSurface` accepting unbounded
+     `dwWidth`/`dwHeight` into an unguarded `std::vector::resize` (can throw uncaught, crashing the
+     process - a real violation of this project's own "no exceptions cross the interface boundary"
+     rule), `SetCooperativeLevel` leaving a stale `SDL_Texture*` dangling against a destroyed
+     renderer if ever called twice with a surface already presented, and `FillColor`'s 8-bit branch
+     skipping the `MarkDirty()` call the 32-bit branch reaches.
+   - Full findings table, severity/reachability grading, benchmark methodology, and a summary of
+     what's *not* yet fixed are in `docs/audit_ddraw.md` - this audit changed no code.
+2. **13 new `plan.md` tasks added**, `TASK-24H-0151` through `TASK-24H-0163`, one per audit finding
+   worth fixing, following the existing `TASK-24H-XXXX` format exactly (Status/Priority/Area/Type/
+   Evidence/Problem/Required work/Acceptance criteria/Out of scope). All `Status: TODO` - **none
+   implemented yet**, this was explicitly a plan-then-stop session for this batch. See Section 8 for
+   the prioritized list.
+
+**Prior session (3)** (2026-07-08, continuation implementation session - closed 74 more
+`TASK-24H-XXXX` tasks, from 64 to 138 DONE (every safe task in the backlog at the time); no new
+audit, no new plan created, per explicit instruction):
 
 1. **DirectDraw**: added `Flip`/presentation-throttle/clipper-one-time-init tests (45→53), closing
    `TASK-24H-0046`/`0047`/`0050`-`0055`. Introduced `ReadPresentedPixel()` (a genuine black-box
@@ -269,10 +305,13 @@ tested (`TASK-24H-0148`/`0149`/`0150`).
 relay so non-host peers can reach each other; ENet joining is wired via
 `FREE_DIRECT_ENET_HOST_ADDRESS`; real LAN discovery exists via a new raw-UDP
 `DirectPlayDiscoveryService`, built on ENet's own portable socket primitives. Two more real bugs
-were found and fixed in this session's own newly-written test code (a dangling-pointer read past a
+were found and fixed in that session's own newly-written test code (a dangling-pointer read past a
 callback's documented lifetime, and two tests that were written but never registered so they
 silently never ran) - both caught by actually running the tests, not assumed passing.
-**Zero TODO tasks remain in the entire 150-task backlog.**
+
+**This session (2026-07-09) added 13 new TODO tasks** (`TASK-24H-0151`-`0163`) from a fresh
+DirectDraw-only audit (`docs/audit_ddraw.md`) - none implemented yet, see Section 8. The DirectPlay
+backlog itself remains fully closed (no new DirectPlay work this session).
 
 **Minor, unchanged**: `-DFREE_DIRECT_USE_SYSTEM_ENET=ON` still unexercised in this environment (no
 system `libenet` package) - the vendored `third_party/enet` path is the one actually verified.
@@ -311,18 +350,34 @@ system `libenet` package) - the vendored `third_party/enet` path is the one actu
   fixed by copying the string content during the callback, matching the existing correct pattern
   already used by the loopback `EnumSessions` tests.
 
-**DirectDraw** (unchanged this session in substance; test coverage now complete for previously-gap
-areas):
+**DirectDraw** (deep audit done 2026-07-09, `docs/audit_ddraw.md` - no code fixed yet, 13 new
+`TODO` tasks tracked as `TASK-24H-0151`-`0163`):
 - `GetDC`/`ReleaseDC` are documented `STUB` in the header but are functionally real - unchanged.
-- `Flip`, presentation throttle, and clipper one-time-init are **now tested** (`TASK-24H-0046`/
-  `0047`/`0050`-`0055`, closed this session) - previously the largest DirectDraw test gap.
+- `Flip`, presentation throttle, and clipper one-time-init are tested (`TASK-24H-0046`/`0047`/
+  `0050`-`0055`) - previously the largest DirectDraw test gap, closed in an earlier session.
 - `IsLost`/`Restore` remain honestly-documented inert stubs — unchanged, still test-locked.
-- **New finding, documented not fixed** (`docs/directdraw-limitations.md`, prior session):
+- **New finding, documented not fixed** (`docs/directdraw-limitations.md`, earlier session):
   `SetDisplayMode`'s `dwBPP` parameter is accepted/logged but never stored/used - the primary
   surface is always 32bpp. Currently latent for both target games; not fixed speculatively per
   scope policy.
 - `DDBLT_ROTATIONANGLE`'s literal value doesn't match `free-eggbert`'s own vendored SDK header
-  (found this session, `TASK-24H-0021`) - harmless today, nothing reads this constant.
+  (found in an earlier session, `TASK-24H-0021`) - harmless today, nothing reads this constant.
+- **New this session, from `docs/audit_ddraw.md`, none fixed yet**:
+  - Default build (no `CMAKE_BUILD_TYPE` set anywhere) is unoptimized - measured 6.6x slower than
+    `-DCMAKE_BUILD_TYPE=Release` (`TASK-24H-0151`).
+  - `BlitFrom` has no 1:1 fast path - measured 29x slower than `memcpy` at `-O3` (206x
+    unoptimized) for a 640x480 `BltFast` call; confirmed reachable by both games every frame
+    (`TASK-24H-0152`).
+  - `ReleaseDC`'s 8-bit path is an O(n*256) per-pixel nearest-palette search, confirmed currently
+    unreachable by either game (`TASK-24H-0153`).
+  - `CreateSurface` doesn't bound `dwWidth`/`dwHeight` before an unguarded `vector::resize` that
+    can throw uncaught (`TASK-24H-0154`); `Palette::GetEntries`/`SetEntries`'s bounds check can be
+    bypassed by DWORD overflow, an out-of-bounds write in the `SetEntries` case
+    (`TASK-24H-0155`) - both confirmed unreachable by either game today.
+  - `SetCooperativeLevel` (`TASK-24H-0156`), `FillColor`'s dirty-flag asymmetry
+    (`TASK-24H-0157`), missing `DDERR_DCALREADYCREATED` on double-`GetDC` (`TASK-24H-0158`), and
+    three code-quality items (`TASK-24H-0159`-`0163`) - all confirmed unreachable by either game
+    today, all documented in full in `docs/audit_ddraw.md`.
 
 **DirectSound** (unchanged this session):
 - `CreateSoundBuffer` performs no `dwSize` validation - documented, not a confirmed bug.
@@ -426,26 +481,43 @@ No lint/format tooling is configured in this repository.
 
 ## 8. Next smallest tasks
 
-**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **0**).
-Every task in the 150-task backlog is now DONE except one. The only item left anywhere in the
-backlog is `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not closeable without
-a subprocess test harness this project doesn't have yet (see Section 5).
+**Track A — safe, no design decision needed** (real remaining `plan.md` TODO count: **13**, all
+from the 2026-07-09 DirectDraw audit, `TASK-24H-0151`-`0163`, none `BLOCKED`, none implemented
+yet). Recommended order, per `docs/audit_ddraw.md` §2/§12's own severity×reachability ranking:
 
-**Track B — resolved.** All 7 questions (`TASK-24H-0091, 0131..0137`) were asked of, and answered
-by, the user this session via `AskUserQuestion` - never decided unilaterally. 4 got real
-implementation (DPID-0 broadcast/self-send semantics - Decision 20; host routing - Decision 21;
-ENet host-address resolution - Decision 22; LAN discovery - Decision 23), 3 were decided not
-needed (player names - Decision 24; duplicate-player definition - Decision 25; player-lost state -
-Decision 26). Full detail in `docs/directplay-design.md` Decisions 20-26;
-`docs/directplay-limitations.md` still has the pre-resolution deviation-table framing and is now
-somewhat superseded by the Decisions themselves for these 7 items specifically (not yet
-re-reconciled - a small follow-up documentation task, not tracked as its own `TASK-24H-XXXX` yet).
+1. `TASK-24H-0151` (P0, Area: Build) - default `CMAKE_BUILD_TYPE` to `Release` when unset. Highest
+   leverage, lowest risk: one `CMakeLists.txt` change, no behavior risk, and it changes the
+   baseline for every other performance number in the whole project.
+2. `TASK-24H-0152` (P0, Area: DirectDraw) - add a runtime 1:1 fast path to `BlitFrom`. The only
+   other High-impact finding confirmed reachable by both games' real, everyday code paths (every
+   present, every sprite draw). Must keep the scaling path for `CPixmap::Display()`'s primary
+   present blit, which can genuinely scale - see the task's own text and `docs/audit_ddraw.md` §8.3.
+3. `TASK-24H-0154`/`0155` (P1, Area: DirectDraw) - `CreateSurface` size validation and the
+   `Palette::GetEntries`/`SetEntries` integer-overflow bounds-check fix. Both are real API-boundary
+   hardening gaps (one can crash the process, one is an out-of-bounds write), currently unreachable
+   by either target game but cheap, low-risk, self-contained fixes with tests already sketched.
+4. `TASK-24H-0153`, `0156`-`0163` (P2) - remaining latent-defect fixes and code-quality cleanups,
+   opportunistic, no urgency (all confirmed unreachable by either target game today).
 
-There is no more safe backlog work to pick up on autopilot, and no more BLOCKED questions either.
-A future session's only path to further progress is either building the subprocess harness for
-`TASK-24H-0057`, or identifying genuinely new work (a fresh call-site audit of either target game,
-a new user-driven feature request, or revisiting a "not needed" Decision if a concrete consumer
-need is later found - each of Decisions 24-26 documents exactly what would justify revisiting it).
+Also still open, unchanged: `TASK-24H-0057` (`DSERR_NODRIVER`, `PARTIAL`) - remains genuinely not
+closeable without a subprocess test harness this project doesn't have yet (see Section 5).
+
+**Track B — resolved** (in an earlier session, unchanged this session). All 7 questions
+(`TASK-24H-0091, 0131..0137`) were asked of, and answered by, the user via `AskUserQuestion` -
+never decided unilaterally. 4 got real implementation (DPID-0 broadcast/self-send semantics -
+Decision 20; host routing - Decision 21; ENet host-address resolution - Decision 22; LAN discovery
+- Decision 23), 3 were decided not needed (player names - Decision 24; duplicate-player definition
+- Decision 25; player-lost state - Decision 26). Full detail in `docs/directplay-design.md`
+Decisions 20-26; `docs/directplay-limitations.md` still has the pre-resolution deviation-table
+framing and is now somewhat superseded by the Decisions themselves for these 7 items specifically
+(not yet re-reconciled - a small follow-up documentation task, not tracked as its own
+`TASK-24H-XXXX` yet).
+
+A future session's path to further progress: work through the 13 new Track A tasks above in
+priority order, build the subprocess harness for `TASK-24H-0057`, or identify genuinely new work (a
+fresh call-site audit of either target game, a new user-driven feature request such as the
+DirectSound audit requested immediately after this batch - see the top of Section 3 for whichever
+is most recent - or revisiting a "not needed" Decision if a concrete consumer need is later found).
 
 ## 9. Do not do yet
 
@@ -480,18 +552,19 @@ need is later found - each of Decisions 24-26 documents exactly what would justi
 ## 10. Resume prompt
 
 ```
-Read NEXT.md first (this file), especially Sections 4 and 8, then docs/directplay-limitations.md
-(the 7 BLOCKED design questions, listed together) and plan.md's "24-Hour Autonomous Stabilization
-Backlog" section for full task detail. 138 of 147 TASK-24H-XXXX tasks are DONE, 1 PARTIAL, 8
-BLOCKED (do not start those without asking), and ZERO TODO remain - every safe task in the entire
-backlog is closed, including TASK-24H-0100 (DirectPlayEnumerateA/W real implementation). DirectDraw
-(53 tests), DirectSound (30 tests), DirectPlay (63 tests + 4 opt-in ENet transport tests) all have
-solid coverage now; two real memory-safety/UB bugs were found and fixed this session (one via
-manual sweep, one via a new ASan/UBSan sanitizer build - TASK-24H-0010). There is no more safe
-backlog work to pick up on autopilot: the only remaining items are Track B's 7 BLOCKED design
-questions (Section 8), which need a human decision, and TASK-24H-0057 (DSERR_NODRIVER, PARTIAL),
-which needs a subprocess test harness this project doesn't have yet. Standalone build:
+Read NEXT.md first (this file), especially Sections 4 and 8, then docs/audit_ddraw.md (the 2026-07-09
+DirectDraw audit) and plan.md's "24-Hour Autonomous Stabilization Backlog" section, especially its
+"DirectDraw audit hardening (2026-07-09)" subsection, for full task detail. 149 of 163
+TASK-24H-XXXX tasks are DONE, 1 PARTIAL, 13 TODO (TASK-24H-0151-0163, DirectDraw audit hardening,
+none BLOCKED, none implemented yet), 0 BLOCKED - all 7 of the project's former BLOCKED DirectPlay
+design questions were resolved in an earlier session (docs/directplay-design.md Decisions 20-26).
+DirectDraw (53 tests), DirectSound (30 tests), DirectPlay (65 tests + 8 opt-in ENet transport
+tests) all have solid coverage; real memory-safety/UB bugs found in earlier sessions were fixed and
+verified via ASan/UBSan. The 13 new TODO tasks are the next concrete work: TASK-24H-0151 (default
+CMAKE_BUILD_TYPE to Release - highest leverage, one CMakeLists.txt line) and TASK-24H-0152 (BlitFrom
+1:1 fast path - the only other High-impact finding confirmed reachable by both target games' real
+call paths today) first, per Section 8's priority order. Standalone build:
 `cmake -B build -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`. Do
-not touch ../free-eggbert or ../planetblupi source. Do not resolve any Track B question
-unilaterally.
+not touch ../free-eggbert or ../planetblupi source. Do not resolve any DirectPlay design question
+unilaterally if a new one ever comes up.
 ```

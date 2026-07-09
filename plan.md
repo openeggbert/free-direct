@@ -6571,6 +6571,434 @@ Out of scope:
 
 Verified: added and passing. DirectSound test count: 24 -> 30 (this session's second batch).
 
+## DirectDraw audit hardening (2026-07-09)
+
+This section adds tasks derived from a fresh, evidence-based DirectDraw-only audit recorded in
+`docs/audit_ddraw.md` (2026-07-09), which benchmarked the real compiled library (not just Big-O
+reasoning) and cross-checked every finding's reachability against `free-eggbert`'s and
+`planetblupi`'s actual call sites. Numbering continues from `TASK-24H-0150`. None of these are
+`BLOCKED` — the audit raised no new design questions requiring a user decision.
+
+### TASK-24H-0151: Default CMAKE_BUILD_TYPE to Release when unset
+Status: TODO
+Priority: P0
+Area: Build
+Type: Implementation
+Evidence: docs/audit_ddraw.md §3.1 (finding F1) — default `cmake ..` with no `CMAKE_BUILD_TYPE`
+measured 6.6x slower than `-DCMAKE_BUILD_TYPE=Release` on the same `BltFast` hot path
+Depends on: None
+
+Problem:
+The root `CMakeLists.txt` never sets a default `CMAKE_BUILD_TYPE`. GCC/Clang apply no `-O` flags at
+all when it's empty, so the project's own documented build instructions (`cmake -B build && cmake
+--build build`, no extra flags) silently produce an unoptimized binary. This affects every function
+in the library, not just DirectDraw.
+
+Required work:
+- In the root `CMakeLists.txt`, default `CMAKE_BUILD_TYPE` to `Release` when the caller hasn't set
+  one (`if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES) set(CMAKE_BUILD_TYPE Release
+  CACHE STRING "" FORCE) endif()`, placed before the first `project()`/target definition it can
+  affect).
+- Preserve a caller's explicit `-DCMAKE_BUILD_TYPE=Debug` (or any other value) — only fill in the
+  default when the variable is empty.
+
+Acceptance criteria:
+- A clean `cmake -B build` with no extra flags now configures with `CMAKE_BUILD_TYPE=Release` and
+  the resulting build shows `-O3` in `CMakeFiles/free-direct.dir/flags.make`.
+- `cmake -B build -DCMAKE_BUILD_TYPE=Debug` still configures as `Debug`, unaffected.
+- Existing test suites (DirectDraw/DirectSound/DirectPlay) still pass under the new default.
+
+Out of scope:
+- Do not add new build types or change what flags `CMAKE_CXX_FLAGS_RELEASE` etc. contain — only the
+  default selection.
+
+### TASK-24H-0152: Add a 1:1 fast path to BlitFrom
+Status: TODO
+Priority: P0
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §3.2 (finding F2) — measured 29x slower than memcpy at -O3 (206x
+unoptimized) for a 640x480 1:1 BltFast call; §8.1 confirms every real BltFast call site in both
+games is structurally 1:1; §8.3 confirms CPixmap::Display()'s Blt call can genuinely scale
+Depends on: None
+
+Problem:
+`BlitFrom` (`src/directdraw/DirectDraw.cpp:558-652`) computes a per-pixel division
+(`(x * srcWidth) / dstWidth`) and re-checks a loop-invariant bpp branch on every pixel, even when
+`srcWidth == dstWidth && srcHeight == dstHeight` (the identity case). Both games call `BltFast`
+(always 1:1 by DirectDraw API definition — it has no destination-size parameter) far more than
+`Blt`, so this cost is paid on the majority of real blit traffic every frame.
+
+Required work:
+- Add a runtime check at the top of `BlitFrom` for `srcWidth == dstWidth && srcHeight == dstHeight`;
+  when true and no color key is requested, copy each row with a single contiguous copy
+  (`std::memcpy`/`std::copy`) instead of the per-pixel loop.
+- The check must be a runtime comparison of the actual clamped rect sizes, not an assumption based
+  on which method (`Blt` vs `BltFast`) was called — `CPixmap::Display()`'s primary-present `Blt`
+  call can have `srcWidth != dstWidth` when the window size doesn't match the game's logical
+  resolution (§8.3), and must keep taking the scaling path in that case.
+- Preserve existing color-key behavior exactly for the color-keyed case (the fast path only applies
+  when `useSrcColorKey` is false or the source has no color key set).
+
+Acceptance criteria:
+- New/updated test asserts pixel-identical output between the old per-pixel path and the new fast
+  path for a 1:1 copy (reuse or extend `Test_BltFast_OpaqueCopy_32Bit_PixelsMatchSource`/`_8Bit_...`
+  in `tests/directdraw_tests.cpp`).
+- Existing `Test_Blt_ScalingUpsamplesSourceToLargerDest` still passes unchanged (confirms the
+  scaling path is untouched).
+- Re-running this task's own benchmark methodology (docs/audit_ddraw.md §7) shows the fast-path
+  `BltFast` cost is within a small constant factor of raw `memcpy`, not 29x.
+
+Out of scope:
+- Do not touch the scaling (non-1:1) code path's algorithm in this task.
+
+### TASK-24H-0153: Optimize ReleaseDC's 8-bit palette-match from O(n*256) to a faster lookup
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §3.3 (finding F3) — measured 0.43ms/call at -O3 for one 640x480
+8-bit surface; §8.2 confirms this path is currently unreachable by either target game
+Depends on: None
+
+Problem:
+`ReleaseDC`'s 8-bit path (`src/directdraw/DirectDraw.cpp:956-984`) does a full linear scan of all
+256 palette entries per pixel to find the nearest-match index. Confirmed currently unreachable by
+either target game (both end up all-32bpp in practice — see `docs/directdraw-limitations.md` and
+`docs/audit_ddraw.md` §5.4), so this is a latent-cost fix, not an urgent one.
+
+Required work:
+- Replace the O(n*256) per-pixel linear search with a faster nearest-palette-color structure (e.g.
+  a precomputed inverse lookup, or a k-d tree over the 256 palette entries built once per
+  `GetEntries`/`SetEntries` change rather than scanned fresh per pixel).
+- Preserve exact nearest-match semantics (ties broken the same way as today — first index with
+  minimum squared RGB distance) so existing behavior/tests are unaffected.
+
+Acceptance criteria:
+- Existing DC-bridge tests (`tests/directdraw_tests.cpp` Group 7) still pass unchanged.
+- Re-running docs/audit_ddraw.md §7 Benchmark 1's methodology shows a measurable improvement over
+  0.43ms/call at `-O3` for a 640x480 8-bit surface.
+
+Out of scope:
+- Do not change `GetDC`'s 8-bit expansion path (only `ReleaseDC`'s reverse conversion) in this task.
+- Do not add real 8-bit primary/offscreen surface usage to either target game — this task only
+  improves the algorithm for whenever the path is exercised.
+
+### TASK-24H-0154: Validate CreateSurface's dwWidth/dwHeight before allocating
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §4.4 (finding F4) — unchecked size reaches an unguarded
+`std::vector::resize`, and `CLAUDE.md`'s Coding Style requires no exceptions cross the COM-style
+interface boundary
+Depends on: None
+
+Problem:
+`DirectDrawImpl::CreateSurface`'s offscreen branch (`src/directdraw/DirectDraw.cpp:1352-1353`)
+casts caller-supplied `dwWidth`/`dwHeight` (`DWORD`) into `int` and passes them into
+`DirectDrawSurfaceImpl`'s constructor, which multiplies them into a `size_t` and calls
+`pixels_.resize(...)` (`DirectDraw.cpp:438`) with no upper bound and no handling for the negative
+values a huge `DWORD` can produce once cast to `int`. An unsatisfiable resize throws
+`std::length_error`/`std::bad_alloc`, uncaught, crashing the process from inside a `WINAPI` virtual
+method.
+
+Required work:
+- Add a sanity bound on `dwWidth`/`dwHeight` in `CreateSurface` (e.g. reject non-positive values and
+  anything above a generous but finite ceiling — this project's target games never exceed
+  640x480-scale surfaces) and return `DDERR_INVALIDPARAMS` for anything outside it, before
+  constructing a `DirectDrawSurfaceImpl`.
+
+Acceptance criteria:
+- New test: `CreateSurface` with `dwWidth`/`dwHeight` near `0xFFFFFFFF` returns
+  `DDERR_INVALIDPARAMS` and the test process does not crash (docs/audit_ddraw.md §9's suggested
+  test shape).
+- Existing `Test_CreateSurface_*` tests in `tests/directdraw_tests.cpp` Group 2 still pass
+  unchanged.
+
+Out of scope:
+- Do not add general-purpose input validation to every `DDSURFACEDESC` field in this task — only
+  `dwWidth`/`dwHeight`, per docs/audit_ddraw.md §10's note that other fields (`Lock`'s rect,
+  `BltFast`'s `lpSrcRect`, etc.) would need their own separate audit pass before their own tasks.
+
+### TASK-24H-0155: Fix integer-overflow bypass in Palette GetEntries/SetEntries bounds check
+Status: TODO
+Priority: P1
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §5.2 (finding F5) — `dwBase + dwNumEntries > 256` can wrap in
+DWORD arithmetic; confirmed untested by the existing `Test_Palette_*_OutOfRangeReturnsInvalidParams`
+tests
+Depends on: None
+
+Problem:
+`DirectDrawPaletteImpl::GetEntries`/`SetEntries` (`src/directdraw/DirectDraw.cpp:199-215`)
+bounds-check with `dwBase + dwNumEntries > 256`, computed in `DWORD` (32-bit unsigned) arithmetic. A
+caller passing e.g. `dwBase = 0xFFFFFFFF, dwNumEntries = 2` gets a wrapped sum that passes the
+check, then indexes `entries_[0xFFFFFFFF]` — an out-of-bounds read in `GetEntries`, an
+out-of-bounds **write** in `SetEntries`.
+
+Required work:
+- Rewrite the bounds check to be overflow-safe (e.g. `dwBase > 256 || dwNumEntries > 256 - dwBase`,
+  or promote to a 64-bit type before adding) in both `GetEntries` and `SetEntries`.
+
+Acceptance criteria:
+- New tests: `GetEntries(0, 0xFFFFFFFFu, 2, entries)` and `SetEntries(0, 0xFFFFFFFFu, 2, entries)`
+  both return `DDERR_INVALIDPARAMS` (docs/audit_ddraw.md §9's suggested test shape), added
+  alongside the existing `Test_Palette_GetEntries_OutOfRangeReturnsInvalidParams`/
+  `Test_Palette_SetEntries_OutOfRangeReturnsInvalidParams` in `tests/directdraw_tests.cpp`.
+- Existing palette round-trip tests (Group 6) still pass unchanged.
+
+Out of scope:
+- Do not change `GetEntries`/`SetEntries`'s behavior for any in-range input.
+
+### TASK-24H-0156: Guard SetCooperativeLevel against stale surface textures on renderer replacement
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §4.6 (finding F6) — confirmed unreachable by either target game's
+real call order (both call `SetCooperativeLevel` exactly once, before any surface exists), but real
+undefined behavior in SDL if ever triggered
+Depends on: None
+
+Problem:
+`DirectDrawImpl::SetCooperativeLevel` (`src/directdraw/DirectDraw.cpp:1199-1281`) destroys and
+recreates `renderer_` without invalidating any existing surface's cached `texture_`
+(`DirectDrawSurfaceImpl::texture_`, only ever created once and cached by `PresentPrimary`). A
+second `SetCooperativeLevel` call after a primary surface already has a texture would leave that
+texture pointing at a destroyed renderer, and `PresentPrimary`'s `if (!primary.texture_)` cache
+check would not notice.
+
+Required work:
+- Give `DirectDrawImpl` a way to invalidate/recreate any live surfaces' cached `texture_` when its
+  renderer is replaced (e.g. track created surfaces via the existing `owner_` back-pointer per
+  docs/audit_ddraw.md §4.1, or destroy-and-null each known surface's `texture_` from within
+  `SetCooperativeLevel`).
+
+Acceptance criteria:
+- New test: create a primary surface, present once (to populate its `texture_`), call
+  `SetCooperativeLevel` a second time, then present again — must not crash or use a stale texture
+  (docs/audit_ddraw.md §9's suggested test shape).
+- Existing `Test_SetCooperativeLevel_*` tests in `tests/directdraw_tests.cpp` Group 2 still pass
+  unchanged.
+
+Out of scope:
+- This task depends on deciding how `DirectDrawImpl` tracks its live surfaces (§4.1's `owner_`
+  question) — if that requires a separate design decision beyond a mechanical fix, split that out
+  rather than blocking this task's narrower goal indefinitely.
+
+### TASK-24H-0157: Fix FillColor's 8-bit branch skipping MarkDirty on primary surfaces
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §5.1 (finding F7) — confirmed unreachable today (neither game uses
+`DDBLT_COLORFILL`, and no 8-bit primary surface is ever created in practice)
+Depends on: None
+
+Problem:
+`DirectDrawSurfaceImpl::FillColor` (`src/directdraw/DirectDraw.cpp:513-547`)'s 8-bit branch returns
+before reaching the `if (type_ == SurfaceType::Primary) MarkDirty();` check that the 32-bit branch
+reaches at the bottom of the function. A fill on an 8-bit primary surface would never be flagged for
+presentation.
+
+Required work:
+- Move the `MarkDirty()` check so both the 8-bit and 32-bit branches reach it (e.g. a shared tail
+  after an if/else, instead of an early `return` in the 8-bit branch).
+
+Acceptance criteria:
+- New test exercising `FillColor`/`DDBLT_COLORFILL` on an 8-bit-typed primary surface asserts the
+  dirty flag is set afterward (construction of such a surface may need a test-only seam, since
+  `CreateSurface`'s primary branch does not currently read `DDSD_PIXELFORMAT` at all — see
+  TASK-24H-0158 if that's needed as a prerequisite).
+- Existing `Test_Blt_ColorFill_FillsDestRectWithColor` and other Group 4 tests still pass unchanged.
+
+Out of scope:
+- Do not add general 8-bit primary surface support to `CreateSurface` in this task unless it turns
+  out to be strictly required to write the regression test — if so, keep that as a minimal,
+  clearly-labeled test-support change, not a behavior change for either target game.
+
+### TASK-24H-0158: Return DDERR_DCALREADYCREATED on a redundant GetDC call
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §4.3 (finding F8) — `DDERR_DCALREADYCREATED` is already defined in
+`include/ddraw.h:128` but never returned anywhere; confirmed unreachable today since every real
+`GetDC` call site in both games tightly pairs with `ReleaseDC`, no nesting
+Depends on: None
+
+Problem:
+`DirectDrawSurfaceImpl::GetDC` (`src/directdraw/DirectDraw.cpp:875-934`) silently returns the same
+already-attached DC on a second call instead of returning `DDERR_DCALREADYCREATED`, a deviation
+from documented DirectDraw semantics.
+
+Required work:
+- In `GetDC`, if `attachedDc_` is already non-null, return `DDERR_DCALREADYCREATED` instead of
+  re-returning the existing handle.
+
+Acceptance criteria:
+- New test: a second `GetDC` call before an intervening `ReleaseDC` returns
+  `DDERR_DCALREADYCREATED` (docs/audit_ddraw.md §9's suggested test shape).
+- Existing `Test_GetDCReleaseDC_32Bit_SharesBackingPixelsWithLock`/`Test_GetDC_NullOutParam_...` in
+  `tests/directdraw_tests.cpp` Group 7 still pass unchanged.
+- Add this deviation (now resolved) to `docs/directdraw-limitations.md` if any residual difference
+  from real DirectDraw remains after the fix; remove it from there if the fix makes behavior fully
+  match real DirectDraw.
+
+Out of scope:
+- Do not change `ReleaseDC`'s behavior in this task.
+
+### TASK-24H-0159: Replace GetSurfaceDesc's magic pixel-format numbers with named constants
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §5.3 (finding F9) — `0x00000020L`/`0x00000040L` duplicate the
+already-defined `DDPF_PALETTEINDEXED8`/`DDPF_RGB` constants in `include/ddraw.h:182-183`
+Depends on: None
+
+Problem:
+`DirectDrawSurfaceImpl::GetSurfaceDesc` (`src/directdraw/DirectDraw.cpp:1009`) hardcodes
+`0x00000020L`/`0x00000040L` instead of using `DDPF_PALETTEINDEXED8`/`DDPF_RGB`, already defined in
+`include/ddraw.h` (already `#include`d by this file). The comment on the same line names the
+correct constants, confirming this is an oversight, not a deliberate choice.
+
+Required work:
+- Replace the two hardcoded hex literals with `DDPF_PALETTEINDEXED8`/`DDPF_RGB`.
+
+Acceptance criteria:
+- `Test_GetSurfaceDesc_MatchesCreatedDimensions` and other Group 2 tests still pass unchanged (pure
+  refactor, no behavior change — the literal values are already correct).
+
+Out of scope:
+- Do not touch any other magic number in this file in this task.
+
+### TASK-24H-0160: Remove the file-scope #define SDL_Log shadowing
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §6.1 (finding F10) — `#define SDL_Log DirectDrawLog` at
+`src/directdraw/DirectDraw.cpp:114` shadows the real SDL3 function name for the rest of the
+translation unit with no compiler diagnostic if a future edit needs the real one
+Depends on: None
+
+Problem:
+`#define SDL_Log DirectDrawLog` (`src/directdraw/DirectDraw.cpp:114`) works correctly today but is
+a foot-gun: any future code added below line 114 in this file that needs the real, unconditional
+`SDL_Log` would silently get the gated wrapper instead, with no compiler warning.
+
+Required work:
+- Rename every call site currently relying on the `SDL_Log` macro to call `DirectDrawLog` directly
+  (or another distinctly-named wrapper, matching the existing `PresentLog`/`ColorKeyLog`/`PerfLog`
+  naming pattern already used in the same file), and remove the `#define`.
+
+Acceptance criteria:
+- `grep -n "#define SDL_Log" src/directdraw/DirectDraw.cpp` returns nothing.
+- Existing Group 9 logging-gate regression test
+  (`Test_BltFast_NoUnconditionalLogOutput_WhenDebugFlagsUnset`) still passes unchanged (confirms
+  gating behavior is unaffected by the rename).
+
+Out of scope:
+- Do not change the gating logic itself (env var names, `#ifdef` overrides) in this task — pure
+  rename.
+
+### TASK-24H-0161: Document or remove DirectDrawSurfaceImpl::owner_'s lifetime contract
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Documentation
+Evidence: docs/audit_ddraw.md §4.1 (finding F11) — `owner_` is written once in the constructor
+and never read anywhere in the file today; its intended lifetime contract ("a surface must not
+outlive its DirectDrawImpl") is unenforced and undocumented
+Depends on: None
+
+Problem:
+`DirectDrawSurfaceImpl::owner_` (`src/directdraw/DirectDraw.cpp:315`) is a raw, non-ref-counted
+back-pointer that is currently unused (write-only). Its implied lifetime contract is neither
+enforced nor documented, which matters if a future task (e.g. TASK-24H-0156) starts reading it.
+
+Required work:
+- Either (a) add a header/implementation comment on `owner_` stating the lifetime contract
+  explicitly, so any future use starts from a documented invariant, or (b) remove the field if no
+  near-term task needs it, per this project's policy against speculative unused surface — whichever
+  this task's implementer judges appropriate given TASK-24H-0156's status at the time.
+
+Acceptance criteria:
+- Either `owner_` has a clear ownership/lifetime doc comment, or it is removed and the build still
+  succeeds with no other code referencing it.
+
+Out of scope:
+- Do not implement any new behavior that *uses* `owner_` in this task — that's TASK-24H-0156's
+  concern if it chooses this mechanism.
+
+### TASK-24H-0162: Document DirectDraw's single-threaded usage assumption
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Documentation
+Evidence: docs/audit_ddraw.md §4.2 (finding F12) — atomic ref-counting exists on all four
+classes, but no other mutable state (`pixels_`, `texture_`, `dirty_`, `attachedDc_`, `renderer_`,
+...) is synchronized; matches both target games' actual single-threaded usage, but this is not
+written down anywhere
+Depends on: None
+
+Problem:
+Atomic ref-counts on `DirectDrawImpl`/`DirectDrawSurfaceImpl`/`DirectDrawPaletteImpl`/
+`DirectDrawClipperImpl` could be read as a thread-safety signal the rest of the classes don't back
+up — every other field is unsynchronized plain state.
+
+Required work:
+- Add a short header comment (`include/ddraw.h`, near the top or on each class) stating DirectDraw
+  objects are not thread-safe beyond reference counting, and that all calls on a given object must
+  come from a single thread.
+
+Acceptance criteria:
+- Comment added and reviewed for accuracy against the current implementation; no code change.
+
+Out of scope:
+- Do not add any actual locking/synchronization in this task — this is a documentation-only task,
+  since neither target game needs multi-threaded DirectDraw access today.
+
+### TASK-24H-0163: Replace dynamic_cast with static_cast in Blt/BltFast surface downcast
+Status: TODO
+Priority: P2
+Area: DirectDraw
+Type: Implementation
+Evidence: docs/audit_ddraw.md §3.4 — every Blt/BltFast call pays an RTTI `dynamic_cast` to
+downcast `LPDIRECTDRAWSURFACE` to the sole concrete `DirectDrawSurfaceImpl` (marked `final`)
+Depends on: None
+
+Problem:
+`Blt`/`BltFast` (`src/directdraw/DirectDraw.cpp:662` and its `BltFast` equivalent) use
+`dynamic_cast<DirectDrawSurfaceImpl*>` on every call. `DirectDrawSurfaceImpl` is the only concrete
+implementation of `IDirectDrawSurface` in this codebase and is declared `final`
+(`DirectDraw.cpp:259`), so the RTTI check is unnecessary overhead on a hot path.
+
+Required work:
+- Replace `dynamic_cast` with `static_cast` at both call sites, since the source is always either
+  `nullptr` or a genuine `DirectDrawSurfaceImpl*` in this codebase's closed type hierarchy.
+
+Acceptance criteria:
+- Existing Group 4/4b blit tests all pass unchanged.
+- `grep -n "dynamic_cast" src/directdraw/DirectDraw.cpp` returns nothing.
+
+Out of scope:
+- Do not remove null-pointer checks that currently follow the cast — only change the cast kind.
+
+---
+
+**Update (2026-07-09)**: 13 more atomic tasks added, `TASK-24H-0151` through `TASK-24H-0163`, from
+a fresh DirectDraw-only audit (`docs/audit_ddraw.md`), all `Status: TODO`, none `BLOCKED`. Highest
+priority: `TASK-24H-0151` (build-type default) and `TASK-24H-0152` (BlitFrom fast path) are the
+only two findings that are both High-impact *and* confirmed reachable by both target games' actual
+call sites today — see `docs/audit_ddraw.md` §2 and §12 for the full reasoning. New running total:
+**163 atomic tasks** (`TASK-24H-0001` through `TASK-24H-0163`).
+
+---
+
 ## Priority summary
 
 - **P0** (build/test-blocking, hot-path DirectDraw, reachable DirectPlay bugs, free-api bridge,
