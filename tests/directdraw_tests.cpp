@@ -1092,6 +1092,33 @@ void Test_Palette_SetEntries_OutOfRangeReturnsInvalidParams() {
     dd->Release();
 }
 
+// docs/audit_ddraw.md §5.2 (F5), TASK-24H-0155: dwBase + dwNumEntries can wrap in DWORD
+// arithmetic (e.g. 0xFFFFFFFF + 2 wraps to 1, which passed the original "> 256" check) - a
+// dwBase near DWORD max must still be rejected, not bypass the bounds check via overflow.
+void Test_Palette_GetEntries_HugeBaseOverflow_ReturnsInvalidParams() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWPALETTE palette = nullptr;
+    CHECK(dd->CreatePalette(DDPCAPS_8BIT, nullptr, &palette, nullptr) == DD_OK);
+
+    PALETTEENTRY entries[256] = {};
+    CHECK(palette->GetEntries(0, 0xFFFFFFFFu, 2, entries) == DDERR_INVALIDPARAMS);
+
+    palette->Release();
+    dd->Release();
+}
+
+void Test_Palette_SetEntries_HugeBaseOverflow_ReturnsInvalidParams() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWPALETTE palette = nullptr;
+    CHECK(dd->CreatePalette(DDPCAPS_8BIT, nullptr, &palette, nullptr) == DD_OK);
+
+    PALETTEENTRY entries[256] = {};
+    CHECK(palette->SetEntries(0, 0xFFFFFFFFu, 2, entries) == DDERR_INVALIDPARAMS);
+
+    palette->Release();
+    dd->Release();
+}
+
 void Test_SetPalette_OnSurface_ReturnsOk() {
     LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
     LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 8, 8, 8);
@@ -1320,6 +1347,8 @@ int main() {
     Test_CreatePalette_SetEntriesGetEntries_RoundTrips();
     Test_Palette_GetEntries_OutOfRangeReturnsInvalidParams();
     Test_Palette_SetEntries_OutOfRangeReturnsInvalidParams();
+    Test_Palette_GetEntries_HugeBaseOverflow_ReturnsInvalidParams();
+    Test_Palette_SetEntries_HugeBaseOverflow_ReturnsInvalidParams();
     Test_SetPalette_OnSurface_ReturnsOk();
     Test_SetPalette_AffectsGetDCColorExpansion();
 

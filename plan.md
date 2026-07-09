@@ -6760,7 +6760,7 @@ constructing the surface. New test `Test_CreateSurface_HugeWidthHeight_ReturnsIn
 `DDERR_INVALIDPARAMS` with no crash. Full suite passes 7/7 (`directdraw_tests` 54/54, up from 53).
 
 ### TASK-24H-0155: Fix integer-overflow bypass in Palette GetEntries/SetEntries bounds check
-Status: TODO
+Status: DONE
 Priority: P1
 Area: DirectDraw
 Type: Implementation
@@ -6789,6 +6789,15 @@ Acceptance criteria:
 
 Out of scope:
 - Do not change `GetEntries`/`SetEntries`'s behavior for any in-range input.
+
+Verified: rewrote both checks as `dwBase > 256 || dwNumEntries > 256 - dwBase`
+(`DirectDraw.cpp:202,213`), which never adds two `DWORD`s that could overflow - `dwBase > 256`
+short-circuits before `256 - dwBase` could underflow. Two new tests
+(`Test_Palette_GetEntries_HugeBaseOverflow_ReturnsInvalidParams`/
+`Test_Palette_SetEntries_HugeBaseOverflow_ReturnsInvalidParams`, `tests/directdraw_tests.cpp`) pass
+`dwBase = 0xFFFFFFFF, dwNumEntries = 2` and confirm `DDERR_INVALIDPARAMS`. All existing in-range
+behavior (round-trip tests, the original 250+10>256 out-of-range tests) unaffected. Full suite
+passes 7/7 (`directdraw_tests` 56/56, up from 54).
 
 ### TASK-24H-0156: Guard SetCooperativeLevel against stale surface textures on renderer replacement
 Status: TODO
