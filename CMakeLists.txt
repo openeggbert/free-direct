@@ -104,6 +104,9 @@ add_library(free-direct STATIC)
 target_sources(free-direct
         PRIVATE
         src/directdraw/DirectDraw.cpp
+        src/directdraw/DirectDrawSurface.cpp
+        src/directdraw/DirectDrawPalette.cpp
+        src/directdraw/DirectDrawClipper.cpp
         src/directsound/DirectSound.cpp
         src/directplay/DirectPlay.cpp
         src/directplay/DirectPlaySession.cpp

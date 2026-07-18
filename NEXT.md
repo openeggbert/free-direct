@@ -31,9 +31,16 @@ original DirectX SDK or Windows.
     (not runtime) via the `FREE_DIRECT_ENABLE_ENET` CMake option: `LoopbackDirectPlayTransport`
     (in-process, always available, used by all default tests) or `EnetDirectPlayTransport` (real
     ENet UDP sockets, opt-in).
-  - DirectDraw/DirectSound implementation classes live in anonymous namespaces inside their own
-    `.cpp` files with no separate internal header; every test exercises them only through the real
-    public `IDirectDraw*`/`IDirectSound*` interfaces (no whitebox testing for these two).
+  - DirectSound's implementation class still lives in an anonymous namespace inside its own
+    `.cpp` file with no separate internal header. DirectDraw changed on 2026-07-18: it now has a
+    private internal header (`src/directdraw/DirectDrawInternal.hpp`, never included from
+    `include/`, never installed) declaring the mutually-`friend`ed `DirectDrawSurfaceImpl`/
+    `DirectDrawImpl` classes plus shared helpers, with method bodies split across
+    `DirectDrawSurface.cpp` (Surface), `DirectDraw.cpp` (Impl + the public `DirectDrawCreate`
+    entry point), and `DirectDrawPalette.cpp`/`DirectDrawClipper.cpp` (the two small auxiliary
+    objects) — mirroring `src/directplay/`'s existing multi-file split. Every test still
+    exercises both subsystems only through the real public `IDirectDraw*`/`IDirectSound*`
+    interfaces (no whitebox testing) — that invariant is unchanged.
   - Scope is bounded strictly by real call sites in the two target games — adding any DirectX
     surface, flag, or behavior not demonstrably required by one of them requires asking the user
     first (`CLAUDE.md` Safety Rules); this has been followed consistently throughout the project's
