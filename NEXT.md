@@ -1,6 +1,6 @@
 # NEXT.md
 
-_Last updated: 2026-07-18, after commit `478c7d7`. This file is a living status snapshot, not a
+_Last updated: 2026-07-19, after commit `af80a98`. This file is a living status snapshot, not a
 durable backlog — see `plan.md` for the full task-level history and `CLAUDE.md` for the project
 charter/policy rules that govern this repository._
 
@@ -21,16 +21,24 @@ original DirectX SDK or Windows.
 - **Current development phase**: the 24-Hour Stabilization Backlog is closed — **189/189 atomic
   `TASK-24H-XXXX` tasks `DONE`, 0 `TODO`, 0 `PARTIAL`, 0 `BLOCKED`** (`grep`-verified). That backlog
   and every original Phase 0-18 phase confirmed fully complete were archived to
-  `archive/plan20260718.md` on 2026-07-18 (item-by-item re-verified first, not just
-  checkbox-counted); `plan.md` itself was trimmed down to only the phases with at least one
-  genuinely open item - see `plan.md`'s own header for the full split rationale. **"No queued,
-  tracked work left" is no longer accurate** as of 2026-07-18. Phases 10 and 11 were fully closed
-  out 2026-07-19 (broadcast-to-all was found already implemented and re-verified, not missing;
-  non-broadcast unicast routing between two non-host peers was cancelled - no call site in either
-  target game; flag validation, null-pointer, and unconditional-success audits all completed with
-  no remaining gaps). Phase 1 was also closed 2026-07-19 (`DirectPlay.cpp` split into dedicated
-  files, mirroring `DirectDraw.cpp`'s split earlier the same day). As of this writing the
-  remaining open phases are **6, 7, 8, 9, 12, 13, 14, 18** - read `plan.md` directly for the
+  `archive/plan20260718.md` on 2026-07-18; `plan.md` was trimmed to only the phases with at least
+  one genuinely open item, then swept phase-by-phase on 2026-07-19 (Phases 1, 6, 7, 8, 9, 10, 11,
+  12, 13, 14 all individually re-verified against current code/tests, not just checkbox-counted).
+  Net effect of that sweep: **9 of the 10 open phases are now fully closed** (Phases 1, 6, 9, 10,
+  11, 13, 14 have zero remaining unchecked items; Phase 8 has one genuinely-unconstructable test
+  item; Phase 12 has two genuinely-future-conditional items). Only **Phase 7** (4 open items, all
+  converging on the same real gap - ENet join has no timeout, so an unreachable host produces
+  silence forever, not an error) and **Phase 18** (7 items, externally blocked on
+  `free-eggbert`'s `TreatNetData()` reconnection, re-confirmed 2026-07-19 unchanged) still have
+  substantive open work. The sweep found and fixed a mix of things: real stale bookkeeping (e.g.
+  Phase 10's broadcast-to-all and Phase 8's entire ENet LAN-discovery mechanism were both already
+  fully implemented via earlier archived `TASK-24H-*` work but never checked off), genuine small
+  gaps closed with new tests (Phase 10's packet-ordering/ENet-batch tests, Phase 11's flag
+  validation, Phase 13's `GetCurrentPosition` audit, Phase 14's mixed-depth-blit audit), and
+  items correctly cancelled as decided-not-to-do rather than left looking like pending work
+  (Phase 9's entire player-name/data/system-message cluster, Phase 6's join-rejected packet,
+  Phase 10's non-broadcast unicast routing, Phase 12's test-parameterization goal) - each with the
+  reasoning already recorded in `plan.md` itself, not just here. Read `plan.md` directly for the
   current, accurate list of what's actually left rather than trusting this summary to stay in
   sync with it.
 - **Important architectural decisions**:
@@ -67,18 +75,19 @@ original DirectX SDK or Windows.
 
 ## 2. Current status
 
-**Build status: working.** Last verified 2026-07-18 (commit `478c7d7`): fresh out-of-tree
+**Build status: working.** Last verified 2026-07-19 (commit `af80a98`): fresh out-of-tree
 configure+build with `cmake -B <dir> -DFREE_API_USE_SYSTEM_SDL3=ON -DFREE_DIRECT_BUILD_TESTS=ON`
 exits 0. Both target games (`../free-eggbert`, `../planetblupi`) were rebuilt fresh out-of-tree
-against the current library state (post-`DirectDraw.cpp` split) and both compiled and linked
+against the current library state (post-`DirectPlay.cpp` split) and both compiled and linked
 cleanly, zero `error:` matches.
 
 **Test status: passing.** Default (non-ENet) `ctest` run: **9/9** registered tests pass
 (`directplay_tests`, `directdraw_tests`, `directsound_tests`, `directsound_nodriver_test`,
 `integration_tests`, `header_smoke_ddraw`, `header_smoke_dsound`, `header_smoke_dplay`,
-`header_hygiene`), re-verified 2026-07-18 after the `DirectDraw.cpp` split. `header_hygiene`
-(`tests/check_header_hygiene.sh`) also re-verified separately. ENet-enabled build and sanitizer
-build were not re-verified in this pass (last known-good: commit `b4902fb`) — re-check before
+`header_hygiene`), re-verified 2026-07-19 after the `plan.md` phase sweep and `DirectPlay.cpp`
+split. `-DFREE_DIRECT_ENABLE_ENET=ON` build + `ctest -L enet` also re-verified 2026-07-19 (1/1).
+`header_hygiene` (`tests/check_header_hygiene.sh`) also re-verified separately. Sanitizer build was
+not re-verified in this pass (last known-good: commit `b4902fb`) — re-check before
 relying on those specific configurations.
 
 **Available artifacts:**
@@ -136,6 +145,25 @@ closed):
 
 Most recent commits (newest first), all on `develop`:
 
+- `af80a98`..`17e0a8c` (2026-07-19) — Full phase-by-phase sweep of `plan.md`'s then-open phases
+  (1, 6, 7, 8, 9, 10, 11, 12, 13, 14), one commit per phase. Highlights: **`DirectPlay.cpp` split**
+  (998 → 105 lines, new `DirectPlayInternal.hpp`/`DirectPlay2A.cpp`, mirroring `DirectDraw.cpp`'s
+  split, closing Phase 1); **Phase 10/11 closed** (broadcast-to-all found already implemented via
+  archived `TASK-24H-0148`, corrected the stale checkbox; added real packet-ordering and ENet
+  batch-delivery tests; added `DPERR_INVALIDFLAGS` validation to `CreatePlayer`/`Send`/`Receive`/
+  `EnumSessions`, completing the pattern `Open()` already had; added a full `DPERR_*` return-code
+  table to `docs/directplay-limitations.md`); **Phase 8 closed** (found ENet LAN discovery -
+  `TASK-24H-0150` - was already fully implemented, 5 stale checkboxes corrected); **Phase 7
+  partially closed** (ENet host-address resolution + `Connect()` were already done via
+  `TASK-24H-0149`, 2 stale checkboxes corrected; the remaining ENet join-timeout gap is real, left
+  open); **Phase 13/14 closed** (`GetCurrentPosition` and mixed-8-bit/32-bit-blit audits both
+  performed for the first time, both confirmed unreachable by either target game, documented in
+  `docs/directsound-limitations.md`/`docs/directdraw-limitations.md`); **cancellations** (Phase 9's
+  player-name/data/event-handle/duplicate/system-message cluster, Phase 6's join-rejected packet,
+  Phase 10's non-broadcast unicast routing, Phase 12's test-parameterization goal - all already
+  decided against in `docs/directplay-design.md` Decision 17 or confirmed to have no real call
+  site, struck through rather than left looking like pending work). See Section 1 for the
+  before/after phase-completion summary and `plan.md` itself for full per-item detail.
 - `478c7d7` — Fixed a dangling reference to `../freeapiissues.md` in `CLAUDE.md` after the user
   deleted that file (it lives outside this repo, in the non-git `openeggbert/` parent directory —
   see the `43b7a1a` entry below for how it was created).
@@ -199,32 +227,26 @@ Most recent commits (newest first), all on `develop`:
 ## 4. Current blocker / main problem
 
 **There is no build- or test-breaking blocker right now.** No failing command, no failing test:
-the last verified state (commit `478c7d7`) is a clean build with all 9 default `ctest` checks
-passing.
+the last verified state (commit `af80a98`) is a clean build with all 9 default `ctest` checks
+passing (both default and `-DFREE_DIRECT_ENABLE_ENET=ON` configurations re-verified 2026-07-19).
 
-**Correction (2026-07-18, later the same day):** this section previously said "`plan.md` has zero
-`TODO` tasks" — that was true only because `plan.md` at the time still contained the fully-done
-24-Hour Backlog and Phase 0-18 material undifferentiated from the genuinely open items buried
-alongside them. A same-day item-by-item re-verification split `plan.md` (archiving confirmed-done
-material to `archive/plan20260718.md`) and surfaced real open work that had simply never been
-checked off: most notably in DirectPlay's real networking layer (Phase 10 - unimplemented
-broadcast-to-all despite it being `free-eggbert`'s actual live `Send()` call pattern, unstarted
-host-side routing to non-host recipients; Phase 7 - the ENet join path is unfinished; Phase 6 - a
-join-rejection gap). None of this is build/test-breaking (hence still "no blocker" above), but
-"nothing left to do" was not an accurate summary and should not have stood unchallenged - see
-`plan.md` directly for the current list, not this file.
+**History**: on 2026-07-18 this section had to walk back an earlier "`plan.md` has zero `TODO`
+tasks" claim once the archive split surfaced real open work that had never been checked off. The
+2026-07-19 phase-by-phase sweep (Section 3) resolved most of what that surfaced: broadcast-to-all
+and ENet LAN discovery were both found to already be implemented (stale checkboxes, not missing
+features); the join-rejection gap was cancelled (unreachable, no observable need). What's
+genuinely still open, per `plan.md` directly: Phase 7's ENet join-timeout gap (4 items) and Phase
+18's externally-blocked multiplayer validation (7 items, see below) - nothing else.
 
 The most significant **open risk**, not a blocker, is unchanged from before: DirectPlay's
 real-world correctness is unproven by an actual running multiplayer session (only by test suites),
 because the one game that would exercise it (`free-eggbert`) has that code path disconnected
 pending an in-progress decompilation effort. Nothing in this repository can fix that from the
 FreeDirect side — it depends on external progress in the `free-eggbert` decompilation, re-confirmed
-still disconnected as of 2026-07-18.
+still disconnected as of 2026-07-19 (that repo's last commit remains 2026-07-10).
 
-The previous second-most-significant gap — **neither target game had ever actually been launched
-and observed**, only compiled against — was closed 2026-07-18: both now confirmed to actually run
-their startup/init/render path via FreeDirect (see Section 2). This leaves no other concrete,
-internally-actionable verification gap identified right now; see Section 8.
+Both target games have already been launched and observed running their startup/init/render path
+via FreeDirect (2026-07-18, see Section 2) - not re-run this pass, no reason to expect it changed.
 
 ## 5. Known bugs and limitations
 
@@ -238,11 +260,17 @@ internally-actionable verification gap identified right now; see Section 8.
   those sibling repos' own build scripts, out of `free-direct`'s scope to fix.
 - **[needs verification / temporary by design]** DirectPlay's real gameplay reachability:
   `free-eggbert`'s `CDecor::TreatNetData()` call site is commented out
-  (`../free-eggbert/src/event.cpp:2045`), re-confirmed 2026-07-18, so all DirectPlay behavior is
-  still proven only by test suites, never by a real running session. Expected to change as
-  `free-eggbert`'s decompilation progresses (that repo is under active development — last commit
-  there 2026-07-10 as of this check) — re-check this call site's status before assuming it's still
-  true.
+  (`../free-eggbert/src/event.cpp:2045`), re-confirmed 2026-07-19 (that repo's last commit remains
+  2026-07-10), so all DirectPlay behavior is still proven only by test suites, never by a real
+  running session. Expected to change as `free-eggbert`'s decompilation progresses — re-check this
+  call site's status before assuming it's still true.
+- **[real gap, low urgency]** ENet joining has no timeout: `EnetDirectPlayTransport::Connect()`
+  only queues the attempt and returns immediately, and nothing ever polls for "queued but never
+  completed" - a well-formed but unreachable ENet host address currently produces silence forever
+  from `Open()`, not `DPERR_TIMEOUT` or any other error (`plan.md` Phase 7). Not currently
+  reachable by either target game (`JoinSession`/`CreateSession` still have zero callers in
+  `free-eggbert`), so not urgent, but a real robustness gap in an already-real capability, not a
+  cancelled/no-call-site item.
 - **[false alarm, corrected 2026-07-18]** Earlier versions of this file claimed the `FREE_DIRECT`
   demo's "Failed to load image: player.png" warning meant the asset was missing. It is not:
   `player.png` is committed at the repo root and loads fine when the demo is run from there (as
@@ -383,41 +411,31 @@ No lint/format tooling is configured in this repository.
 
 ## 8. Next smallest tasks
 
-**Correction (2026-07-18, later the same day):** this section previously said every prior task was
-done and "no other internally-actionable item is currently known." That was based on `plan.md`
-showing zero `TODO` tasks at the time — which was true only because `plan.md` still bundled
-everything (done and not-done) into one 8000+ line file where genuinely open items were easy to
-miss. A same-day item-by-item re-verification (not just a checkbox recount) split `plan.md` into
-`archive/plan20260718.md` (confirmed-complete material) and a trimmed live `plan.md` that now
-plainly shows real, unchecked work. Read `plan.md` directly for the authoritative, current list —
-this section is a pointer into it, not a substitute for it.
+**Updated 2026-07-19** after a full phase-by-phase sweep of every then-open `plan.md` phase
+(Section 3). Almost everything this section previously pointed to turned out to already be
+implemented (stale checkboxes, corrected) or was cancelled as decided-not-to-do (no real call
+site, matching decisions already recorded in `docs/directplay-design.md`). What's left is
+genuinely small:
 
-**Highest-value concrete cluster** (`plan.md` Phase 10, "Send/Receive networking"): broadcast-to-all
-delivery for `idTo == 0` is unimplemented — directly relevant because it's the exact `Send()`
-pattern `free-eggbert`'s own source uses at its one real call site, not a hypothetical. Host-side
-routing to non-host recipients is also unstarted. Phase 7 has 5 open ENet-joining-path items; Phase
-6 has an unimplemented join-rejection path. These are the closest things to "real remaining
-DirectPlay work" this project has surfaced in a while — but which one (if any) to pick up is a
-prioritization call for the user, not something to start on unilaterally.
+1. **Phase 7's ENet join-timeout gap** (4 remaining items, all converging on the same root cause):
+   `EnetDirectPlayTransport::Connect()` only queues the connection attempt and returns
+   immediately - a well-formed but genuinely unreachable ENet host address currently produces
+   silence forever, not `DPERR_TIMEOUT` or any other error, since no timeout mechanism exists.
+   `JoinSession`/`CreateSession` (`free-eggbert`) still have zero callers, so this is not blocking
+   anything today - but it's a real robustness gap in an already-real capability (unlike the
+   cancelled items below), and where to surface a timeout in the already-asynchronous joining
+   model (Decision 16) is a genuine design question, not a small mechanical fix. Worth asking the
+   user before starting, given the design-decision weight.
 
-Lower-priority, still real:
+2. **Periodically re-check `CDecor::TreatNetData()`'s call-site status in `../free-eggbert`**
+   (`grep -n "TreatNetData" ../free-eggbert/src/event.cpp`, expect line ~2045; last re-checked
+   2026-07-19, still commented out, that repo's last commit still 2026-07-10). Externally blocked
+   on that repo's own decompilation progress. The moment it's reconnected, `plan.md` Phase 18's 7
+   remaining items (multiplayer smoke test + 6 DirectPlay end-to-end sub-tasks) become actionable.
 
-1. **Periodically re-check `CDecor::TreatNetData()`'s call-site status in `../free-eggbert`**
-   (`grep -n "TreatNetData" ../free-eggbert/src/event.cpp`, expect line ~2045). Externally blocked
-   on that repo's own decompilation progress — worth re-confirming occasionally, since
-   DirectPlay's real-session verification gap (Section 4) closes the moment that call site is
-   reconnected.
-
-2. **If a future change grows `DirectDrawSurface.cpp` (840 lines) or `DirectPlay.cpp`
-   (972 lines) significantly further, consider whether either warrants further splitting** —
-   not a mandate, only after asking the user first (Section 9).
-
-3. **Several smaller, real gaps surfaced by the 2026-07-18 `plan.md` re-verification**, none
-   individually urgent: `DPERR_UNSUPPORTED` is never actually returned for unrecognized DirectPlay
-   flag combinations (Phase 11); DirectSound's `GetCurrentPosition` call-site audit was never
-   performed or recorded (Phase 13); mixed 8-bit/32-bit DirectDraw blits silently no-op instead of
-   erroring, and that choice was never documented as intentional (Phase 14). See `plan.md`'s Phase
-   11/13/14 sections for the exact citations.
+3. **If a future change grows `DirectPlayInternal.hpp`/`DirectDrawSurface.cpp` significantly
+   further, consider whether either warrants further splitting** - not a mandate, only after
+   asking the user first (Section 9).
 
 **Do not invent speculative work beyond what's listed in `plan.md`.** Per `CLAUDE.md`'s Safety
 Rules, new API surface or behavior needs a real call-site need or an explicit user ask first.
