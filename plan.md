@@ -404,14 +404,24 @@ whichever transport is configured.
       a `DirectPlayWirePacketType::JoinAccept` packet, addressed to the newly-assigned DPID, right
       after each successful `AssignPendingConnection()`. **Verified**:
       `Test_JoinHandshake_ClientAdoptsHostAssignedDpid` (`tests/directplay_tests.cpp`).
-- [ ] Send a join-rejected packet to a connecting client when the session is full or the
-      application GUID does not match. **Still not done - structurally blocked for the
-      over-`dwMaxPlayers` case**, confirmed again while implementing Decision 16: a rejected
-      `pendingPeers_` entry is never assigned a DPID (`RejectPendingConnection()` never calls
-      `AssignPendingConnection()`), and addressed `Send()` (Decision 14) only ever reaches
-      `connectedPeers_` - there is structurally no DPID to address a `JoinReject` packet to for
-      this case, regardless of what Decision 16 implements. GUID-mismatch rejection isn't
-      implemented at all yet either (`Open()` never compares `guidApplication` against the host's).
+- [ ] ~~Send a join-rejected packet to a connecting client when the session is full or the
+      application GUID does not match.~~ **Cancelled (2026-07-19)**, re-verified against current
+      code and against `free-eggbert` before deciding: still structurally blocked for the
+      over-`dwMaxPlayers` case (a rejected `pendingPeers_` entry is never assigned a DPID,
+      `RejectPendingConnection()` never calls `AssignPendingConnection()`, and addressed `Send()`
+      only ever reaches `connectedPeers_` - there is structurally no DPID to address a
+      `JoinReject` packet to); GUID-mismatch rejection isn't implemented at all either. Fixing
+      this properly would need a real architecture change (a way to address a still-pending,
+      not-yet-DPID'd peer) for a case with **no evidence of real need**: `JoinSession`/
+      `CreateSession` (`free-eggbert/src/network.cpp`) still have zero callers anywhere in
+      `event.cpp` (unreachable in the live game, confirmed this session), and even if reachable,
+      rejection is already observable today via a real, meaningful `DPERR_NOCONNECTION` following
+      the disconnect (Decision 13) - `network.cpp` has no code that parses a distinct
+      "join-rejected reason" from a packet payload, only generic `HRESULT`/`TraceErrorDP` handling.
+      Already correctly recorded as an accepted deviation in `docs/directplay-limitations.md`'s
+      "Join rejection reason" row - this cancellation just makes the `plan.md` checkbox agree with
+      that. Not implementing speculatively per `CLAUDE.md`'s scope policy; revisit only if a real
+      call site or an explicit user ask surfaces.
 - [x] Enforce `dwMaxPlayers` by rejecting new joins once `dwCurrentPlayers` reaches the configured
       maximum. **Done:** `docs/directplay-design.md` Decision 9 - a new
       `IDirectPlayTransport::RejectPendingConnection()` (mirrors `AssignPendingConnection`, no DPID
