@@ -519,39 +519,27 @@ session and receive an assigned player ID.
       making up this implementation's version of "session descriptor" - see that task's own
       caveat). ENet remains completely unaddressed for the joining role - untouched by any of
       Decisions 11-16.
-- [ ] Resolve an explicit host address if the caller/transport configuration provides one
-      (loopback: direct in-process reference; ENet: host/port). **Partially done, loopback side
-      only:** `docs/directplay-design.md` Decision 10 - `LoopbackDirectPlayTransport::Connect()`
-      now resolves a host via a process-wide static registry keyed by the `port` argument, asked
-      of and confirmed by the user before implementing (over a session-GUID-keyed alternative).
-      The ENet side of this task (how a joining `Open()` call learns what host/port to dial, given
-      `DPSESSIONDESC2` has no address-like field - see Decision 5's analogous port problem) is
-      **not** resolved and needs its own design pass. Left unchecked since only half the task is
-      done. **Update:** `docs/directplay-design.md` Decision 11 adds the fixed-port choice
-      (`kDefaultDirectPlayLoopbackPort = 51322`, mirroring Decision 5's ENet port exactly, asked of
-      and confirmed by the user) and wires `DirectPlay.cpp`'s `Open()` to actually use it for the
-      joining role. Still left unchecked - the ENet side remains unresolved.
-- [ ] Connect to the host transport (`enet_host_connect` for ENet; direct handoff for loopback).
-      **Partially done, loopback side only:** `LoopbackDirectPlayTransport::Connect()`/`Listen()`
-      now really link a client instance to a host instance in the same process (Decision 10),
-      including a real `pendingPeers_`/`connectedPeers_`/`disconnectedPeerIds_` lifecycle mirroring
-      `EnetDirectPlayTransport`'s (Decisions 7-9). **Verified** with eleven new committed whitebox
-      tests in `tests/directplay_tests.cpp` (27/27 total): connection found via registry, connect
-      with no host fails, listen on a taken port fails, assign moves pending→connected, reject
-      pops-then-fails-when-empty, an assigned peer's disconnect is reported exactly once, a
-      never-assigned peer's disconnect is not reported, a third client over a two-player cap is
-      rejected (the transport-level analog of this phase's own "max-players rejection" acceptance
-      criterion below), host `Shutdown()` clears every peer's connection state (no dangling
-      pointer), `Shutdown()` unregisters its port for reuse, and `Send()`/`Receive()` return
-      `false` for both roles once connected (a deliberate choice, asked of and confirmed by the
-      user: real payload delivery is left for a later, separate design decision - see Decision 10).
-      Also re-verified both CMake build configurations (`ENET=OFF`/`ON`) end-to-end and that
-      `include/dplay.h` has zero ENet/SDL identifiers. **Update:** `DirectPlay.cpp`'s `Open()` now
-      calls `transport->Connect()` for the loopback joining role, and (per Decision 12)
-      `transport->Listen()` for the loopback hosting role too - a real loopback join now succeeds
-      end-to-end at the connection level (`Test_OpenAsJoinWithHostPresent_Succeeds`). The ENet side
-      of "connect to the host transport" remains untouched - left unchecked since only the loopback
-      backend is done.
+- [x] Resolve an explicit host address if the caller/transport configuration provides one
+      (loopback: direct in-process reference; ENet: host/port). **Loopback done** (Decisions
+      10/11: `LoopbackDirectPlayTransport::Connect()` resolves via a process-wide static registry
+      keyed by a fixed port, `kDefaultDirectPlayLoopbackPort = 51322`). **ENet side also done,
+      checked off 2026-07-19** (`TASK-24H-0149`, archived - see `archive/plan20260718.md` -
+      Decision 22): `Open()`'s ENet joining branch reads `FREE_DIRECT_ENET_HOST_ADDRESS`
+      (`"<host>"` or `"<host>:<port>"`) via `ParseEnetHostAddressEnvVar`
+      (`src/directplay/DirectPlayInternal.hpp`), the answer to this task's own "how a joining
+      `Open()` call learns what host/port to dial" question. This item had been left unchecked
+      after `TASK-24H-0149` landed - the two tracking systems drifted out of sync, corrected here.
+- [x] Connect to the host transport (`enet_host_connect` for ENet; direct handoff for loopback).
+      **Loopback done** (Decision 10, `LoopbackDirectPlayTransport::Connect()`/`Listen()`, 11
+      committed whitebox tests). **ENet side also done, checked off 2026-07-19**
+      (`TASK-24H-0149`, archived - Decision 22): `Open()`'s ENet joining branch calls
+      `session_.transport->Connect(host.c_str(), port)` (the parsed address above) before sending
+      the join-request packet, returning `DPERR_NOSESSIONS` if either the env var is missing/
+      malformed or `Connect()` itself fails. **Verified**:
+      `Test_OpenAsJoinOverEnet_WithHostAddressEnvVar_JoinsSuccessfully` and
+      `Test_OpenAsJoinOverEnet_WithNoHostAddressEnvVar_ReturnsNoSessions`
+      (`tests/enet_directplay_tests.cpp`), both passing. Same drift as the item above - corrected
+      here.
 - [x] Send a join-request packet to the host once connected. **Done** (`docs/directplay-design.md`
       Decision 16): `Open()`'s joining branch sends a `DirectPlayWirePacketType::Join` packet,
       fire-and-forget, right after a successful `Connect()` - via `session_.transport->Send(0,
@@ -590,8 +578,17 @@ session and receive an assigned player ID.
       joining branch returns `DPERR_NOSESSIONS` when `Connect()` fails, which today is always
       (nothing hosts yet - see above). No timeout concept is needed for loopback at all (`Connect()`
       fails synchronously, per Decision 10), so `DPERR_TIMEOUT` doesn't apply to this backend.
-      ENet's side of both codes is untouched. Left unchecked since only half the task (one code,
-      one backend) is done.
+      **Re-checked 2026-07-19, ENet side partially clarified, still left unchecked**: ENet's
+      `Open()` now does return `DPERR_NOSESSIONS` for two synchronous failure modes (missing/
+      malformed `FREE_DIRECT_ENET_HOST_ADDRESS`, or `Connect()` itself failing - bad address
+      string, ENet host creation failure - `TASK-24H-0149`), but **not** for the actual common
+      real-world case, "the host address is well-formed but unreachable": `EnetDirectPlayTransport::
+      Connect()`'s own comment confirms `enet_host_connect()` only queues the attempt and returns
+      immediately - reachability is discovered later, asynchronously, via `Service()`. No timeout
+      mechanism exists anywhere to ever detect "queued but never completed" and report
+      `DPERR_TIMEOUT` (or anything else) - `Open()` returns `DP_OK` regardless, and a genuinely
+      unreachable ENet host currently produces silence forever, not an error. This is the same
+      real gap the "join timeout" task above already names - both remain open together.
 - [x] Add a test for a failed join (no host present), asserting `DPERR_NOSESSIONS`. **Done:**
       `Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions` (`tests/directplay_tests.cpp`) - a real,
       public `IDirectPlay2A::Open(&desc, DPOPEN_JOIN)` call (not whitebox) with no loopback host
