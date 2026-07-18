@@ -1305,10 +1305,10 @@ works — not just that unit tests pass in isolation.
       this FreeDirect is available. Done 2026-07-18: same method, same result - stable main loop
       for 8 seconds (`present_count` 10→68, ~8-11 FPS, no crash).
 - [ ] Run a `free-eggbert` multiplayer smoke test (two local processes) if a runnable build is
-      available. **Still blocked, re-confirmed 2026-07-18**: `free-eggbert`'s own
+      available. **Still blocked, re-confirmed 2026-07-19**: `free-eggbert`'s own
       `CDecor::TreatNetData()` packet-pump call site is still commented out
-      (`../free-eggbert/src/event.cpp:2045`), so a multiplayer smoke test through the actual game
-      is not currently possible - not a FreeDirect-side gap, tied to that repo's own
+      (`../free-eggbert/src/event.cpp:2045`), and that repo's own last commit remains 2026-07-10 -
+      no change since the previous check. Not a FreeDirect-side gap, tied to that repo's own
       decompilation-in-progress.
 - [ ] Test DirectPlay host creation end-to-end via the smoke-test build (not just unit tests).
       Blocked by the item above.
