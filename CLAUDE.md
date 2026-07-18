@@ -158,8 +158,8 @@ DirectDraw is the most mature subsystem and the primary implemented surface toda
   behavior.
 - Where real DirectDraw semantics are intentionally not replicated (e.g. simplified flip chain,
   simplified `DDBLTFX.dwFillColor` interpretation), document the deviation in the header comment
-  and in `docs/directdraw-limitations.md` (see Phase 16 of `plan.md`) rather than silently
-  papering over it.
+  and in `docs/directdraw-limitations.md` (the phase that established this, Phase 16, is done and
+  archived — see `archive/plan20260718.md`) rather than silently papering over it.
 - See `plan.md` Phase 14 for the concrete hardening backlog.
 
 ---
@@ -196,7 +196,8 @@ effort. Policy:
   host, join, and exchange messages in a session with each other. Compatibility is defined at the
   level of the `IDirectPlay`/`IDirectPlay2A` C++ API contract the target game already calls, not at
   the byte level of any historical wire protocol.
-- Implementation work is driven by the real call-site audit (see `plan.md` Phase 0), which found
+- Implementation work is driven by the real call-site audit (Phase 0, done and archived — see
+  `archive/plan20260718.md`), which found
   that the sibling `free-eggbert` repository already contains a full DirectPlay client
   (`include/network.hpp`, `src/network.cpp`, `src/decnet.cpp`, `src/event.cpp`) using
   `IDirectPlay`/`IDirectPlay2A` (not `IDirectPlay3A`), `QueryInterface`, `DirectPlayEnumerateA/W`,
@@ -260,7 +261,8 @@ raw sockets and Windows-only networking APIs are never used.**
   silence. If behavior is a deliberate simplification, say so, and say what the simplification is.
 - Do not delete existing documentation (`README.md`, `Android and Web Compatibility.md`) to make
   room for new docs. `plan.md` is the authoritative forward-looking task list (see below). New docs
-  go under `docs/` as introduced by `plan.md` Phase 16.
+  go under `docs/`, a convention introduced by Phase 16 (done, archived — see
+  `archive/plan20260718.md`).
 - `TODO.md` was deleted on 2026-07-18 (explicit user override of the prior "not deleted" rule,
   after every item in it had been individually reviewed and resolved — fixed, confirmed as an
   intentional documented simplification, or confirmed stale). Its free-direct-related content is
@@ -292,6 +294,11 @@ raw sockets and Windows-only networking APIs are never used.**
 - **`plan.md` is the authoritative English task list for FreeDirect.** It formerly superseded
   `TODO.md` as the forward-looking backlog; `TODO.md` itself was deleted on 2026-07-18 once every
   item in it was resolved (see the Documentation Policy section above).
+- **`archive/plan20260718.md`** holds phases and tasks confirmed fully complete as of 2026-07-18
+  (verified item-by-item, not just checkbox-counted), split out to keep `plan.md` itself focused on
+  actual remaining work. It is historical record, not a living document — do not edit it going
+  forward, and do not assume a phase number's absence from `plan.md` means it was deleted; check
+  the archive first. New phases/tasks are added to `plan.md`, never directly to the archive.
 - **Every task in `plan.md` must be atomic: it must do exactly one thing.** If a task reads like it
   has an "and" joining two independent changes, split it into two tasks.
 - Tasks are organized by phase, use Markdown checkboxes (`- [ ]` / `- [x]`), and important tasks
