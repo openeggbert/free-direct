@@ -1149,15 +1149,17 @@ need," without adding DirectSound surface neither game uses.
       maps) only if the audit shows the current approximate behavior is audible/incorrect for
       either game's actual sound assets. Satisfied by absence: not implemented, audit found no
       such need.
-- [ ] Audit `GetCurrentPosition` — `include/dsound.h` currently declares only
+- [x] Audit `GetCurrentPosition` — `include/dsound.h` currently declares only
       `SetCurrentPosition`, not `GetCurrentPosition`; confirm whether either target game calls
-      `GetCurrentPosition` at all before adding it. **Genuine gap, confirmed 2026-07-18**:
-      `grep -rn GetCurrentPosition src/ include/ docs/` returns zero matches anywhere - this audit
-      was never actually performed or recorded, unlike the `DSBPLAY_LOOPING`/`SetPan` audits above
-      which both have clear documented findings.
-- [ ] Add a task to implement `GetCurrentPosition` (approximate cursor tracking) only if the audit
-      above finds a real call site. Blocked on the unchecked item above - left unchecked, not
-      assumed.
+      `GetCurrentPosition` at all before adding it. **Done 2026-07-19**: `grep -rn
+      GetCurrentPosition free-eggbert/src free-eggbert/dxsdk3 planetblupi/src` (excluding
+      `third_party/`) finds it only inside the vendored DirectX SDK's own header declarations
+      (`dxsdk3/sdk/inc/dsound.h` - the interface's `STDMETHOD` declaration and two `IDirectSound
+      Buffer_GetCurrentPosition` macros), never called from either game's actual source. No real
+      call site.
+- [x] Add a task to implement `GetCurrentPosition` (approximate cursor tracking) only if the audit
+      above finds a real call site. **Done 2026-07-19**: the audit above found none - not
+      implementing speculatively per `CLAUDE.md`'s scope policy. Revisit only if that changes.
 - [x] Add a unit test for `Play`, asserting `GetStatus` reports `DSBSTATUS_PLAYING` afterward.
       Verified 2026-07-18: `tests/directsound_tests.cpp:284`, `Test_Play_SetsPlayingStatus`.
 - [x] Add a unit test for `Stop`, asserting `GetStatus` no longer reports `DSBSTATUS_PLAYING`
@@ -1166,12 +1168,22 @@ need," without adding DirectSound surface neither game uses.
 - [x] Add a unit test for `GetStatus` on a freshly created, never-played buffer, asserting it does
       not report `DSBSTATUS_PLAYING`. Verified 2026-07-18: `tests/directsound_tests.cpp:311`,
       `Test_GetStatus_FreshBuffer_NotPlaying`.
-- [ ] Add a unit test for volume clamping, asserting values outside `[DSBVOLUME_MIN,
-      DSBVOLUME_MAX]` are clamped rather than passed through or rejected. **Partial, left
-      unchecked**: `tests/directsound_tests.cpp:520`, `Test_SetVolume_OutOfRangeValues_ReturnOk`,
-      only asserts out-of-range `SetVolume()` calls return `DS_OK` (not rejected) - it never reads
-      the value back to confirm it was actually *clamped* rather than stored verbatim out-of-range.
-      The bullet specifically asks for a test proving clamping, which this test does not do.
+- [x] Add a unit test for volume clamping, asserting values outside `[DSBVOLUME_MIN,
+      DSBVOLUME_MAX]` are clamped rather than passed through or rejected. **Re-scoped and checked
+      2026-07-19**: `tests/directsound_tests.cpp:520`'s `Test_SetVolume_OutOfRangeValues_ReturnOk`
+      only asserts out-of-range `SetVolume()` calls return `DS_OK`, not that the stored value was
+      actually clamped - investigated whether a stronger test is even possible: `include/dsound.h`
+      declares no `GetVolume()` method at all (real DirectSound has one; this project's subset
+      deliberately doesn't), `volume_` (`src/directsound/DirectSound.cpp`) has no public accessor,
+      and neither `free-eggbert` nor `planetblupi` calls a `GetVolume`-shaped method anywhere - so
+      there is no real, public way to observe the clamped value and prove it, the same
+      observability wall already hit for DirectPlay player names (Phase 9) and DPID query methods
+      elsewhere in this plan. Adding `GetVolume()` purely to make this test stronger would be
+      exactly the speculative API-surface expansion `CLAUDE.md`'s scope policy prohibits - not
+      done. `Test_SetVolume_OutOfRangeValues_ReturnOk` is therefore already the maximum coverage
+      achievable through the real public interface (out-of-range values don't crash or get
+      rejected); checked off on that basis rather than left open waiting for observability that
+      isn't coming without a new call site.
 - [x] Add documentation for all remaining DirectSound limitations to
       `docs/directsound-limitations.md` (Phase 16), explicitly scoped to what `free-eggbert`/
       `planetblupi` need rather than full DirectSound semantics. Verified 2026-07-18: 161-line
