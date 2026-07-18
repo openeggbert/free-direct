@@ -23,13 +23,16 @@ original DirectX SDK or Windows.
   and every original Phase 0-18 phase confirmed fully complete were archived to
   `archive/plan20260718.md` on 2026-07-18 (item-by-item re-verified first, not just
   checkbox-counted); `plan.md` itself was trimmed down to only the phases with at least one
-  genuinely open item (Phase 1, 6-14, 18) - see `plan.md`'s own header for the full split
-  rationale. **This means "no queued, tracked work left" is no longer accurate** as of 2026-07-18:
-  `plan.md` now surfaces real open items that had previously been buried under a much larger file
-  (notably DirectPlay's real networking layer - unfinished ENet join path, unimplemented
-  broadcast-to-all despite it being `free-eggbert`'s actual live `Send()` pattern, and unstarted
-  host-side routing to non-host recipients, all in Phase 10). Read `plan.md` directly for the
-  current, accurate list rather than trusting this summary to stay in sync with it.
+  genuinely open item - see `plan.md`'s own header for the full split rationale. **"No queued,
+  tracked work left" is no longer accurate** as of 2026-07-18. Phases 10 and 11 were fully closed
+  out 2026-07-19 (broadcast-to-all was found already implemented and re-verified, not missing;
+  non-broadcast unicast routing between two non-host peers was cancelled - no call site in either
+  target game; flag validation, null-pointer, and unconditional-success audits all completed with
+  no remaining gaps). Phase 1 was also closed 2026-07-19 (`DirectPlay.cpp` split into dedicated
+  files, mirroring `DirectDraw.cpp`'s split earlier the same day). As of this writing the
+  remaining open phases are **6, 7, 8, 9, 12, 13, 14, 18** - read `plan.md` directly for the
+  current, accurate list of what's actually left rather than trusting this summary to stay in
+  sync with it.
 - **Important architectural decisions**:
   - Public headers (`include/ddraw.h`, `include/dsound.h`, `include/dplay.h`) are DirectX-shaped
     only — no SDL3/SDL3_net/ENet symbol may ever appear in them. Enforced automatically by a CTest
