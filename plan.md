@@ -798,18 +798,44 @@ routing, broadcast, and validation.
       `DirectPlay.cpp`'s ENet branch of `Open()`/`Send()`/`Receive()` is still not wired to any of
       this - the ENet backend can now genuinely deliver bytes at the transport level, but nothing
       above that layer uses it for a non-self send yet.
-- [ ] Implement host-side routing: the host forwards a `Send` addressed to a non-host recipient to
-      that recipient's connection (star topology, matching ENet's client/server model). Not
-      started - today only "host directly addresses one of its own `remotePlayerIds`" works; a
-      joining peer still cannot reach any other peer (host or otherwise) at all.
+- [ ] Implement host-side routing for a **non-broadcast unicast** `Send` addressed to a non-host
+      recipient (a joining peer B directly addressing another joining peer C by DPID, relayed
+      through the host). Distinct from broadcast relay, which is done (see the checked item below) -
+      this is specifically the "peer B sends only to peer C" case. Still not started: today a
+      joining role can only broadcast or self-send; it has no way to address one specific other
+      peer. **Confirmed still genuinely open, re-checked 2026-07-19**: `SendUnicast`
+      (`src/directplay/DirectPlay.cpp`) only handles the host addressing one of its own
+      `remotePlayerIds` directly - there is no relay path for a non-host sender's unicast, and
+      `include/dplay.h`'s own `Send` doc comment says so explicitly ("Direct non-broadcast unicast
+      between two non-host peers still has no path"). **No known call site needs this** - the
+      Phase 0 audit found `free-eggbert`'s only real `Send()` call site is always
+      `Send(m_dpid, 0, ...)` (broadcast); do not implement this speculatively without a concrete
+      need per `CLAUDE.md`'s scope policy.
 - [ ] Implement direct peer-to-peer delivery **only if** a future architectural decision moves away
       from the host-hub star topology — not needed under the current plan; leave as a documented
       non-task unless the topology decision changes.
-- [ ] Implement broadcast-to-all delivery for `idTo == DPID_ALLPLAYERS`/`0`, matching
-      `free-eggbert/src/network.cpp`'s `Send(m_dpid, 0, ...)` call pattern.
-- [ ] Add the `DPID_ALLPLAYERS` and `DPID_SYSMSG` constants to `include/dplay.h` (if not already
+- [x] Implement broadcast-to-all delivery for `idTo == DPID_ALLPLAYERS`/`0`, matching
+      `free-eggbert/src/network.cpp`'s `Send(m_dpid, 0, ...)` call pattern. **Done**
+      (`TASK-24H-0148`, archived - see `archive/plan20260718.md`): `Send()`'s dispatcher checks
+      `idTo == DPID_ALLPLAYERS` before the `idTo == idFrom` self-send branch (Decision 20, so
+      `Send(0, 0, ...)` - the host's own real call shape - means broadcast, not self-send).
+      `SendBroadcast()` (`src/directplay/DirectPlay.cpp`): hosting role iterates `remotePlayerIds`
+      and addresses each directly, never looping back to its own queue; joining role sends to the
+      host with the wire header's `idTo` left at `DPID_ALLPLAYERS` as a relay marker.
+      `Receive()`'s `Data` case relays a non-host sender's broadcast (byte-for-byte, no
+      re-serialization) to every other `remotePlayerIds` entry except the original sender, after
+      enqueueing the host's own copy (Decision 21) - this is the host-side relay for broadcast
+      specifically (distinct from the still-open non-broadcast unicast routing item above).
+      **Re-verified 2026-07-19**: fresh clean build + `ctest` (9/9), `directplay_tests` binary run
+      directly ("OK: all DirectPlay tests passed."), covering
+      `Test_HostBroadcast_ReachesAllRemoteClientsNotSelf`,
+      `Test_HostBroadcast_ReachesMultipleRemoteClients`, and
+      `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost`.
+- [x] Add the `DPID_ALLPLAYERS` and `DPID_SYSMSG` constants to `include/dplay.h` (if not already
       added in Phase 0/Phase 2), so broadcast sends have named constants available even though
-      current call sites use a literal `0`.
+      current call sites use a literal `0`. **Done** (`TASK-24H-0091`, folded into `TASK-24H-0148`'s
+      commit, archived): both `#define`d to `0` in `include/dplay.h` (line ~126-127), with a doc
+      comment explaining they collide by design since `free-eggbert` never distinguishes them.
 - [x] Preserve DirectPlay-like packet boundaries: each `Send` call must arrive as exactly one
       `Receive`-visible message, never coalesced or split. **Done, loopback:**
       `LoopbackDirectPlayTransport::Send()`/`Receive()` (Decision 10/14) never coalesce or split -
@@ -828,15 +854,15 @@ routing, broadcast, and validation.
       not correspond to a locally-registered player. **Done** (Decision 15): checked against
       `session_.localPlayerIds`. **Verified**: `Test_SendFromUnknownLocalPlayer_
       ReturnsInvalidPlayer` (`tests/directplay_tests.cpp`).
-- [ ] Validate the recipient player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idTo` is
-      neither a known player DPID nor the broadcast ID. **Partially done** (Decision 15): `idTo`
-      not in `session_.remotePlayerIds` correctly returns `DPERR_INVALIDPLAYER` for the hosting
-      role (**verified**: `Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer`); the "nor the
-      broadcast ID" half is unchecked since broadcast doesn't exist yet, and Decision 15 flags a
-      real, unresolved ambiguity for whoever implements it: Decision 3 assigned DPID `0` to the
-      host's own first local player rather than reserving it as `DPID_ALLPLAYERS`, so
-      `free-eggbert`'s own broadcast call (`Send(m_dpid, 0, ...)`) is genuinely ambiguous under
-      current semantics between "broadcast" and "the specific player whose DPID is `0`."
+- [x] Validate the recipient player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idTo` is
+      neither a known player DPID nor the broadcast ID. **Done**: `idTo` not in
+      `session_.remotePlayerIds` correctly returns `DPERR_INVALIDPLAYER` for the hosting role
+      (**verified**: `Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer`). The ambiguity this
+      item used to flag - DPID `0` being both the host's own first local player (Decision 3) and
+      the literal value of `DPID_ALLPLAYERS` - is resolved by Decision 20/21 (`TASK-24H-0148`,
+      archived): `idTo == DPID_ALLPLAYERS` is checked *before* any other interpretation in `Send`'s
+      dispatcher, so `idTo == 0` always means broadcast, never "the specific player whose DPID
+      happens to be `0`." No remaining unvalidated case.
 - [ ] Validate a null payload with zero length (`lpData == nullptr && dwDataSize == 0`) as an
       accepted no-payload send, only if a call site needs it; otherwise document it as rejected.
 - [ ] Reject a null payload with nonzero length (`lpData == nullptr && dwDataSize > 0`) with
@@ -858,8 +884,13 @@ routing, broadcast, and validation.
       `Receive()` gets the exact payload, with `idFrom`/`idTo` matching. **Verified**: 37/37
       `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
       `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Add a two-client routing test over loopback (if feasible with the loopback transport's
-      design): client A sends to client B via the host; client B receives it and client A does not.
+- [ ] Add a two-client **non-broadcast unicast** routing test over loopback (if feasible with the
+      loopback transport's design): client A sends *only* to client B via the host (not a
+      broadcast); client B receives it and the host/client A do not. Distinct from broadcast
+      fan-out, which is already tested (`Test_HostBroadcast_ReachesMultipleRemoteClients`,
+      `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost`) - this test doesn't make sense to
+      write until the still-open non-broadcast unicast routing item above is implemented, since
+      there's no code path for it to exercise yet.
 - [ ] Add a packet-ordering test: multiple guaranteed sends from the same sender arrive at the
       receiver in send order.
 - [ ] Add a reliable-delivery smoke test gated behind `FREE_DIRECT_ENABLE_ENET`, sending a batch of
