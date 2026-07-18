@@ -1226,19 +1226,24 @@ actually need," prioritized by real call-site frequency.
       2026-07-18: covered by the same section above plus
       `tests/directdraw_tests.cpp`'s `Test_BltFast_SrcColorKey_8Bit_SkipsKeyedPixels` /
       `_32Bit_SkipsKeyedPixels`.
-- [ ] Audit mixed 8-bit/32-bit behavior: identify whether either game ever blits directly between
+- [x] Audit mixed 8-bit/32-bit behavior: identify whether either game ever blits directly between
       an 8-bit paletted surface and a 32-bit surface (as opposed to via the palette-to-RGBA32
-      present-time conversion already documented in `README.md`). **Not documented, confirmed
-      2026-07-18**: no mention of "mixed 8-bit/32-bit" or "mixed-depth" anywhere in
-      `docs/directdraw-limitations.md` or `docs/audit_ddraw.md`.
-- [ ] Decide whether mixed-depth blits should error (`DDERR_INVALIDPARAMS` or similar) instead of
+      present-time conversion already documented in `README.md`). **Done 2026-07-19**: `grep -rn
+      "DDPF_PALETTEINDEXED8\|dwRGBBitCount = 8" free-eggbert/src planetblupi/src` (excluding
+      third-party code) finds zero matches - neither game ever explicitly requests an 8-bit
+      `CreateSurface` pixel format. Combined with the already-documented `SetDisplayMode`/`dwBPP`
+      gap directly below (primary surfaces are also always created 32bpp regardless of request),
+      every surface either game creates today ends up 32bpp - mixed-depth blits cannot occur in
+      practice for either target game.
+- [x] Decide whether mixed-depth blits should error (`DDERR_INVALIDPARAMS` or similar) instead of
       silently skipping pixels, based on the audit above, and document the decision in
-      `docs/directdraw-limitations.md`. **Genuine gap, confirmed 2026-07-18**:
-      `DirectDrawSurface.cpp`'s `BlitFrom` only has explicit branches for `bpp_==8 &&
-      source.GetBPP()==8` and `bpp_==32 && source.GetBPP()==32` - a mismatched-depth pair falls
-      through both `if` checks and silently copies nothing, with no error returned and no comment
-      explaining this is intentional. Real, undecided, undocumented behavior - not a stale
-      checkbox.
+      `docs/directdraw-limitations.md`. **Done 2026-07-19**: decided not to change the behavior -
+      `BlitFrom`'s mixed-depth fallthrough (silently copies nothing, no error) is confirmed
+      unreachable by either target game (see the audit above), so adding new error-return behavior
+      for a case that never fires would be exactly the speculative change `CLAUDE.md`'s scope
+      policy prohibits. Documented as a new "Mixed-depth `BlitFrom` silently copies nothing,
+      currently unreachable" section in `docs/directdraw-limitations.md`, cross-referencing the
+      `SetDisplayMode`/`dwBPP` section it depends on.
 - [x] Audit `GetDC`/`ReleaseDC` given both games call these meaningfully (`free-eggbert`: 3/3 call
       sites; `planetblupi`: 4/4 call sites) — identify what GDI operations happen between `GetDC`
       and `ReleaseDC` in both games (likely text/UI drawing) and confirm current behavior covers
@@ -1273,8 +1278,8 @@ actually need," prioritized by real call-site frequency.
 SDL renderer (no real display required) - confirmed true, all of `tests/directdraw_tests.cpp` runs
 under the default headless CTest config; `docs/directdraw-limitations.md` cites concrete call-site
 counts from both target games for each documented limitation, not general DirectDraw folklore -
-true for every limitation checked above **except** the mixed-depth-blit question, which remains
-genuinely undocumented (see the two unchecked items above).
+**met for every limitation, including the mixed-depth-blit question** (documented 2026-07-19, see
+the two items above).
 
 ---
 

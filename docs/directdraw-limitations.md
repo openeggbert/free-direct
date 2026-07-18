@@ -20,6 +20,29 @@ called many times per frame via `decor.cpp`), but `Blt` is not a minor path eith
 covered by regression tests (`Test_Blt_FullSurfaceCopy_MatchesSource` specifically replicates the
 `CPixmap::Display()` call shape; `Test_BltFast_OpaqueCopy_*` covers the sprite-compositing shape).
 
+## Mixed-depth `BlitFrom` silently copies nothing, currently unreachable (new finding, 2026-07-19)
+
+`DirectDrawSurfaceImpl::BlitFrom` (`src/directdraw/DirectDrawSurface.cpp`) has explicit fast/slow
+paths only for `bpp_ == 8 && source.GetBPP() == 8` and `bpp_ == 32 && source.GetBPP() == 32`. A
+mismatched-depth pair (e.g. blitting an 8-bit surface onto a 32-bit one, or vice versa) falls
+through both checks and silently copies zero pixels — no error is returned, no pixel is written,
+and nothing logs that this happened.
+
+**Confirmed currently unreachable by either target game**: a source-level grep of both games
+(`grep -rn "DDPF_PALETTEINDEXED8\|dwRGBBitCount = 8"`, excluding vendored third-party code) found
+zero matches — neither `free-eggbert` nor `planetblupi` ever explicitly requests an 8-bit
+`CreateSurface` pixel format. Combined with the "`SetDisplayMode`'s `dwBPP`" finding directly
+below (both games' *primary* surfaces are also always created 32bpp regardless of what they
+request), every surface either game creates today ends up 32bpp — so `BlitFrom`'s 8-bit branch,
+and therefore this mixed-depth fallthrough, is dead code for both target games as they exist today.
+
+**Decision**: not fixed (neither made to error with `DDERR_INVALIDPARAMS` nor made to convert
+between depths) — per `CLAUDE.md`'s scope policy, changing unreachable behavior without a call
+site forcing a specific choice would be speculative. Recorded here so the gap is honest and
+findable rather than silently papered over, matching this project's Documentation Policy. Revisit
+if the `SetDisplayMode`/`dwBPP` gap is ever fixed (which would make real 8-bit primaries
+reachable) or if a new call site is found.
+
 ## SetDisplayMode's dwBPP is accepted but never used (new finding, TASK-24H-0053)
 
 `IDirectDraw::SetDisplayMode(dwWidth, dwHeight, dwBPP)` stores `dwWidth`/`dwHeight` into
