@@ -137,6 +137,30 @@ call site (confirmed by the original call-site audit); it is implemented and tes
 (`Test_Blt_ColorFill_FillsDestRectWithColor`) as documented simplified behavior only, kept for
 API-shape completeness.
 
+## QueryInterface is an honest stub across all four DirectDraw classes
+
+`QueryInterface` on `DirectDrawImpl`, `DirectDrawSurfaceImpl`, `DirectDrawPaletteImpl`, and
+`DirectDrawClipperImpl` (`src/directdraw/DirectDraw.cpp`) unconditionally returns
+`DDERR_UNSUPPORTED`, ignoring `riid` entirely — it does not even succeed for a query against the
+object's own interface GUID, which minimal COM semantics would normally require.
+
+**Why this is not currently an observable bug for either target game**: a full-source grep of both
+`../free-eggbert` and `../planetblupi` (excluding the bundled DirectX SDK headers and third-party
+SDL sources, neither of which are real call sites) found exactly one real `QueryInterface` call
+site across both games — `free-eggbert/src/network.cpp:91`, `lpDP->QueryInterface(IID_IDirectPlay2A,
+...)` — and it is on a **DirectPlay** object, not a DirectDraw one.
+`src/directplay/DirectPlay.cpp`'s `DirectPlay2AImpl::QueryInterface` correctly implements that
+specific case (matches `IID_IDirectPlay2A`, returns `E_NOINTERFACE` otherwise). Neither game ever
+calls `QueryInterface` on an `IDirectDraw`/`IDirectDrawSurface`/`IDirectDrawPalette`/
+`IDirectDrawClipper` object.
+
+`include/ddraw.h` already labels all four DirectDraw `QueryInterface` declarations `STUB`, so this
+is not a stale-tag case like `GetDC`/`IsLost` above — the header has always been honest about this
+one. Per `CLAUDE.md`'s scope policy, implementing real GUID matching (even the minimal "return self
+for own-interface queries" case) without an evidenced call site would be a speculative addition;
+this is recorded here rather than fixed, matching the same reasoning as the `Flip`/`dwFillColor`
+items below.
+
 ## CreateSurface enforces a fixed 4096x4096 dimension cap (new, TASK-24H-0154)
 
 `CreateSurface` (both the offscreen branch and, indirectly, the primary branch via
