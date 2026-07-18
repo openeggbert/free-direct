@@ -142,7 +142,22 @@ behavior.
       made to `DirectPlayEnumerateA`/`W` themselves in this task.
 - [ ] Add a follow-up task (tracked here, executed once the enumeration decision above is
       implemented) to test enumeration behavior against `free-eggbert`'s real provider-selection UI
-      flow in `event.cpp`.
+      flow in `event.cpp`. **Re-checked 2026-07-19, left open, still low-priority**: reachability
+      has partially changed since the original `docs/directplay-callsite-audit.md` (2026-07-08).
+      `CNetwork::EnumProviders()` now has a genuine direct call site at `event.cpp:4644` (inside
+      `if (m_phase == WM_PHASE_SERVICE)`), not just through the previously-cited
+      `NetEnumSessions`/zero-callers path - `free-eggbert` is under active decompilation and this
+      may have been reconnected since the audit. However, `CNetwork::EnumSessions()`,
+      `JoinSession()`, and `CreateSession()` (the next steps after provider selection) still have
+      **zero callers anywhere** in `event.cpp` (re-confirmed by grep), so even if a player can
+      reach the provider-selection screen, the flow cannot proceed past it today - the same
+      upstream blocker already tracked for the whole DirectPlay real-session verification gap
+      (`NEXT.md`, tied to `TreatNetData()`'s still-commented-out call site). A UI-driven smoke test
+      (simulating menu clicks to actually reach `WM_PHASE_SERVICE` and observe the provider list)
+      would need real reverse-engineering of `event.cpp`'s phase/button state machine - a
+      significant, uncertain-payoff investment for a path that dead-ends immediately afterward
+      regardless. Not attempted this session; left open, low priority until the downstream blocker
+      clears.
 - [x] Create `src/directplay/DirectPlaySession.hpp` and `src/directplay/DirectPlaySession.cpp`
       declaring an empty `DirectPlaySession` class (no members yet) that will own session/host/
       player-count state starting in Phase 2. **Done:** both files created, class has only a
@@ -175,18 +190,39 @@ behavior.
       matching this file's existing convention of only listing `.cpp` files (e.g.
       `Diagnostics.hpp` isn't listed either, only `Diagnostics.cpp` is). Verified all three new
       object files compile and link into a static library together with no ODR conflicts.
-- [ ] Move `DirectPlay2AImpl`/`DirectPlayImpl` out of `src/directplay/DirectPlay.cpp` and into
+- [x] Move `DirectPlay2AImpl`/`DirectPlayImpl` out of `src/directplay/DirectPlay.cpp` and into
       dedicated files only once they hold real state (Phase 2+) — do not split the file while it
-      remains a pure stub, to avoid empty-file churn. **Intentionally still unchecked:** this
-      task's own wording defers it to Phase 2+; it is not part of Phase 1's completable scope and
-      will be picked up naturally when Phase 2 gives these classes real state.
+      remains a pure stub, to avoid empty-file churn. **Done 2026-07-19** (deferred to Phase 2+ as
+      this task's own wording specified — both classes have held real state since Phase 2, this
+      was just never revisited until now, user-approved as the same category of decision as the
+      2026-07-18 `src/directdraw/` split): `DirectPlay2AImpl` (the dominant, real-implementation
+      class, 737 lines) moved to `src/directplay/DirectPlayInternal.hpp` (full definition, all
+      methods still inline in the class body exactly as before — unlike the `DirectDraw.cpp` split,
+      this file's methods were never out-of-line to begin with, so converting ~30 methods to
+      out-of-line-with-qualification purely for stylistic parity would have been unnecessary
+      rewrite risk for a purely organizational move), paired with a trivial `DirectPlay2A.cpp`
+      (`#include "DirectPlayInternal.hpp"`, matching `DirectPlaySession.cpp`'s existing
+      header-only-class convention already used elsewhere in `src/directplay/`). `DirectPlayImpl`
+      (35 lines, tightly coupled to the free functions that construct it) stayed in
+      `DirectPlay.cpp` itself, now down to 105 lines from 998 — that file also gained
+      `#include "DirectPlayInternal.hpp"` + `using namespace free_direct_directplay;` in place of
+      the old single anonymous namespace. `CMakeLists.txt` updated with the new
+      `DirectPlay2A.cpp` source. **Verified**: fresh build + `ctest` (9/9, both default and
+      `-DFREE_DIRECT_ENABLE_ENET=ON` with `ctest -L enet` 1/1), `header_hygiene` clean,
+      `../free-eggbert` rebuild confirmed unaffected (exit 0, zero `error:` matches) — no test file
+      needed any change, since tests only ever went through the public `IDirectPlay*` interfaces.
 
 **Acceptance criteria:** a unit test constructs a `DirectPlayImpl`, calls `QueryInterface` with
 `ppvObject == nullptr` and asserts `DPERR_INVALIDPARAMS`/`E_INVALIDARG`; calls it with an
 unrelated GUID and asserts `E_NOINTERFACE`/`DPERR_NOINTERFACE`; calls it with `IID_IDirectPlay2A`
 and asserts the returned object's refcount reflects one `AddRef()`. The project still builds with
 `DirectPlaySession`/`DirectPlayPlayer`/`DirectPlayMessageQueue`/`DirectPlayTransport` as
-near-empty scaffolding files.
+near-empty scaffolding files. **Note (2026-07-19):** the file-layout half of this note is now
+stale in one respect — `DirectPlaySession`/`DirectPlayMessageQueue`/`DirectPlayTransport` are no
+longer "near-empty scaffolding" (all hold real state since Phase 2-4); `DirectPlayPlayer.hpp`/`.cpp`
+remain genuinely empty/unused placeholders (Phase 9 decided player data storage was not needed —
+see `docs/directplay-limitations.md`). The refcount/`QueryInterface` behavioral assertions
+themselves are unaffected by today's file split and remain accurate.
 
 ---
 

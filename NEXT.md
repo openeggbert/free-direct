@@ -49,6 +49,14 @@ original DirectX SDK or Windows.
     objects) — mirroring `src/directplay/`'s existing multi-file split. Every test still
     exercises both subsystems only through the real public `IDirectDraw*`/`IDirectSound*`
     interfaces (no whitebox testing) — that invariant is unchanged.
+  - `src/directplay/DirectPlay.cpp` itself was further split 2026-07-19: `DirectPlay2AImpl` (the
+    real `IDirectPlay2A` implementation, previously ~740 of `DirectPlay.cpp`'s ~1000 lines) moved
+    to `src/directplay/DirectPlayInternal.hpp` (header-only, all methods still inline in the class
+    body — unlike the DirectDraw split above, these methods were never out-of-line to begin with,
+    so this split kept that shape rather than converting ~30 methods purely for stylistic parity),
+    paired with a trivial `DirectPlay2A.cpp` for its CMake source entry. `DirectPlay.cpp` itself
+    is now ~105 lines: just `DirectPlayImpl` (the small `IDirectPlay` COM-boundary object) and the
+    three public entry points (`DirectPlayCreate`, `DirectPlayEnumerateA`/`W`).
   - Scope is bounded strictly by real call sites in the two target games — adding any DirectX
     surface, flag, or behavior not demonstrably required by one of them requires asking the user
     first (`CLAUDE.md` Safety Rules); this has been followed consistently throughout the project's
@@ -271,12 +279,14 @@ internally-actionable verification gap identified right now; see Section 8.
 - **DirectSound** (`src/directsound/DirectSound.cpp`, `include/dsound.h`): SDL3-audio-backed,
   static PCM buffer playback only. `SharedAudioDevice` is a process-wide, ref-counted singleton;
   its chosen SDL audio driver is sticky for the process's entire lifetime once first initialized.
-- **DirectPlay** (`src/directplay/`, split across ~9 files, `include/dplay.h`): the most
-  architecturally elaborate of the three. `DirectPlay2AImpl` (`DirectPlay.cpp`) holds session/
-  player/message-queue state and now dispatches to six small private helper methods for
-  `Send`/`Receive` (see Section 3). Real network I/O is abstracted behind `IDirectPlayTransport`
-  (13 methods), implemented by `LoopbackDirectPlayTransport` (in-process) or
-  `EnetDirectPlayTransport` (real ENet UDP), selected at **build time only**.
+- **DirectPlay** (`src/directplay/`, split across ~11 files, `include/dplay.h`): the most
+  architecturally elaborate of the three. `DirectPlay2AImpl` (`DirectPlayInternal.hpp`, moved out
+  of `DirectPlay.cpp` 2026-07-19 — see Section 1) holds session/player/message-queue state and
+  dispatches to six small private helper methods for `Send`/`Receive` (see Section 3).
+  `DirectPlay.cpp` itself now only holds `DirectPlayImpl` and the public entry points. Real
+  network I/O is abstracted behind `IDirectPlayTransport` (13 methods), implemented by
+  `LoopbackDirectPlayTransport` (in-process) or `EnetDirectPlayTransport` (real ENet UDP),
+  selected at **build time only**.
 
 **Invariants that must not be broken:**
 - No SDL3/SDL3_net/ENet symbol in any `include/*.h` file, ever — CTest-enforced

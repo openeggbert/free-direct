@@ -109,6 +109,7 @@ target_sources(free-direct
         src/directdraw/DirectDrawClipper.cpp
         src/directsound/DirectSound.cpp
         src/directplay/DirectPlay.cpp
+        src/directplay/DirectPlay2A.cpp
         src/directplay/DirectPlaySession.cpp
         src/directplay/DirectPlayMessageQueue.cpp
         src/directplay/DirectPlayWireProtocol.cpp
