@@ -263,10 +263,12 @@ raw sockets and Windows-only networking APIs are never used.**
   go under `docs/` as introduced by `plan.md` Phase 16.
 - `TODO.md` was deleted on 2026-07-18 (explicit user override of the prior "not deleted" rule,
   after every item in it had been individually reviewed and resolved — fixed, confirmed as an
-  intentional documented simplification, or confirmed stale). Its free-api-related content moved to
-  `../freeapiissues.md`; its free-direct-related content is folded into
-  `docs/directdraw-limitations.md`. Do not recreate `TODO.md` as a general-purpose scratch TODO
-  file — `plan.md` is the durable task list.
+  intentional documented simplification, or confirmed stale). Its free-direct-related content is
+  folded into `docs/directdraw-limitations.md`. Its free-api-related content was moved to a sibling
+  file, `../freeapiissues.md`, outside this repo (in the shared `openeggbert/` checkout directory,
+  which is not itself a git repo) — that file was later deleted by the user (2026-07-18, separately
+  from this repo), so do not assume it still exists or link to it. Do not recreate `TODO.md` as a
+  general-purpose scratch TODO file — `plan.md` is the durable task list.
 - Every new `docs/*.md` file must be in English, like this file and `plan.md`.
 
 ---
