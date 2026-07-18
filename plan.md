@@ -764,24 +764,25 @@ Phase 0 DPID-vs-index finding.
       transport, storing it in the remote-player list. **Already done** via Decision 7's
       assignment loop (`Receive()`) and Decision 16's `JoinAccept` handling - both push the
       relevant DPID onto `remotePlayerIds`/`localPlayerIds` respectively. No new code needed.
-- [ ] Store each player's short name (`DPNAME.lpszShortNameA`) as an owned `std::string`.
-      **Deliberately deferred, not attempted** (`docs/directplay-design.md` Decision 17): a real
-      short name is genuinely supplied at both `../free-eggbert` `CreatePlayer()` call sites
-      (`src/network.cpp:183-185,231-233`), so this is not out-of-scope by the two-game rule - but
-      `IDirectPlay2A` has no `GetPlayerName`-style method at all, and `free-eggbert` never calls
-      one either, so a stored name would be permanently unobservable by anything (test or real
-      caller) without adding new public API surface, which needs its own separate ask-the-user
-      pass first (`CLAUDE.md`). Storing genuinely dead, unverifiable state would violate this
-      project's own Testing Policy.
-- [ ] Store each player's long name (`DPNAME.lpszLongNameA`) as an owned `std::string`, allowing it
-      to be empty since `free-eggbert` always passes `NULL` for it. **Deferred alongside the short
-      name task above** - same observability gap, same reasoning.
-- [ ] Store player data bytes (`lpData`/`dwDataSize` from `CreatePlayer`) **only if** a concrete
-      call site is found requiring it — Phase 0 found `free-eggbert` always passes `NULL`/`0`;
-      confirm before adding storage, per the two-game scope rule.
-- [ ] Signal an event handle (`hEvent` from `CreatePlayer`) on message arrival **only if** a
-      concrete call site needs it — Phase 0 found `free-eggbert` always passes `NULL`; confirm
-      before implementing, per the two-game scope rule.
+- [ ] ~~Store each player's short name (`DPNAME.lpszShortNameA`) as an owned `std::string`.~~
+      **Cancelled (2026-07-19)**, bookkeeping correction of an already-made decision, not a new
+      one: `docs/directplay-design.md` Decision 17 already deferred this - a real short name is
+      genuinely supplied at both `../free-eggbert` `CreatePlayer()` call sites
+      (`src/network.cpp:183-185,231-233`), so this is not out-of-scope by the two-game rule, but
+      `IDirectPlay2A` has no `GetPlayerName`-style method and `free-eggbert` never calls one
+      either - a stored name would be permanently unobservable by anything without adding new
+      public API surface (its own separate ask-the-user decision, `CLAUDE.md`), and storing dead,
+      unverifiable state would violate this project's own Testing Policy. Revisit only if a real
+      observing call site or an explicit user ask surfaces.
+- [ ] ~~Store each player's long name (`DPNAME.lpszLongNameA`) as an owned `std::string`.~~
+      **Cancelled (2026-07-19)**, same basis as the short-name item above (Decision 17) -
+      `free-eggbert` always passes `NULL` for this one anyway.
+- [ ] ~~Store player data bytes (`lpData`/`dwDataSize` from `CreatePlayer`).~~ **Cancelled
+      (2026-07-19)**: Phase 0's audit found `free-eggbert` always passes `NULL`/`0` - no call site
+      to confirm against. Revisit only if that changes.
+- [ ] ~~Signal an event handle (`hEvent` from `CreatePlayer`) on message arrival.~~ **Cancelled
+      (2026-07-19)**: Phase 0's audit found `free-eggbert` always passes `NULL` - no call site to
+      confirm against. Revisit only if that changes.
 - [x] Validate player count against `dwMaxPlayers` before allocating a new DPID in `CreatePlayer`,
       returning `DPERR_CANTCREATEPLAYER` when the session is full. **Done** (`docs/
       directplay-design.md` Decision 17): checked before DPID allocation, reusing Decision 9's
@@ -789,33 +790,34 @@ Phase 0 DPID-vs-index finding.
       counts against the same cap `Receive()`'s remote-assignment loop already enforces.
       **Verified**: `Test_CreatePlayerOverMaxPlayers_ReturnsCantCreatePlayer` and
       `Test_CreatePlayerWithNoMaxPlayersLimit_NeverRejects` (`tests/directplay_tests.cpp`).
-- [ ] Validate against duplicate players (the same peer calling `CreatePlayer` twice without an
-      intervening `Close`) and decide/document the resulting behavior. **Investigated, not
-      implemented** (`docs/directplay-design.md` Decision 17's amendment): this task has no
-      concrete meaning to implement against yet - `CreatePlayer()`'s sequential DPID allocator
-      (Decision 3) makes every call's assigned DPID unique by construction, and there is no other
-      caller-identity concept `DPNAME` or any other parameter could dedupe against.
-      `free-eggbert` itself only ever calls `CreatePlayer()` once per `CNetwork` instance, so
-      there's no real call-site behavior to match either. Needs a concrete definition of
-      "duplicate" from the user before any code could target it.
-- [ ] Implement a player-lost state (transport-level disconnect detected for a remote player
-      without an explicit `Close`) distinct from a clean removal. **Investigated, not implemented**
-      (`docs/directplay-design.md` Decision 17's amendment): hits the same observability wall as
-      player-name storage - there is no public way for anything to ever query "is this player
-      lost vs. cleanly removed" (no system messages exist, correctly, per the two tasks below).
-      Adding an internal-only distinction nothing can observe would be the same dead,
-      untestable-state problem already flagged for player names.
-- [ ] Generate a player-created system message (`DPID_SYSMSG`-sourced) **only if** Phase 0's audit
-      finds a concrete `free-eggbert` dependency on receiving one — it did not find explicit
-      system-message handling in `event.cpp`/`decnet.cpp`; verify before implementing.
-- [ ] Generate a player-destroyed system message under the same condition as above.
+- [ ] ~~Validate against duplicate players (the same peer calling `CreatePlayer` twice without an
+      intervening `Close`) and decide/document the resulting behavior.~~ **Cancelled
+      (2026-07-19)**, bookkeeping correction: `docs/directplay-design.md` Decision 17's amendment
+      already found this has no concrete meaning to implement against - `CreatePlayer()`'s
+      sequential DPID allocator (Decision 3) makes every call's assigned DPID unique by
+      construction, there is no other caller-identity concept to dedupe against, and
+      `free-eggbert` only ever calls `CreatePlayer()` once per `CNetwork` instance, so there is no
+      real scenario in either target game where "duplicate" would even arise. Revisit only if a
+      concrete definition and a real call site both surface.
+- [ ] ~~Implement a player-lost state (transport-level disconnect detected for a remote player
+      without an explicit `Close`) distinct from a clean removal.~~ **Cancelled (2026-07-19)**,
+      bookkeeping correction: hits the same observability wall as player-name storage (Decision
+      17's amendment) - there is no public way for anything to ever query "is this player lost vs.
+      cleanly removed" (no system messages exist, per the two items below). An internal-only
+      distinction nothing can observe would be the same dead, untestable-state problem already
+      flagged for player names.
+- [ ] ~~Generate a player-created system message (`DPID_SYSMSG`-sourced).~~ **Cancelled
+      (2026-07-19)**: Phase 0's audit found no explicit system-message handling in
+      `event.cpp`/`decnet.cpp` - no call site depends on receiving one.
+- [ ] ~~Generate a player-destroyed system message.~~ **Cancelled (2026-07-19)**, same basis as
+      the item above.
 - [x] Add a test asserting DPID uniqueness across multiple `CreatePlayer` calls within one session.
       **Already satisfied**, pre-dates Phase 9's formal start:
       `Test_LoopbackCreatePlayer_ReturnsUniqueSequentialDpidsStartingAtZero`
       (`tests/directplay_tests.cpp`, added in Phase 4/6's work).
-- [ ] Add a test asserting stored short/long player names round-trip correctly. **Blocked** -
-      depends on the deferred name-storage tasks above (Decision 17); nothing to test until that
-      future conversation resolves how (or whether) names become observable.
+- [ ] ~~Add a test asserting stored short/long player names round-trip correctly.~~ **Cancelled
+      (2026-07-19)**: depends entirely on the now-cancelled name-storage items above - nothing to
+      test since names are not stored.
 - [x] Add a test asserting player removal (via `Close` or disconnect) updates `dwCurrentPlayers`
       and removes the player from future `EnumSessions`/roster queries. **Done, `dwCurrentPlayers`
       half only** (`docs/directplay-design.md` Decision 17's amendment): `dwCurrentPlayers` has no
