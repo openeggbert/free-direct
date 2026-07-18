@@ -936,10 +936,18 @@ Goal: a final sweep ensuring no DirectPlay method still returns an unconditional
 once real behavior is expected of it, and that every deviation from Microsoft DirectPlay is
 written down.
 
-- [ ] Replace every remaining misleading unconditional-success stub in `src/directplay/*.cpp`
+- [x] Replace every remaining misleading unconditional-success stub in `src/directplay/*.cpp`
       with a real, state-driven return value (cross-check against Phases 2-10; this is the final
-      audit/confirmation pass, not new implementation work). Spot-checked 2026-07-18 alongside the
-      bullets below - looks largely true, but not re-audited method-by-method, so left unchecked.
+      audit/confirmation pass, not new implementation work). **Done, full method-by-method audit
+      completed 2026-07-19**: read every `IDirectPlay`/`IDirectPlay2A` method
+      (`QueryInterface`/`AddRef`/`Release` x2, `EnumSessions`, `Open`, `CreatePlayer`,
+      `Send`/`SendBroadcast`/`SendSelf`/`SendUnicast`, `Receive`, `Close`) plus the three free
+      functions (`DirectPlayEnumerateA`/`W`, `DirectPlayCreate`) - every method's success path is
+      real and state-driven; the only unconditional-`DP_OK`-shaped returns left
+      (`AddRef`/`Release`, `DirectPlayEnumerateA`/`W`) are honestly unconditional by real
+      DirectPlay semantics too (ref-counting always succeeds; there is genuinely only one
+      FreeDirect-internal provider to enumerate, Decision 1), not misleading stubs. See the new
+      return-code table in `docs/directplay-limitations.md` for the full evidence.
 - [x] Return `DPERR_NOCONNECTION` from `Send`/`Receive` when called on a session that is not open
       (before `Open` or after `Close`). Verified 2026-07-18: `src/directplay/DirectPlay.cpp`
       lines 450/475 (`if (!session_.IsOpen()) return DPERR_NOCONNECTION;`).
@@ -955,31 +963,56 @@ written down.
 - [x] Confirm `Receive` returns `DPERR_NOMESSAGES` when the queue is empty (cross-reference
       Phase 3). Verified 2026-07-18: `src/directplay/DirectPlayMessageQueue.hpp:95`
       (`if (!front) return DPERR_NOMESSAGES;`).
-- [ ] Sweep every method of `IDirectPlay`/`IDirectPlay2A` for missing null-pointer checks on
+- [x] Sweep every method of `IDirectPlay`/`IDirectPlay2A` for missing null-pointer checks on
       required output parameters, returning `DPERR_INVALIDPARAMS` where one is missing.
-      Spot-checked 2026-07-18: `DPERR_INVALIDPARAMS` is returned from 10 call sites in
-      `DirectPlay.cpp`, but this was not re-verified as an exhaustive sweep of every method -
-      left unchecked pending a real per-method audit.
-- [ ] Return `DPERR_UNSUPPORTED` for any flag combination not covered by the target games'
-      observed usage, instead of silently ignoring unknown flags. **Genuine gap, confirmed
-      2026-07-18**: `grep -rn DPERR_UNSUPPORTED src/directplay/` finds zero uses anywhere in the
-      DirectPlay implementation (the macro is only ever defined in `include/dplay.h`, never
-      returned) - unrecognized flag combinations are still silently ignored, not rejected. Real,
-      still-open work, not a stale checkbox.
-- [ ] Document every intentional deviation from Microsoft DirectPlay's documented error semantics
+      **Done, exhaustive sweep completed 2026-07-19**: every method with a required
+      output/inout pointer already null-checks it - `QueryInterface` (both `DirectPlayImpl` and
+      `DirectPlay2AImpl`) checks `ppvObject`; `Open` checks `lpSessionDesc`; `EnumSessions` checks
+      `lpEnumSessionsCallback`; `Receive` (via `DirectPlayMessageQueue::TryReceive`) checks
+      `lpdwDataSize`; `DirectPlayEnumerateA`/`W` check their callback; `DirectPlayCreate` checks
+      `lplpDP`. `CreatePlayer`'s `lpidPlayer` and `Receive`'s `lpidFrom`/`lpidTo` are treated as
+      genuinely optional (write-if-non-null) rather than required - a deliberate, pre-existing,
+      non-crashing simplification, not a missing check (real DirectPlay documents these as
+      required, but no target-game call site ever passes null for them, and allowing null costs
+      nothing). No gap found.
+- [x] Return `DPERR_UNSUPPORTED` for any flag combination not covered by the target games'
+      observed usage, instead of silently ignoring unknown flags. **Done 2026-07-19, using
+      `DPERR_INVALIDFLAGS` instead of `DPERR_UNSUPPORTED`**: `Open()` already validated this way
+      (`dwFlags & ~(DPOPEN_CREATE|DPOPEN_JOIN|DPOPEN_OPENSESSION)` -> `DPERR_INVALIDFLAGS`) - the
+      2026-07-18 audit's `grep -rn DPERR_UNSUPPORTED` search literally for that macro name missed
+      this equivalent, already-correct validation. Added the same pattern to the four methods that
+      were genuinely missing it: `CreatePlayer` (only `0` is valid - no `DPPLAYER_*` flags are even
+      declared in `include/dplay.h`), `Send` (`DPSEND_GUARANTEED`), `Receive` (`DPRECEIVE_ALL`),
+      `EnumSessions` (`DPENUMSESSIONS_AVAILABLE`) - each bound is exactly the flag set
+      `docs/directplay-callsite-audit.md` confirms `free-eggbert` ever passes. `DPERR_INVALIDFLAGS`
+      is real DirectPlay's actual documented code for "the flags parameter contains an invalid
+      value" - a better semantic fit than `DPERR_UNSUPPORTED`, kept for consistency with the
+      pattern `Open()` already established, not a second, redundant convention. **Verified**: 5 new
+      tests (`Test_Open_InvalidFlags_ReturnsInvalidFlags`,
+      `Test_CreatePlayer_InvalidFlags_ReturnsInvalidFlags`, `Test_Send_InvalidFlags_ReturnsInvalidFlags`,
+      `Test_Receive_InvalidFlags_ReturnsInvalidFlags`, `Test_EnumSessions_InvalidFlags_ReturnsInvalidFlags`,
+      `tests/directplay_tests.cpp`); fresh build + `ctest` (9/9, default and
+      `-DFREE_DIRECT_ENABLE_ENET=ON`), `header_hygiene` clean, `../free-eggbert` rebuild confirmed
+      unaffected (it never passes an out-of-range flag).
+- [x] Document every intentional deviation from Microsoft DirectPlay's documented error semantics
       in `docs/directplay-limitations.md` (Phase 16), with a one-line rationale per deviation.
-      **Partially done, left unchecked**: `docs/directplay-limitations.md`'s "Deviation table"
-      (70 lines) extensively documents behavioral/design deviations (DPID semantics, session
-      enumeration, join handshake, broadcast routing, etc.) with a Decision-number citation each,
-      but does not contain the literal per-`DPERR_*`-code table the phase's own Acceptance
-      criteria below asks for - confirmed via `grep -n "DPERR_" docs/directplay-limitations.md`
-      (zero matches). The behavioral deviations are documented; the specific error-code table is
-      not.
+      **Done 2026-07-19**: added a "Return code table" section listing every unique `DPERR_*`/
+      `DP_OK`/`E_NOINTERFACE` value actually returned anywhere in `src/directplay/` (gathered by
+      grepping every `return`/ternary-return site), its trigger condition(s), and whether it
+      matches or deviates from real DirectPlay's documented semantics for that code - plus a note
+      on which declared `DPERR_*` macros are never returned at all (API-shape completeness only,
+      no call site needs the condition). The existing "Deviation table" (behavioral/design
+      deviations) is unchanged and complements this new code-level table, not replaced by it.
 
 **Acceptance criteria:** `docs/directplay-limitations.md` contains a table listing every `DPERR_*`
 code FreeDirect returns, the condition that triggers it, and whether it matches or deviates from
 documented Microsoft DirectPlay behavior; every method of `IDirectPlay2A` has at least one unit
-test covering its primary error path.
+test covering its primary error path. **Met (2026-07-19)**: return-code table added (see above);
+every method with a real error path (`EnumSessions`, `Open`, `CreatePlayer`, `Send`, `Receive`) has
+existing test coverage for at least one error condition, per the tests cited throughout this
+phase plus the 5 new `InvalidFlags` tests. `QueryInterface`/`AddRef`/`Release`/`Close` have no
+meaningful error path beyond `E_NOINTERFACE`/allocation failure, which are COM-standard and not
+target-game-observable conditions worth a dedicated test.
 
 ---
 

@@ -1924,6 +1924,85 @@ void Test_MultipleGuaranteedSends_ArriveInSendOrder() {
     hostDp->Release();
 }
 
+// plan.md Phase 11: "Return DPERR_UNSUPPORTED [-> DPERR_INVALIDFLAGS, see plan.md's own note on
+// why] for any flag combination not covered by the target games' observed usage, instead of
+// silently ignoring unknown flags." The five tests below cover every IDirectPlay2A method that
+// takes a dwFlags parameter, added alongside the validation itself (src/directplay/DirectPlay.cpp)
+// - each uses a bit pattern outside the one flag (or zero) this project declares/free-eggbert
+// ever passes for that method, per docs/directplay-callsite-audit.md.
+
+void Test_Open_InvalidFlags_ReturnsInvalidFlags() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    DPSESSIONDESC2 desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(dp2->Open(&desc, DPOPEN_CREATE | 0x40000000u) == DPERR_INVALIDFLAGS);
+
+    dp2->Release();
+    dp->Release();
+}
+
+void Test_CreatePlayer_InvalidFlags_ReturnsInvalidFlags() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0x40000000u) == DPERR_INVALIDFLAGS);
+
+    dp2->Release();
+    dp->Release();
+}
+
+void Test_Send_InvalidFlags_ReturnsInvalidFlags() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID player = 0;
+    CHECK(dp2->CreatePlayer(&player, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    const char msg[] = "x";
+    CHECK(dp2->Send(player, player, DPSEND_GUARANTEED | 0x40000000u, (LPVOID)msg, sizeof(msg))
+          == DPERR_INVALIDFLAGS);
+
+    dp2->Release();
+    dp->Release();
+}
+
+void Test_Receive_InvalidFlags_ReturnsInvalidFlags() {
+    LPDIRECTPLAY dp = nullptr;
+    LPDIRECTPLAY2A dp2 = nullptr;
+    OpenLoopbackSession(&dp, &dp2);
+
+    DPID from = 0, to = 0;
+    char buf[8];
+    DWORD size = sizeof(buf);
+    CHECK(dp2->Receive(&from, &to, DPRECEIVE_ALL | 0x40000000u, buf, &size) == DPERR_INVALIDFLAGS);
+
+    dp2->Release();
+    dp->Release();
+}
+
+void Test_EnumSessions_InvalidFlags_ReturnsInvalidFlags() {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+
+    EnumSessionsResult result;
+    CHECK(dp2->EnumSessions(nullptr, 0, CountingEnumSessionsCallback, &result,
+                             DPENUMSESSIONS_AVAILABLE | 0x40000000u) == DPERR_INVALIDFLAGS);
+    CHECK(result.callCount == 0); // rejected before ever invoking the callback
+
+    dp2->Release();
+    dp->Release();
+}
+
 // 24-Hour Stabilization Backlog TASK-24H-0109 (plan.md): DirectPlaySession's transport being
 // nulled after Close() cannot be observed via whitebox access (DirectPlay2AImpl is in an
 // anonymous namespace with no separate header) - this proves it indirectly instead, the same way
@@ -2120,6 +2199,11 @@ int main() {
     Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams();
     Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk();
     Test_MultipleGuaranteedSends_ArriveInSendOrder();
+    Test_Open_InvalidFlags_ReturnsInvalidFlags();
+    Test_CreatePlayer_InvalidFlags_ReturnsInvalidFlags();
+    Test_Send_InvalidFlags_ReturnsInvalidFlags();
+    Test_Receive_InvalidFlags_ReturnsInvalidFlags();
+    Test_EnumSessions_InvalidFlags_ReturnsInvalidFlags();
     Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown();
 
     Test_DirectPlayOperations_NoUnconditionalLogOutput_WhenDebugFlagUnset();

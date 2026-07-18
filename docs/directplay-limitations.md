@@ -38,6 +38,39 @@ requirements on any of this.
 | Session name/password/`dwMaxPlayers` sync on join | **Not synced** to the joining side beyond `applicationGuid`/`sessionInstanceGuid` - no current consumer needs them | Real DirectPlay would give a joining caller the full session descriptor | Decision 16 |
 | LAN discovery responder validation (**new, 2026-07-09**) | `DirectPlayDiscoveryService`'s raw-socket responder (Decision 23) validates a request via the shared `TryDeserializeDirectPlayWireHeader` (size, `magic`/`version` since `TASK-24H-0176`, and `payloadLength` consistency) plus its own `type == Discovery` check - but still has no authentication of any kind. It unicasts a real `DiscoveryResponse` to whatever source address the OS reports for the incoming packet, which is trivially spoofable on a local network - a third party who already knows this project's (documented, open-source) wire format can still cause this process to send a network packet to an address of its choosing. A structurally-present UDP reflection primitive, with modest amplification (the reply is roughly the size of the request, not the 10-100x seen in classic DNS/NTP reflection). Real-world stakes are low given this feature's explicit LAN-only, casual-discovery design intent (Decision 23), not an internet-facing service - no code change proposed, recorded here per this project's practice of writing down known characteristics rather than leaving them implicit | N/A - real DirectPlay's service-provider enumeration model has no direct raw-socket-broadcast analog to compare against | Decision 23 (introduced the raw-socket design), Decision 27 (added the `magic`/`version` check this row already describes), `docs/audit_dplay.md` §7.3 (D7, `plan.md` TASK-24H-0177) |
 
+## Return code table
+
+Every `HRESULT` value returned anywhere in `src/directplay/*.cpp`/`*.hpp`, gathered by grepping
+every `return DPERR_*`/`return DP_OK`/`return E_NOINTERFACE`/ternary-return site (`plan.md` Phase
+11's Acceptance criteria). "Matches" means the code and the condition that triggers it agree with
+real DirectPlay's documented semantics for that code, even though the surrounding mechanism (e.g.
+loopback vs. a real service provider) differs; "Deviates" means FreeDirect uses the code for a
+condition real DirectPlay does not document it for, or omits a distinct code real DirectPlay has.
+
+| Code | Trigger condition(s) | Matches / deviates |
+|---|---|---|
+| `DP_OK` | Every method's success path (17 sites). | Matches. |
+| `DPERR_INVALIDPARAMS` | A required output pointer is null (`QueryInterface`'s `ppvObject`, `Receive`'s `lpdwDataSize`, `DirectPlayCreate`'s `lplpDP`); a caller-supplied struct's `dwSize` doesn't match the expected size (`DPSESSIONDESC2` in `Open`/`EnumSessions`, `DPNAME` in `CreatePlayer`); a non-null `lpData` with `dwDataSize == 0` payload buffer is too small in `Receive`; `Send`'s `lpData == nullptr && dwDataSize > 0` (13 sites total). | Matches - real DirectPlay uses this same code for all of these malformed-argument cases. |
+| `DPERR_INVALIDPLAYER` | `Send`'s `idFrom` is not a locally-registered player, or `idTo` (non-broadcast) is not a known remote player (6 sites across `SendBroadcast`/`SendSelf`/`SendUnicast`). | Matches. |
+| `DPERR_INVALIDFLAGS` | `dwFlags` contains a bit outside the one flag (or zero) this project declares and `free-eggbert` is confirmed to pass, for `Open` (`DPOPEN_CREATE`/`JOIN`/`OPENSESSION`), `CreatePlayer` (no flags declared, only `0` valid), `Send` (`DPSEND_GUARANTEED`), `Receive` (`DPRECEIVE_ALL`), `EnumSessions` (`DPENUMSESSIONS_AVAILABLE`) - 5 sites, added/completed this session (`plan.md` Phase 11: "Return `DPERR_UNSUPPORTED` for any flag combination not covered..." - implemented as `DPERR_INVALIDFLAGS` instead, since that is real DirectPlay's actual documented code for "the flags parameter contains an invalid value," a better semantic fit than the more general `DPERR_UNSUPPORTED`). | Matches, and is a deliberate refinement of the originally-planned code choice - see the note above. |
+| `DPERR_SENDTOOBIG` | `Send`'s `dwDataSize` exceeds `DirectPlayMessageQueue::kMaxPayloadBytes` (4096) - checked in `SendBroadcast`/`SendSelf`/`SendUnicast` (4 sites). | Matches. |
+| `DPERR_NOCONNECTION` | `Send`/`Receive` called on a session that is not open (before `Open` or after `Close`); `Receive` additionally infers this when the transport reports the host connection is gone (a joining role with no locally-queued message left and `!IsConnectedToHost()`) (3 sites). | Matches for the first two; the third is a deliberate FreeDirect inference (real DirectPlay would more likely deliver a distinct disconnect notification) - see the "Join rejection reason" deviation-table row above for the related gap. |
+| `E_NOINTERFACE` | `QueryInterface` (both `DirectPlayImpl` and `DirectPlay2AImpl`) for any `riid` other than the one interface each object implements (2 sites). | Matches - the standard COM code for an unsupported interface query, which real DirectPlay's `QueryInterface` also uses. |
+| `DPERR_OUTOFMEMORY` | `new (std::nothrow)` returns null in `DirectPlayCreate` and `DirectPlayImpl::QueryInterface`'s `IID_IDirectPlay2A` branch (2 sites). | Matches. |
+| `DPERR_NOSESSIONS` | `Open`'s joining branch fails to reach a host: loopback finds nothing listening on the fixed port; ENet's `Connect()` fails or `FREE_DIRECT_ENET_HOST_ADDRESS` is unset/malformed (2 sites). | Deviates narrowly: real DirectPlay documents this code for "`EnumSessions` found no sessions," not for a failed `Open`/join `Connect()` - a deliberate reuse (Decision 11) since no more specific "could not reach the session" code exists in this project's declared subset, not an oversight. |
+| `DPERR_NOMESSAGES` | `Receive`/`TryReceive` called when the message queue is empty (2 sites: the queue-empty check itself, plus the surrounding `Receive` clause that lets a locally-queued message win over `DPERR_NOCONNECTION`). | Matches. |
+| `DPERR_GENERIC` | A joining role's transport-level `Send()` call itself fails (both the broadcast-relay path and the unicast path) - the underlying network primitive rejected the send outright, a different condition from any more specific code above (2 sites). | Matches - real DirectPlay also uses this as its catch-all for a transport-level failure with no more specific code. |
+| `DPERR_CANTCREATESESSION` | `Open`'s hosting branch fails to bind/listen on the fixed port (loopback or ENet) (2 sites). | Matches. |
+| `DPERR_NOAGGREGATION` | `DirectPlayCreate` called with a non-null `pUnkOuter` (COM aggregation, never supported) (1 site). | Matches. |
+| `DPERR_CANTCREATEPLAYER` | `CreatePlayer` when `session_.currentPlayers >= session_.maxPlayers` (a real, nonzero cap) (1 site). | Matches. |
+| `DPERR_ALREADYINITIALIZED` | `Open` called on a session that is already open (1 site). | Matches. |
+
+**Declared but never returned** (present in `include/dplay.h` for API-shape completeness, per this
+project's stub-declaration convention, but no code path in `src/directplay/` triggers them - not a
+gap, since no target-game call site is known to need the condition each would represent):
+`DPERR_BUSY`, `DPERR_TIMEOUT`, `DPERR_EXCEPTION`, and the remaining `DPERR_*` macros declared in
+`include/dplay.h` beyond the ones listed above.
+
 ## Formerly-BLOCKED design questions - all 7 now resolved
 
 All 7 questions below were, for most of this project's history, intentionally left undecided per

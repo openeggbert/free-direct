@@ -211,6 +211,13 @@ namespace {
             // only validated when a filter descriptor is actually provided.
             if (lpEnumSessionsDesc && lpEnumSessionsDesc->dwSize != sizeof(DPSESSIONDESC2)) return DPERR_INVALIDPARAMS;
             if (!lpEnumSessionsCallback) return DPERR_INVALIDPARAMS;
+            // The only flag bit this project declares for EnumSessions() is
+            // DPENUMSESSIONS_AVAILABLE (0x1) - the sole value free-eggbert's own
+            // CNetwork::EnumSessions() ever passes (Phase 11's flag-validation sweep, plan.md) -
+            // matching Open()'s existing dwFlags-validation pattern. (Real DirectPlay also has
+            // DPENUMSESSIONS_ALL/ASYNC/STOPASYNC/PASSWORDREQUIRED/RETURNSTATUS; none are declared
+            // in include/dplay.h since no call site needs them.)
+            if (dwFlags & ~static_cast<DWORD>(DPENUMSESSIONS_AVAILABLE)) return DPERR_INVALIDFLAGS;
 
             // Explicit-host-only discovery (docs/directplay-design.md Decision 18), asked of and
             // confirmed by the user - a synchronous, DirectPlay-level registry lookup, not a
@@ -418,7 +425,13 @@ namespace {
         }
 
         HRESULT WINAPI CreatePlayer(LPDPID lpidPlayer, LPDPNAME lpPlayerName, HANDLE hEvent, LPVOID lpData, DWORD dwDataSize, DWORD dwFlags) override {
-            (void)hEvent; (void)lpData; (void)dwDataSize; (void)dwFlags;
+            (void)hEvent; (void)lpData; (void)dwDataSize;
+            // `include/dplay.h` declares no DPPLAYER_* flags at all - CreatePlayer's only
+            // observed call shape, both free-eggbert call sites (src/network.cpp:184,232), is a
+            // literal `0` (Phase 11's flag-validation sweep, plan.md). Any nonzero value is
+            // therefore unconditionally out of scope, matching Open()'s existing
+            // dwFlags-validation pattern below.
+            if (dwFlags != 0) return DPERR_INVALIDFLAGS;
             // lpPlayerName is optional (a player may be created without a display name); only
             // its size is validated when one is actually provided.
             if (lpPlayerName && lpPlayerName->dwSize != sizeof(DPNAME)) return DPERR_INVALIDPARAMS;
@@ -448,6 +461,12 @@ namespace {
 
         HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) override {
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
+            // The only flag bit this project declares for Send() is DPSEND_GUARANTEED (0x1);
+            // free-eggbert's own call site normalizes its own dwFlags to `!!dwFlags` before
+            // passing it through (src/network.cpp:254), so 0 and DPSEND_GUARANTEED are the only
+            // two values ever observed (Phase 11's flag-validation sweep, plan.md) - matching
+            // Open()'s existing dwFlags-validation pattern below.
+            if (dwFlags & ~static_cast<DWORD>(DPSEND_GUARANTEED)) return DPERR_INVALIDFLAGS;
             // A null payload with zero length is a valid no-payload send (plan.md Phase 10); a
             // null payload with nonzero length has no bytes to actually read and was previously
             // unchecked here (TASK-24H-0106's null-pointer sweep) - both self-send's and the
@@ -471,8 +490,15 @@ namespace {
         }
 
         HRESULT WINAPI Receive(LPDPID lpidFrom, LPDPID lpidTo, DWORD dwFlags, LPVOID lpData, LPDWORD lpdwDataSize) override {
-            (void)dwFlags;
             if (!session_.IsOpen()) return DPERR_NOCONNECTION;
+            // The only flag bit this project declares for Receive() is DPRECEIVE_ALL (0x1) -
+            // the sole value free-eggbert's own CNetwork::Receive() ever passes (Phase 11's
+            // flag-validation sweep, plan.md) - matching Open()'s existing dwFlags-validation
+            // pattern. (Real DirectPlay also has DPRECEIVE_PEEK/DPRECEIVE_TOPLAYER/
+            // DPRECEIVE_FROMPLAYER; none are declared in include/dplay.h since no call site
+            // needs them, so any nonzero bit outside DPRECEIVE_ALL is unconditionally invalid
+            // here regardless.)
+            if (dwFlags & ~static_cast<DWORD>(DPRECEIVE_ALL)) return DPERR_INVALIDFLAGS;
             // Piggyback event servicing on the caller's own polling pattern rather than
             // adding a new API or a background thread (docs/directplay-design.md
             // Decision 6) - free-eggbert's own CNetwork::Receive() is already called
