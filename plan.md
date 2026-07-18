@@ -1104,23 +1104,25 @@ committing engineering time until ENet is proven.
 - [ ] Keep any future SDL3_net usage private to `.cpp` files under `src/directplay/`, matching the
       Internal Backend Policy in `CLAUDE.md`. N/A today - no SDL3_net code exists yet to be
       private or not. Left unchecked since there is nothing to verify against; not a real gap.
-- [ ] Add transport-abstraction tests structured so they can run against
+- [ ] ~~Add transport-abstraction tests structured so they can run against
       `LoopbackDirectPlayTransport` and `EnetDirectPlayTransport` today, and against
-      `SdlNetDirectPlayTransport` later without modification (i.e. tests target
-      `IDirectPlayTransport`, not a concrete backend type). **Confirmed NOT the case, 2026-07-18**:
+      `SdlNetDirectPlayTransport` later without modification.~~ **Cancelled (2026-07-19)**,
+      bookkeeping correction of an already-made decision: confirmed 2026-07-18 that this is the
+      literal opposite of what actually happened -
       `tests/enet_directplay_tests.cpp`'s own file header states plainly that
-      `tests/directplay_tests.cpp`'s 61 loopback tests fail 29/61 checks if run against an
-      ENet-enabled build, because they assume `LoopbackDirectPlayTransport`'s synchronous
-      semantics that don't hold for ENet's real asynchronous network model - a deliberate,
-      well-reasoned design choice (documented in that file), but the literal opposite of this
-      bullet's "parameterized by backend, not duplicated" goal. Each backend has its own
-      dedicated, non-interchangeable test file today.
+      `tests/directplay_tests.cpp`'s loopback tests fail if run against an ENet-enabled build,
+      because they assume `LoopbackDirectPlayTransport`'s synchronous semantics that don't hold
+      for ENet's real asynchronous network model - a deliberate, well-reasoned design choice
+      (documented in that file), not an oversight. Each backend has its own dedicated,
+      non-interchangeable test file by design; retrofitting a parameterized suite now would
+      contradict that deliberate choice, not fix a gap. Revisit only if a real need for
+      cross-backend test parameterization surfaces.
 
 **Acceptance criteria:** the design note exists and is reviewed before any
 `SdlNetDirectPlayTransport` source file is created (**met** - note exists, no such file exists);
 the transport-abstraction test suite is parameterized by backend rather than duplicated per
-backend (**not met** - see the last bullet above; tests are deliberately backend-specific, not
-parameterized).
+backend (**deliberately not met, and now recorded as a cancelled goal, not a gap** - see the
+struck-through bullet above; tests are intentionally backend-specific).
 
 ---
 
