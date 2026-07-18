@@ -798,22 +798,19 @@ routing, broadcast, and validation.
       `DirectPlay.cpp`'s ENet branch of `Open()`/`Send()`/`Receive()` is still not wired to any of
       this - the ENet backend can now genuinely deliver bytes at the transport level, but nothing
       above that layer uses it for a non-self send yet.
-- [ ] Implement host-side routing for a **non-broadcast unicast** `Send` addressed to a non-host
+- [ ] ~~Implement host-side routing for a **non-broadcast unicast** `Send` addressed to a non-host
       recipient (a joining peer B directly addressing another joining peer C by DPID, relayed
-      through the host). Distinct from broadcast relay, which is done (see the checked item below) -
-      this is specifically the "peer B sends only to peer C" case. Still not started: today a
-      joining role can only broadcast or self-send; it has no way to address one specific other
-      peer. **Confirmed still genuinely open, re-checked 2026-07-19**: `SendUnicast`
-      (`src/directplay/DirectPlay.cpp`) only handles the host addressing one of its own
-      `remotePlayerIds` directly - there is no relay path for a non-host sender's unicast, and
-      `include/dplay.h`'s own `Send` doc comment says so explicitly ("Direct non-broadcast unicast
-      between two non-host peers still has no path"). **No known call site needs this** - the
-      Phase 0 audit found `free-eggbert`'s only real `Send()` call site is always
-      `Send(m_dpid, 0, ...)` (broadcast); do not implement this speculatively without a concrete
-      need per `CLAUDE.md`'s scope policy.
-- [ ] Implement direct peer-to-peer delivery **only if** a future architectural decision moves away
-      from the host-hub star topology — not needed under the current plan; leave as a documented
-      non-task unless the topology decision changes.
+      through the host).~~ **Cancelled (2026-07-19, user decision)**: neither target game uses this
+      pattern - the Phase 0 audit found `free-eggbert`'s only real `Send()` call site is always
+      `Send(m_dpid, 0, ...)` (broadcast), and `planetblupi` has zero DirectPlay usage at all. Not
+      implementing speculatively per `CLAUDE.md`'s scope policy. `SendUnicast`
+      (`src/directplay/DirectPlay.cpp`) still only handles the host addressing one of its own
+      `remotePlayerIds` directly, and `include/dplay.h`'s `Send` doc comment still says so
+      explicitly - left as-is, not a bug. Revisit only if a real call site is ever found.
+- [ ] ~~Implement direct peer-to-peer delivery **only if** a future architectural decision moves
+      away from the host-hub star topology.~~ **Cancelled (2026-07-19, user decision)**: same
+      reasoning as the item above - not needed under the current plan, and no future decision to
+      change topology is anticipated absent a real need.
 - [x] Implement broadcast-to-all delivery for `idTo == DPID_ALLPLAYERS`/`0`, matching
       `free-eggbert/src/network.cpp`'s `Send(m_dpid, 0, ...)` call pattern. **Done**
       (`TASK-24H-0148`, archived - see `archive/plan20260718.md`): `Send()`'s dispatcher checks
@@ -846,10 +843,18 @@ routing, broadcast, and validation.
 - [ ] Preserve reliable, ordered delivery for `DPSEND_GUARANTEED` sends (mapped to
       `ENET_PACKET_FLAG_RELIABLE` per Phase 5 when using the ENet backend). Loopback trivially
       preserves order (a plain FIFO, no real network to reorder anything) and never drops a
-      packet regardless of the `reliable` flag - `DPSEND_GUARANTEED` genuinely mattering (real
-      loss/reordering to guard against) only applies to the ENet backend, whose receive side isn't
-      implemented yet. Left unchecked - no test yet demonstrates *ordering* specifically (see the
-      still-open "packet-ordering test" task below).
+      packet regardless of the `reliable` flag. **Corrected 2026-07-19**: the note this item used
+      to carry ("ENet backend, whose receive side isn't implemented yet") is stale -
+      `docs/directplay-design.md` Decision 19 gave `EnetDirectPlayTransport` a real receive side
+      (verified by a real two-instance ENet smoke test), and `EnetDirectPlayTransport::Send()`
+      (`src/directplay/EnetDirectPlayTransport.cpp`) correctly maps `reliable` to
+      `ENET_PACKET_FLAG_RELIABLE` (vs. `ENET_PACKET_FLAG_UNSEQUENCED`), sent on the single channel
+      0 both ends already assume - ENet's own protocol guarantees reliable, in-order delivery for
+      `ENET_PACKET_FLAG_RELIABLE` packets on the same channel between the same peer pair, so the
+      underlying mechanism genuinely works today, for both backends. Left unchecked for the
+      correct remaining reason only: no test in this codebase demonstrates *ordering* specifically
+      (see the still-open "packet-ordering test" and "reliable-delivery smoke test" tasks below) -
+      this is a test-coverage gap, not a missing capability.
 - [x] Validate the sender player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idFrom` does
       not correspond to a locally-registered player. **Done** (Decision 15): checked against
       `session_.localPlayerIds`. **Verified**: `Test_SendFromUnknownLocalPlayer_
@@ -884,13 +889,13 @@ routing, broadcast, and validation.
       `Receive()` gets the exact payload, with `idFrom`/`idTo` matching. **Verified**: 37/37
       `tests/directplay_tests.cpp` suite passes; both CMake configs (`ENET=OFF`/`ON`) build clean;
       `include/dplay.h` has zero ENet/SDL identifiers.
-- [ ] Add a two-client **non-broadcast unicast** routing test over loopback (if feasible with the
-      loopback transport's design): client A sends *only* to client B via the host (not a
-      broadcast); client B receives it and the host/client A do not. Distinct from broadcast
-      fan-out, which is already tested (`Test_HostBroadcast_ReachesMultipleRemoteClients`,
-      `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost`) - this test doesn't make sense to
-      write until the still-open non-broadcast unicast routing item above is implemented, since
-      there's no code path for it to exercise yet.
+- [ ] ~~Add a two-client **non-broadcast unicast** routing test over loopback: client A sends
+      *only* to client B via the host (not a broadcast); client B receives it and the host/client
+      A do not.~~ **Cancelled (2026-07-19, user decision)**: depends entirely on the non-broadcast
+      unicast routing item above, which is itself cancelled for the same reason (no real call
+      site). Broadcast fan-out - the pattern both games actually use - is already tested
+      (`Test_HostBroadcast_ReachesMultipleRemoteClients`,
+      `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost`).
 - [ ] Add a packet-ordering test: multiple guaranteed sends from the same sender arrive at the
       receiver in send order.
 - [ ] Add a reliable-delivery smoke test gated behind `FREE_DIRECT_ENABLE_ENET`, sending a batch of
