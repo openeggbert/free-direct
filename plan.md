@@ -1,8 +1,9 @@
 # FreeDirect Task Plan
 
 This is the **authoritative English task list** for FreeDirect (see `CLAUDE.md`'s `plan.md`
-Policy). It supersedes `TODO.md` as the forward-looking backlog. `TODO.md` is kept as historical
-review notes and is not deleted.
+Policy). It formerly superseded `TODO.md` as the forward-looking backlog; `TODO.md` itself was
+deleted on 2026-07-18 once every item in it was resolved (see `CLAUDE.md`'s Documentation Policy
+section).
 
 **Scope reminder:** FreeDirect exists to serve exactly two target games, both sibling
 repositories: `../free-eggbert` (uses DirectDraw, DirectSound, and DirectPlay) and

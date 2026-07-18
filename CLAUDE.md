@@ -258,10 +258,15 @@ raw sockets and Windows-only networking APIs are never used.**
     FreeDirect DirectPlay implementation.
 - Prefer honest "STUB" / "PARTIAL" / "IMPLEMENTED" labeling (already used in header comments) over
   silence. If behavior is a deliberate simplification, say so, and say what the simplification is.
-- Do not delete existing documentation (`README.md`, `TODO.md`, `Android and Web Compatibility.md`)
-  to make room for new docs. `TODO.md` remains as historical review notes; `plan.md` is the new
-  authoritative forward-looking task list (see below). New docs go under `docs/` as introduced by
-  `plan.md` Phase 16.
+- Do not delete existing documentation (`README.md`, `Android and Web Compatibility.md`) to make
+  room for new docs. `plan.md` is the authoritative forward-looking task list (see below). New docs
+  go under `docs/` as introduced by `plan.md` Phase 16.
+- `TODO.md` was deleted on 2026-07-18 (explicit user override of the prior "not deleted" rule,
+  after every item in it had been individually reviewed and resolved — fixed, confirmed as an
+  intentional documented simplification, or confirmed stale). Its free-api-related content moved to
+  `../freeapiissues.md`; its free-direct-related content is folded into
+  `docs/directdraw-limitations.md`. Do not recreate `TODO.md` as a general-purpose scratch TODO
+  file — `plan.md` is the durable task list.
 - Every new `docs/*.md` file must be in English, like this file and `plan.md`.
 
 ---
@@ -282,8 +287,9 @@ raw sockets and Windows-only networking APIs are never used.**
 
 ## `plan.md` Policy
 
-- **`plan.md` is the authoritative English task list for FreeDirect.** It supersedes `TODO.md` as
-  the forward-looking backlog; `TODO.md` remains as historical review notes and is not deleted.
+- **`plan.md` is the authoritative English task list for FreeDirect.** It formerly superseded
+  `TODO.md` as the forward-looking backlog; `TODO.md` itself was deleted on 2026-07-18 once every
+  item in it was resolved (see the Documentation Policy section above).
 - **Every task in `plan.md` must be atomic: it must do exactly one thing.** If a task reads like it
   has an "and" joining two independent changes, split it into two tasks.
 - Tasks are organized by phase, use Markdown checkboxes (`- [ ]` / `- [x]`), and important tasks
