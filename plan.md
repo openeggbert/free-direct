@@ -650,28 +650,40 @@ Goal: make `EnumSessions` discover real hosted sessions instead of always report
       from `LoopbackDirectPlayTransport`'s own port registry (Decision 10), which must stay
       ignorant of DirectPlay-level concepts. ENet-hosted sessions are not discoverable by this
       mechanism - untouched, a separate later task.
-- [ ] Add LAN broadcast discovery later, **only if a concrete need is confirmed** — ask the user
-      before starting this task, per the two-game scope rule in `CLAUDE.md`.
-- [ ] Define a discovery-request packet in the Phase 5 protocol. **Not needed for the loopback
-      mechanism implemented** (Decision 18) - `DirectPlayWirePacketType::Discovery` already exists
-      in `DirectPlayWireProtocol.hpp` (Phase 5) for whenever a real wire exchange is needed (e.g.
-      the ENet backend's own discovery, still unimplemented).
-- [ ] Define a discovery-response packet in the Phase 5 protocol. Same note as above -
-      `DirectPlayWirePacketType::DiscoveryResponse` already exists, unused by the loopback
-      mechanism implemented.
-- [ ] Include the protocol version field in both discovery packets. N/A to the loopback mechanism
-      implemented (no wire packets involved) - applies only once a real wire-based discovery
-      exchange is built (ENet backend).
+- [x] Add LAN broadcast discovery later, **only if a concrete need is confirmed** — ask the user
+      before starting this task, per the two-game scope rule in `CLAUDE.md`. **Done, checked off
+      2026-07-19** (`TASK-24H-0150`, archived - see `archive/plan20260718.md` - Decision 23,
+      asked of and confirmed by the user first, exactly per this item's own instruction): a
+      dedicated `SO_BROADCAST`-enabled UDP socket on a new fixed port
+      (`kDefaultDirectPlayDiscoveryPort = 51323`, `src/directplay/DirectPlayDiscovery.hpp`/`.cpp`,
+      `FREE_DIRECT_ENABLE_ENET`-gated) broadcasts a real `Discovery` packet to `INADDR_BROADCAST`
+      and collects real `DiscoveryResponse` replies. This item had been left unchecked after
+      `TASK-24H-0150` landed - drifted out of sync with `plan.md`, corrected here.
+- [x] Define a discovery-request packet in the Phase 5 protocol. **Done, checked off 2026-07-19**:
+      `DirectPlayWirePacketType::Discovery` (`DirectPlayWireProtocol.hpp`, Phase 5) is now
+      genuinely sent over the wire by the ENet discovery mechanism above, not merely declared and
+      unused as this item previously said.
+- [x] Define a discovery-response packet in the Phase 5 protocol. **Done, checked off 2026-07-19**,
+      same basis: `DirectPlayWirePacketType::DiscoveryResponse` is now genuinely sent back by a
+      hosting peer's `Service()`-polled discovery responder.
+- [x] Include the protocol version field in both discovery packets. **Done, checked off
+      2026-07-19**: `Discovery`/`DiscoveryResponse` both use the same shared
+      `DirectPlayWirePacketHeader` (`magic`/`version` fields, `TryDeserializeDirectPlayWireHeader`
+      validation, `TASK-24H-0176`) every other wire packet type uses - no separate handling was
+      needed, and none was added.
 - [x] Include the application GUID field in both discovery packets. **Done, as a direct registry
       filter rather than a wire-packet field** (Decision 18): `EnumSessions()`'s
       `lpEnumSessionsDesc->guidApplication`, when non-zero, filters to only matching hosted
       sessions - a real, call-site-backed behavior (`docs/directplay-callsite-audit.md`:
       `free-eggbert`'s own `CNetwork::EnumSessions()` supplies a real filter). **Verified**:
       `Test_EnumSessions_FiltersByApplicationGuid` (`tests/directplay_tests.cpp`).
-- [ ] Ignore discovery responses whose application GUID does not match the requesting
-      application's GUID. Same effect achieved via the direct filter above, for loopback - no
-      discovery *responses* exist to ignore in this mechanism; applies to a real wire exchange
-      once one exists (ENet backend).
+- [x] Ignore discovery responses whose application GUID does not match the requesting
+      application's GUID. **Loopback: same effect achieved via the direct filter** (Decision 18).
+      **ENet: done, checked off 2026-07-19** (`TASK-24H-0150`): the discovery responder only
+      replies when the request's `applicationGuid` matches the hosted session's own (or is the
+      zero/wildcard GUID); `EnumSessions()`'s ENet-side collection applies the same
+      `guidApplication` filter as the loopback path. **Verified**:
+      `Test_EnumSessionsOverEnet_FiltersByApplicationGuid` (`tests/enet_directplay_tests.cpp`).
 - [x] Fill `DPSESSIONDESC2` correctly for the `EnumSessions` callback, from each discovered
       session's advertised descriptor fields. **Done** (Decision 18): `guidApplication`,
       `guidInstance`, `dwMaxPlayers`, `dwCurrentPlayers`, `lpszSessionNameA` filled from the live
@@ -686,10 +698,14 @@ Goal: make `EnumSessions` discover real hosted sessions instead of always report
 - [x] Respect the callback's `BOOL` return value: stop enumerating further sessions once it
       returns `FALSE`. **Implemented** (a `break` on a `FALSE` return), but **not provably tested**
       - see the struck-through test task below for why.
-- [ ] Respect the `dwTimeout` parameter passed to `EnumSessions`, bounding how long discovery
-      waits for responses. N/A to the synchronous loopback mechanism implemented - there is no
-      waiting to bound (the registry lookup is instantaneous). Applies once a real, potentially-
-      slow wire exchange exists (ENet backend).
+- [x] Respect the `dwTimeout` parameter passed to `EnumSessions`, bounding how long discovery
+      waits for responses. **Loopback: N/A** - the registry lookup is instantaneous, nothing to
+      bound. **ENet: done, checked off 2026-07-19** (`TASK-24H-0150`): `EnumSessions()`'s ENet-side
+      broadcast collects `DiscoveryResponse` replies for up to `dwTimeout` milliseconds
+      (`dwTimeout == 0` means "no wait, return whatever arrived immediately" - never blocks
+      indefinitely). **Verified**: `Test_EnumSessionsOverEnet_FindsRealHostedSession`
+      (`tests/enet_directplay_tests.cpp`), confirmed bounded/deterministic (does not hang the test
+      suite).
 - [x] Return `DPERR_NOSESSIONS` only if confirmed necessary by `free-eggbert`'s exact expected
       behavior (Phase 0 found no explicit dependency on this specific code — verify before
       hard-coding it as a required return). **Confirmed still not needed**: `EnumSessions()`
