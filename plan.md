@@ -840,21 +840,19 @@ routing, broadcast, and validation.
       `DirectPlay2AImpl::Receive()`'s drain loop (Decision 15) parses one wire header + payload per
       transport-level `Receive()` call, preserving the same one-to-one boundary up to
       `session_.messageQueue`. ENet's side is moot until its receive-side buffering exists.
-- [ ] Preserve reliable, ordered delivery for `DPSEND_GUARANTEED` sends (mapped to
+- [x] Preserve reliable, ordered delivery for `DPSEND_GUARANTEED` sends (mapped to
       `ENET_PACKET_FLAG_RELIABLE` per Phase 5 when using the ENet backend). Loopback trivially
       preserves order (a plain FIFO, no real network to reorder anything) and never drops a
-      packet regardless of the `reliable` flag. **Corrected 2026-07-19**: the note this item used
-      to carry ("ENet backend, whose receive side isn't implemented yet") is stale -
-      `docs/directplay-design.md` Decision 19 gave `EnetDirectPlayTransport` a real receive side
-      (verified by a real two-instance ENet smoke test), and `EnetDirectPlayTransport::Send()`
-      (`src/directplay/EnetDirectPlayTransport.cpp`) correctly maps `reliable` to
-      `ENET_PACKET_FLAG_RELIABLE` (vs. `ENET_PACKET_FLAG_UNSEQUENCED`), sent on the single channel
-      0 both ends already assume - ENet's own protocol guarantees reliable, in-order delivery for
-      `ENET_PACKET_FLAG_RELIABLE` packets on the same channel between the same peer pair, so the
-      underlying mechanism genuinely works today, for both backends. Left unchecked for the
-      correct remaining reason only: no test in this codebase demonstrates *ordering* specifically
-      (see the still-open "packet-ordering test" and "reliable-delivery smoke test" tasks below) -
-      this is a test-coverage gap, not a missing capability.
+      packet regardless of the `reliable` flag. **Done, fully checked 2026-07-19**: the note this
+      item used to carry ("ENet backend, whose receive side isn't implemented yet") was stale -
+      `docs/directplay-design.md` Decision 19 gave `EnetDirectPlayTransport` a real receive side,
+      and `EnetDirectPlayTransport::Send()` (`src/directplay/EnetDirectPlayTransport.cpp`)
+      correctly maps `reliable` to `ENET_PACKET_FLAG_RELIABLE` on the single channel both ends
+      assume, which ENet's own protocol guarantees delivers reliably and in order. The remaining
+      gap (no test demonstrated ordering specifically) is now closed by the two now-checked items
+      below: `Test_MultipleGuaranteedSends_ArriveInSendOrder` (loopback) and
+      `Test_EnetTransport_ReliableBatchSend_AllPacketsArriveInOrder` (real ENet, 50-packet batch).
+      Both verified passing this session.
 - [x] Validate the sender player ID in `Send`, returning `DPERR_INVALIDPLAYER` when `idFrom` does
       not correspond to a locally-registered player. **Done** (Decision 15): checked against
       `session_.localPlayerIds`. **Verified**: `Test_SendFromUnknownLocalPlayer_
@@ -868,10 +866,21 @@ routing, broadcast, and validation.
       archived): `idTo == DPID_ALLPLAYERS` is checked *before* any other interpretation in `Send`'s
       dispatcher, so `idTo == 0` always means broadcast, never "the specific player whose DPID
       happens to be `0`." No remaining unvalidated case.
-- [ ] Validate a null payload with zero length (`lpData == nullptr && dwDataSize == 0`) as an
+- [x] Validate a null payload with zero length (`lpData == nullptr && dwDataSize == 0`) as an
       accepted no-payload send, only if a call site needs it; otherwise document it as rejected.
-- [ ] Reject a null payload with nonzero length (`lpData == nullptr && dwDataSize > 0`) with
-      `DPERR_INVALIDPARAMS`.
+      **Done, re-checked 2026-07-19**: `Send()`'s own comment (`src/directplay/DirectPlay.cpp`)
+      says so directly ("A null payload with zero length is a valid no-payload send"); only
+      `!lpData && dwDataSize > 0` is rejected, so a null pointer with zero size falls through to
+      a real send. **Verified**: `Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk`
+      (`tests/directplay_tests.cpp`) sends and receives a zero-byte payload end-to-end
+      (`Send(..., nullptr, 0) == DP_OK`, then `Receive()` reports `size == 0`). Re-ran the full
+      suite fresh: 9/9 `ctest`.
+- [x] Reject a null payload with nonzero length (`lpData == nullptr && dwDataSize > 0`) with
+      `DPERR_INVALIDPARAMS`. **Done, re-checked 2026-07-19**: `Send()`'s first check
+      (`src/directplay/DirectPlay.cpp`) is exactly `if (!lpData && dwDataSize > 0) return
+      DPERR_INVALIDPARAMS;`, fixed under `TASK-24H-0106`'s null-pointer sweep (previously undefined
+      behavior via `bytes + dwDataSize` pointer arithmetic on a null pointer). **Verified**:
+      `Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams` (`tests/directplay_tests.cpp`).
 - [x] Reject messages larger than the maximum payload size (Phase 3/Phase 11) with
       `DPERR_SENDTOOBIG`, sized to comfortably exceed the largest observed `free-eggbert` payload
       (e.g. `sizeof(NetMessage) * pack.nbMessages + 20` in `src/decnet.cpp`, and the 128/132-byte
@@ -896,14 +905,28 @@ routing, broadcast, and validation.
       site). Broadcast fan-out - the pattern both games actually use - is already tested
       (`Test_HostBroadcast_ReachesMultipleRemoteClients`,
       `Test_ClientBroadcast_RelayedByHostToOtherClientAndHost`).
-- [ ] Add a packet-ordering test: multiple guaranteed sends from the same sender arrive at the
-      receiver in send order.
-- [ ] Add a reliable-delivery smoke test gated behind `FREE_DIRECT_ENABLE_ENET`, sending a batch of
+- [x] Add a packet-ordering test: multiple guaranteed sends from the same sender arrive at the
+      receiver in send order. **Done (2026-07-19)**: `Test_MultipleGuaranteedSends_ArriveInSendOrder`
+      (`tests/directplay_tests.cpp`) - host sends 10 `DPSEND_GUARANTEED` messages to an assigned
+      client, each carrying a distinguishable index byte; the client's `Receive()` calls are
+      asserted to return them in send order, then a final `Receive()` confirms no leftover/
+      duplicated message. **Verified**: fresh build + `ctest` (9/9), `directplay_tests` run
+      directly ("OK: all DirectPlay tests passed.").
+- [x] Add a reliable-delivery smoke test gated behind `FREE_DIRECT_ENABLE_ENET`, sending a batch of
       packets over a real local ENet host/client pair on `127.0.0.1` and asserting all arrive.
+      **Done (2026-07-19)**: `Test_EnetTransport_ReliableBatchSend_AllPacketsArriveInOrder`
+      (`tests/enet_directplay_tests.cpp`) - a real ENet host/client pair over `127.0.0.1` (port
+      52105); host sends 50 reliable packets, each with an index byte; asserts all 50 arrive, in
+      order, with no duplicates left over. **Verified**: fresh `-DFREE_DIRECT_ENABLE_ENET=ON`
+      build + `ctest -L enet` (1/1), `enet_directplay_tests` run directly ("OK: all ENet DirectPlay
+      transport tests passed."); default (non-ENet) build + `ctest` re-confirmed unaffected (9/9);
+      `header_hygiene` re-confirmed clean.
 
 **Acceptance criteria:** the packet-ordering test and host/client integration test both pass over
 loopback in the default (no ENet) build; the ENet smoke test is excluded from the default test run
-and only executes when `FREE_DIRECT_ENABLE_ENET=ON`.
+and only executes when `FREE_DIRECT_ENABLE_ENET=ON`. **Met (2026-07-19)**: both confirmed via a
+real build+test run this session (see the checked items above for exact test names and verified
+output).
 
 ---
 

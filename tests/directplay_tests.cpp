@@ -1865,6 +1865,65 @@ void Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk() {
     dp->Release();
 }
 
+// plan.md Phase 10: "Add a packet-ordering test: multiple guaranteed sends from the same sender
+// arrive at the receiver in send order." Same host/client setup as
+// Test_SendToSpecificRemotePlayer_HostDeliversToAssignedClient above; sends a distinguishable
+// payload per call (an index byte) and asserts Receive() returns them in the same order they
+// were sent, not just that all of them eventually arrive.
+void Test_MultipleGuaranteedSends_ArriveInSendOrder() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    DPID hostPlayer = 0;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 clientDesc{};
+    std::memset(&clientDesc, 0, sizeof(clientDesc));
+    clientDesc.dwSize = sizeof(clientDesc);
+    CHECK(clientDp2->Open(&clientDesc, DPOPEN_JOIN) == DP_OK);
+
+    // Drives the host's pending-connection assignment loop for real (Decision 6/7).
+    DPID from = 0, to = 0;
+    char pollBuf[8];
+    DWORD pollSize = sizeof(pollBuf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, pollBuf, &pollSize) == DPERR_NOMESSAGES);
+    const DPID assignedClientId = 1;
+
+    constexpr int kMessageCount = 10;
+    for (int i = 0; i < kMessageCount; ++i) {
+        const auto payload = static_cast<unsigned char>(i);
+        CHECK(hostDp2->Send(hostPlayer, assignedClientId, DPSEND_GUARANTEED,
+                             (LPVOID)&payload, sizeof(payload)) == DP_OK);
+    }
+
+    for (int i = 0; i < kMessageCount; ++i) {
+        unsigned char buf = 0xFF;
+        DWORD size = sizeof(buf);
+        CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, &buf, &size) == DP_OK);
+        CHECK(size == sizeof(buf));
+        CHECK(buf == static_cast<unsigned char>(i));
+    }
+
+    char drainBuf[8];
+    DWORD drainSize = sizeof(drainBuf);
+    CHECK(clientDp2->Receive(&from, &to, DPRECEIVE_ALL, drainBuf, &drainSize) == DPERR_NOMESSAGES);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 // 24-Hour Stabilization Backlog TASK-24H-0109 (plan.md): DirectPlaySession's transport being
 // nulled after Close() cannot be observed via whitebox access (DirectPlay2AImpl is in an
 // anonymous namespace with no separate header) - this proves it indirectly instead, the same way
@@ -2060,6 +2119,7 @@ int main() {
     Test_SelfSend_DwDataSizeOverstatesRealBuffer_ReturnsSendTooBigNoOverread();
     Test_Send_NullPayloadWithNonzeroSize_ReturnsInvalidParams();
     Test_SelfSend_NullPayloadWithZeroSize_ReturnsOk();
+    Test_MultipleGuaranteedSends_ArriveInSendOrder();
     Test_Close_ThenNewHostCanRebindSamePort_ProvesTransportShutdown();
 
     Test_DirectPlayOperations_NoUnconditionalLogOutput_WhenDebugFlagUnset();

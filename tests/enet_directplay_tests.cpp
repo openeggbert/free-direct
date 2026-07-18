@@ -180,6 +180,60 @@ void Test_EnetTransport_UnreliableSend_ClientToHost_DeliversPayload() {
     client.Shutdown();
 }
 
+// plan.md Phase 10: "Add a reliable-delivery smoke test gated behind FREE_DIRECT_ENABLE_ENET,
+// sending a batch of packets over a real local ENet host/client pair on 127.0.0.1 and asserting
+// all arrive." Distinct from Test_EnetTransport_ReliableSend_HostToClient_DeliversPayload above,
+// which only proves a single reliable send works at all - this proves a batch survives real ENet
+// transport intact: none dropped, none duplicated, and (since all packets here are sent
+// DPSEND_GUARANTEED-equivalent/reliable on ENet's single channel 0, which per its own protocol
+// guarantees in-order delivery for that combination - see plan.md Phase 10's corrected note)
+// arrive in the same order they were sent.
+void Test_EnetTransport_ReliableBatchSend_AllPacketsArriveInOrder() {
+    EnetDirectPlayTransport host;
+    CHECK(host.Listen(52105));
+
+    EnetDirectPlayTransport client;
+    CHECK(client.Connect("127.0.0.1", 52105));
+
+    const bool connected = PollUntil(host, client, [&]() {
+        return host.HasPendingConnection() && client.IsConnectedToHost();
+    });
+    CHECK(connected);
+
+    const DPID clientId = 9;
+    CHECK(host.AssignPendingConnection(clientId));
+
+    constexpr int kPacketCount = 50;
+    for (int i = 0; i < kPacketCount; ++i) {
+        const auto payload = static_cast<unsigned char>(i);
+        CHECK(host.Send(clientId, &payload, sizeof(payload), /*reliable=*/true));
+    }
+
+    int nextExpected = 0;
+    const bool allReceived = PollUntil(host, client, [&]() {
+        unsigned char buf = 0xFF;
+        std::size_t receivedSize = 0;
+        while (client.Receive(&buf, sizeof(buf), &receivedSize)) {
+            CHECK(receivedSize == sizeof(buf));
+            CHECK(buf == static_cast<unsigned char>(nextExpected));
+            ++nextExpected;
+        }
+        return nextExpected == kPacketCount;
+    });
+    CHECK(allReceived);
+    CHECK(nextExpected == kPacketCount);
+
+    // Nothing left over - proves no duplication, not just "at least kPacketCount arrived."
+    unsigned char drainBuf = 0;
+    std::size_t drainSize = 0;
+    host.Service();
+    client.Service();
+    CHECK(!client.Receive(&drainBuf, sizeof(drainBuf), &drainSize));
+
+    host.Shutdown();
+    client.Shutdown();
+}
+
 // TASK-24H-0108: Shutdown() must cleanly close a connection on both sides - the client
 // observably transitions out of "connected" once the host-side graceful disconnect completes.
 void Test_EnetTransport_Shutdown_ClosesConnectionCleanly() {
@@ -450,6 +504,7 @@ int main() {
     Test_EnetTransport_ListenAndConnect_EstablishesConnection();
     Test_EnetTransport_ReliableSend_HostToClient_DeliversPayload();
     Test_EnetTransport_UnreliableSend_ClientToHost_DeliversPayload();
+    Test_EnetTransport_ReliableBatchSend_AllPacketsArriveInOrder();
     Test_EnetTransport_Shutdown_ClosesConnectionCleanly();
     Test_OpenAsJoinOverEnet_WithNoHostAddressEnvVar_ReturnsNoSessions();
     Test_OpenAsJoinOverEnet_WithHostAddressEnvVar_JoinsSuccessfully();
