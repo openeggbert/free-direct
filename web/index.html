@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>free-direct — DirectX 3 subset for SDL3</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="hero">
+    <h1>free-direct</h1>
+    <p class="tagline">
+      A C++ reimplementation of a narrow, game-driven subset of DirectX&nbsp;3 (2D),<br>
+      backed internally by SDL&nbsp;3. Designed to run legacy 2D games on modern platforms.
+    </p>
+    <div class="badge-row">
+      <span class="badge badge-blue">C++20</span>
+      <span class="badge badge-blue">SDL 3</span>
+      <span class="badge badge-green">MIT License</span>
+      <span class="badge badge-yellow">Work in Progress</span>
+    </div>
+  </div>
+
+  <p>
+    <strong>free-direct</strong> is a compatibility shim that lets legacy DirectX&nbsp;3 2D game code
+    compile and run without any Microsoft DirectX runtime. It targets the exact subset of APIs
+    used by games such as <em>Speedy Blupi / Speedy Eggbert</em> and <em>Planet Blupi</em>,
+    no more and no less.
+  </p>
+
+  <h2>Architecture</h2>
+
+  <div class="arch-diagram">
+  ┌───────────────────────────────────┐
+  │   Legacy Game / Demo Code (C++)   │
+  │  #include &lt;ddraw.h&gt; / &lt;dsound.h&gt;  │
+  └──────────────┬────────────────────┘
+                 │  DirectDraw / DirectSound / DirectPlay calls
+                 ▼
+  ┌───────────────────────────────────┐
+  │           free-direct             │
+  │  (static library, C++20)          │
+  │                                   │
+  │  directdraw/DirectDraw.cpp        │
+  │  directsound/DirectSound.cpp      │
+  │  directplay/DirectPlay.cpp        │
+  └──────────────┬────────────────────┘
+                 │  SDL3 calls (internal detail only)
+                 ▼
+  ┌───────────────────────────────────┐
+  │  SDL 3  (+ SDL3_image, SDL3_mixer)│
+  │  Cross-platform: Linux / macOS /  │
+  │  Windows / Android / Web (TODO)   │
+  └───────────────────────────────────┘
+  </div>
+
+  <p>
+    SDL&nbsp;3 is an <strong>internal</strong> implementation detail. It does not appear in any
+    public header. Game code only sees the DirectX-shaped API.
+  </p>
+
+  <h2>What is implemented</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Component</th><th>Status</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>DirectDraw (2D)</strong></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Core subset implemented with SDL3 renderer and CPU pixel buffers</td>
+      </tr>
+      <tr>
+        <td><strong>DirectSound</strong></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>PCM static buffers over SDL3 audio; no looping, no 3D, no capture</td>
+      </tr>
+      <tr>
+        <td><strong>DirectPlay</strong></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>All methods are dummies that return success; no real networking</td>
+      </tr>
+      <tr>
+        <td><strong>Direct3D</strong></td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>3D pipeline not needed by target games; will not be added</td>
+      </tr>
+      <tr>
+        <td><strong>DirectInput</strong></td>
+        <td><span class="status status-unsupported">Not implemented</span></td>
+        <td>No header or source; input is handled by the free-api WinAPI layer</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Quick links</h2>
+
+  <div class="card-grid">
+    <a class="card" href="overview.html">
+      <div class="card-icon">📖</div>
+      <div class="card-title">Project Overview</div>
+      <div class="card-desc">Why free-direct exists, what it replaces, and how it differs from real DirectX.</div>
+    </a>
+    <a class="card" href="integration.html">
+      <div class="card-icon">🔧</div>
+      <div class="card-title">Integration Guide</div>
+      <div class="card-desc">CMake setup, required SDL targets, include paths, and initialization.</div>
+    </a>
+    <a class="card" href="api-directdraw.html">
+      <div class="card-icon">🖼</div>
+      <div class="card-title">DirectDraw API</div>
+      <div class="card-desc">All implemented DirectDraw interfaces, methods, structs, and flags.</div>
+    </a>
+    <a class="card" href="api-directsound.html">
+      <div class="card-icon">🔊</div>
+      <div class="card-title">DirectSound API</div>
+      <div class="card-desc">SDL3-backed PCM audio buffer support and known limitations.</div>
+    </a>
+    <a class="card" href="compatibility.html">
+      <div class="card-icon">📋</div>
+      <div class="card-title">Compatibility Table</div>
+      <div class="card-desc">Feature-by-feature status for the DirectX 3 2D subset.</div>
+    </a>
+    <a class="card" href="examples.html">
+      <div class="card-icon">💻</div>
+      <div class="card-title">Code Examples</div>
+      <div class="card-desc">Working snippets for initialization, blitting, sound, and shutdown.</div>
+    </a>
+    <a class="card" href="migration.html">
+      <div class="card-icon">🔄</div>
+      <div class="card-title">Migration Guide</div>
+      <div class="card-desc">How to port old DirectDraw 2D code to free-direct.</div>
+    </a>
+    <a class="card" href="developer-notes.html">
+      <div class="card-icon">🛠</div>
+      <div class="card-title">Developer Notes</div>
+      <div class="card-desc">Debug flags, diagnostics, how to extend the implementation.</div>
+    </a>
+  </div>
+
+  <div class="callout callout-warn">
+    <div class="callout-label">Project status</div>
+    <p>
+      free-direct is a <strong>work in progress</strong>. The implementation covers the subset
+      exercised by <em>Speedy Blupi</em> and <em>Planet Blupi</em> call sites. Features not
+      required by those games may be missing, stubbed, or only partially correct.
+      Do not treat this as a full DirectX&nbsp;3 compatibility layer.
+    </p>
+  </div>
+
+  <h2>License</h2>
+  <p>
+    free-direct is released under the <strong>MIT License</strong>.
+    See the <code>LICENSE</code> file in the repository root.
+  </p>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

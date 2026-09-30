@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DirectPlay API — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / DirectPlay API</div>
+    <h1>DirectPlay API Reference</h1>
+    <p>Stub implementations of the DirectPlay networking interface. Header: <code>include/dplay.h</code>.</p>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">All stubs</div>
+    <p>
+      The entire DirectPlay implementation is a stub. Every function and method compiles,
+      returns success codes, and does nothing. No network I/O, session discovery, or
+      message passing is performed. These stubs exist solely so that game code that
+      references DirectPlay APIs can compile and link without modification.
+    </p>
+  </div>
+
+  <h2>Purpose</h2>
+  <p>
+    <em>Planet Blupi</em> (and some builds of <em>Speedy Blupi</em>) reference DirectPlay
+    for optional multiplayer networking. The target games generally degrade gracefully when
+    networking fails — they fall back to single-player mode. The stubs make this work by
+    making every call "succeed" with no real sessions found and no real messages exchanged.
+  </p>
+
+  <h2>Global functions</h2>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">DirectPlayCreate</span>
+      <span class="api-entry-kind">function</span>
+      <span class="status status-stub">Stub</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI DirectPlayCreate(
+    LPGUID lpGUID,
+    LPDIRECTPLAY* lplpDP,
+    IUnknown* pUnkOuter
+);</code></pre>
+      <p>
+        Creates a stub <code>IDirectPlay</code> object. The object supports
+        <code>QueryInterface</code> to obtain an <code>IDirectPlay2A</code> stub.
+        No actual networking is set up.
+      </p>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">DirectPlayEnumerateA / DirectPlayEnumerateW</span>
+      <span class="api-entry-kind">function</span>
+      <span class="status status-stub">Stub</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI DirectPlayEnumerateA(LPDPENUMDPCALLBACKA lpEnumCallback, LPVOID lpContext);
+HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID lpContext);</code></pre>
+      <p>
+        Do not call the callback (no service providers are enumerated). Return <code>DP_OK</code>.
+      </p>
+    </div>
+  </div>
+
+  <h2>IDirectPlay2A interface</h2>
+  <p>Obtained via <code>IDirectPlay::QueryInterface</code> with <code>IID_IDirectPlay2A</code>.</p>
+
+  <div class="table-wrap"><table>
+    <thead>
+      <tr><th>Method</th><th>Status</th><th>Stub behavior</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>EnumSessions</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Callback is never called (no sessions found). Returns <code>DP_OK</code>.</td>
+      </tr>
+      <tr>
+        <td><code>Open</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Returns <code>DP_OK</code> without opening anything.</td>
+      </tr>
+      <tr>
+        <td><code>CreatePlayer</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Sets <code>*lpidPlayer = 1</code>. Returns <code>DP_OK</code>.</td>
+      </tr>
+      <tr>
+        <td><code>Send</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Returns <code>DP_OK</code>. No data is sent.</td>
+      </tr>
+      <tr>
+        <td><code>Receive</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Returns <code>DP_OK</code>. No messages in queue; output pointers unchanged.</td>
+      </tr>
+      <tr>
+        <td><code>Close</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Returns <code>DP_OK</code>.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h2>Key types</h2>
+  <h3>DPID</h3>
+  <pre><code>typedef DWORD_PTR DPID, *LPDPID;</code></pre>
+  <p>Player identifier. Uses pointer-sized storage for ABI safety on 32-bit and 64-bit hosts.</p>
+
+  <h3>DPSESSIONDESC2</h3>
+  <p>Session descriptor used for enumeration and open/join. Declared in the header for compile compatibility; no instances are created by the stub implementation.</p>
+
+  <h2>Result codes</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>DP_OK</code></td><td>Success (all stubs return this)</td></tr>
+      <tr><td><code>DPERR_INVALIDPARAMS</code></td><td>Returned by <code>DirectPlayCreate</code> if <code>lplpDP</code> is NULL</td></tr>
+      <tr><td><code>DPERR_OUTOFMEMORY</code></td><td>Returned if the stub object allocation fails</td></tr>
+    </tbody>
+  </table></div>
+  <p>All other <code>DPERR_*</code> constants are defined for compile compatibility only.</p>
+
+  <h2>Extending DirectPlay</h2>
+  <p>
+    If your game actually needs multiplayer, the stub layer is a starting point.
+    You would replace the <code>DirectPlay2AImpl</code> class in
+    <code>src/directplay/DirectPlay.cpp</code> with a real implementation backed
+    by SDL_Net, ENet, or a custom UDP layer.
+    See <a href="developer-notes.html">Developer Notes</a> for guidance.
+  </p>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

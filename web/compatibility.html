@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Compatibility Table — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / Compatibility Table</div>
+    <h1>Compatibility Table</h1>
+    <p>Feature-by-feature status based on the actual source code. Status is derived from what the implementation does, not from what the original DirectX 3 SDK specifies.</p>
+  </div>
+
+  <h2>Status legend</h2>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;">
+    <span class="status status-implemented">Implemented</span> — works as expected for the target game patterns
+    <br>
+    <span class="status status-partial">Partial</span> — works for the common case; known gaps documented
+    <br>
+    <span class="status status-stub">Stub</span> — compiles and returns success; performs no real work
+    <br>
+    <span class="status status-unsupported">Not supported</span> — absent from the implementation; will not compile or link
+    <br>
+    <span class="status status-unknown">Unknown</span> — behavior untested or unclear from the source code
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>DirectDraw features</h2>
+
+  <div class="table-wrap"><table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Status</th>
+        <th>Notes</th>
+        <th>Used by Speedy Blupi / Planet Blupi</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>DirectDrawCreate</code></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>GUID ignored; always uses SDL default</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetCooperativeLevel</code> (DDSCL_NORMAL)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Creates SDL renderer in windowed mode</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetCooperativeLevel</code> (DDSCL_FULLSCREEN)</td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Requests fullscreen via free-api; renderer still created</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetCooperativeLevel</code> (DDSCL_EXCLUSIVE)</td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Accepted; no additional exclusive behavior beyond fullscreen</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Primary surface creation (<code>DDSCAPS_PRIMARYSURFACE</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>CPU pixel buffer; size from SetDisplayMode or 640×480 default</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Offscreen surface creation (<code>DDSCAPS_OFFSCREENPLAIN</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Width/height/BPP from descriptor</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>System-memory surface (<code>DDSCAPS_SYSTEMMEMORY</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Treated as offscreen plain</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>8-bit paletted surfaces (<code>DDPF_PALETTEINDEXED8</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Stored as palette indices; expanded to RGBA32 on present</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>32-bit RGBA surfaces (<code>DDPF_RGB</code>, 32-bit)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>R, G, B, A byte order internally</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Blt</code> — color fill (<code>DDBLT_COLORFILL</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>0x00RRGGBB for 32-bit; low byte = palette index for 8-bit</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Blt</code> — surface-to-surface copy</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Nearest-neighbor scaling; 8→8 and 32→32 only</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Blt</code> — source color key (<code>DDBLT_KEYSRC</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Range comparison; RGB fallback for 32-bit</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Blt</code> — wait flag (<code>DDBLT_WAIT</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Accepted; no-op (no hardware synchronisation needed)</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Blt</code> — rotation (<code>DDBLT_ROTATIONANGLE</code>)</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Flag and dwRotationAngle accepted; rotation not performed</td>
+        <td>No (demo only)</td>
+      </tr>
+      <tr>
+        <td><code>BltFast</code> — no color key (<code>DDBLTFAST_NOCOLORKEY</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>All pixels copied</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>BltFast</code> — source color key (<code>DDBLTFAST_SRCCOLORKEY</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Transparent pixels skipped</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Flip</code> (primary surface present)</td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Simplified present, not a real flip chain; both parameters ignored</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Auto-present on Blt-to-primary</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Enabled when Flip has never been called; disabled once Flip is first called</td>
+        <td>Yes (Speedy Blupi pattern)</td>
+      </tr>
+      <tr>
+        <td><code>Lock</code> / <code>Unlock</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Returns pointer into CPU pixel buffer; Unlock is a no-op</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>GetSurfaceDesc</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Returns width, height, pitch, pixel format, and surface pointer</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetColorKey</code> (<code>DDCKEY_SRCBLT</code>)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Range-based key stored per surface</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetColorKey</code> (other flags)</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Returns DDERR_UNSUPPORTED</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td><code>SetPalette</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Reference-counted; used during present and GetDC</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetClipper</code> / <code>CreateClipper</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Presence triggers windowed coordinate adjustment in Blt</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>IDirectDrawClipper::SetHWnd</code></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>HWND stored; not used for clip region management</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>CreatePalette</code> / palette GetEntries / SetEntries</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>256-entry PALETTEENTRY array; DDPCAPS_8BIT accepted</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetDisplayMode</code></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Stores logical resolution; triggers fullscreen; does not change physical display</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>IsLost</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Always returns DD_OK; surfaces never lose content</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Restore</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Always returns DD_OK</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>GetDC</code></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Functional for DDColorMatch pattern; 8-bit uses RGBA temp buffer</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>ReleaseDC</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Converts RGBA back to palette indices for 8-bit surfaces</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>QueryInterface</code> (all surfaces)</td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Returns DDERR_UNSUPPORTED; COM aggregation not implemented</td>
+        <td>Typically not needed</td>
+      </tr>
+      <tr>
+        <td>VSync (frame pacing)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>SDL_SetRenderVSync enabled by default; disable with FREE_DIRECT_ENABLE_VSYNC=0</td>
+        <td>Implicit</td>
+      </tr>
+      <tr>
+        <td>Frame throttle</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Skips present if called within frame interval (default 60 FPS)</td>
+        <td>Implicit</td>
+      </tr>
+      <tr>
+        <td>Letterbox scaling</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>SDL_SetRenderLogicalPresentation with LETTERBOX mode</td>
+        <td>Implicit</td>
+      </tr>
+      <tr>
+        <td>Back-buffer flip chains</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>No real flip chain; Flip() is a simplified present</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td>Overlays</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Not implemented</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td>Texture surfaces / video memory</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>All surfaces are CPU-side; no GPU texture creation via DirectDraw</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td>GDI emulation via DirectDraw</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>GetDC supports DDColorMatch pattern only; full GDI drawing not tested</td>
+        <td>Partial (GetDC/SetPixel pattern)</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>DirectSound features</h2>
+
+  <div class="table-wrap"><table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Status</th>
+        <th>Notes</th>
+        <th>Used by Speedy Blupi / Planet Blupi</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>DirectSoundCreate</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Opens SDL default audio device; graceful DSERR_NODRIVER if unavailable</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetCooperativeLevel</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Any level accepted; always returns DS_OK</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>CreateSoundBuffer</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Allocates PCM buffer and stores PCMWAVEFORMAT</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Lock</code> / <code>Unlock</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Writable pointer into internal PCM vector; wrap-around two-region supported</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Play</code> (one-shot)</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Feeds PCM into SDL stream; restarts if already playing</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>Play</code> (looping, <code>DSBPLAY_LOOPING</code>)</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Flag accepted but ignored; buffer plays once</td>
+        <td>Unknown</td>
+      </tr>
+      <tr>
+        <td><code>Stop</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>SDL_ClearAudioStream; immediate silence</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>GetStatus</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>DSBSTATUS_PLAYING if stream has queued bytes</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetVolume</code></td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Centibel to linear gain; applied via SDL_SetAudioStreamGain</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td><code>SetPan</code></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Stored and calculated; not yet applied to SDL output channels</td>
+        <td>Unknown</td>
+      </tr>
+      <tr>
+        <td><code>SetCurrentPosition</code></td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Updates play cursor; SDL stream not seekable</td>
+        <td>Unknown</td>
+      </tr>
+      <tr>
+        <td>8-bit unsigned PCM</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>SDL_AUDIO_U8; auto-converted to device format</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>16-bit signed PCM</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>SDL_AUDIO_S16LE; auto-converted to device format</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Mono sources</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>SDL3 handles mono→stereo mixing</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Stereo sources</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Played as-is</td>
+        <td>Yes</td>
+      </tr>
+      <tr>
+        <td>Sample rate conversion</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Handled automatically by SDL3 audio stream</td>
+        <td>Implicit</td>
+      </tr>
+      <tr>
+        <td>3D audio / positional sound</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Not implemented</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td>Capture / recording</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Not implemented</td>
+        <td>No</td>
+      </tr>
+      <tr>
+        <td>Hardware buffer acceleration</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>All buffers are software; DSBCAPS flags accepted but not negotiated</td>
+        <td>No</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>DirectPlay features</h2>
+
+  <div class="table-wrap"><table>
+    <thead>
+      <tr>
+        <th>Feature</th>
+        <th>Status</th>
+        <th>Notes</th>
+        <th>Used by target games</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>DirectPlayCreate</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Creates dummy object; no networking</td>
+        <td>Yes (optional)</td>
+      </tr>
+      <tr>
+        <td><code>DirectPlayEnumerateA/W</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Callback never called; returns DP_OK</td>
+        <td>Yes (optional)</td>
+      </tr>
+      <tr>
+        <td><code>EnumSessions</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>No sessions found</td>
+        <td>Yes (optional)</td>
+      </tr>
+      <tr>
+        <td><code>Open</code> / <code>Close</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>No-op success</td>
+        <td>Yes (optional)</td>
+      </tr>
+      <tr>
+        <td><code>CreatePlayer</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Sets player ID to 1; no real player registration</td>
+        <td>Yes (optional)</td>
+      </tr>
+      <tr>
+        <td><code>Send</code> / <code>Receive</code></td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>No I/O performed</td>
+        <td>Yes (optional)</td>
+      </tr>
+      <tr>
+        <td>Real UDP/IPX networking</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>No transport layer exists</td>
+        <td>N/A</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Not implemented at all</h2>
+  <div class="table-wrap"><table>
+    <thead>
+      <tr><th>Feature</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>DirectInput</td><td>No header; input handled by the free-api WinAPI layer (Win32 message queue)</td></tr>
+      <tr><td>Direct3D</td><td>3D pipeline not needed by target games; no plans to add</td></tr>
+      <tr><td>DirectDraw overlays</td><td>Not in header or source</td></tr>
+      <tr><td>DirectDraw video capture</td><td>Not in header or source</td></tr>
+      <tr><td>DirectDraw Execute buffers</td><td>Not applicable (DX3 3D feature)</td></tr>
+      <tr><td>COM aggregation (QueryInterface)</td><td>All QueryInterface calls return DDERR_UNSUPPORTED or E_NOINTERFACE</td></tr>
+      <tr><td>DDSCAPS_VIDEOMEMORY</td><td>Accepted in flags but all surfaces are CPU-resident</td></tr>
+    </tbody>
+  </table></div>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

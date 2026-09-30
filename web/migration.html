@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migration Guide — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / Migration Guide</div>
+    <h1>Migration Guide</h1>
+    <p>How to port old DirectDraw / DirectX 3 2D code to free-direct, common patterns, and known adaptation points.</p>
+  </div>
+
+  <h2>What usually works without change</h2>
+  <p>
+    If your code uses the following patterns, it will typically compile and run correctly
+    under free-direct with no source changes:
+  </p>
+  <ul>
+    <li>Creating primary and offscreen surfaces.</li>
+    <li>Clearing surfaces with <code>Blt(DDBLT_COLORFILL)</code>.</li>
+    <li>Blitting sprites with <code>BltFast(DDBLTFAST_SRCCOLORKEY)</code>.</li>
+    <li>Drawing with <code>Lock</code> / <code>Unlock</code> directly into the pixel buffer.</li>
+    <li>Palette creation and <code>SetPalette</code> on 8-bit surfaces.</li>
+    <li>Color key setup with <code>SetColorKey(DDCKEY_SRCBLT, ...)</code>.</li>
+    <li>Presenting with <code>Flip(NULL, 0)</code> on the primary surface.</li>
+    <li>Calling <code>IsLost()</code> / <code>Restore()</code> in a loop (both are harmless stubs).</li>
+    <li>Creating and releasing DirectSound PCM buffers with Lock/Unlock/Play.</li>
+    <li>Calling DirectPlay functions in a game that degrades gracefully to single-player.</li>
+  </ul>
+
+  <h2>Build migration steps</h2>
+  <ol>
+    <li>
+      <strong>Remove DirectX SDK / Windows SDK from the include path.</strong><br>
+      Replace with the free-direct <code>include/</code> directory and the free-api include directory.
+    </li>
+    <li>
+      <strong>Remove DirectX libs from the linker.</strong><br>
+      Remove <code>ddraw.lib</code>, <code>dsound.lib</code>, <code>dplayx.lib</code>,
+      <code>dinput.lib</code>, <code>dinput8.lib</code>.
+      Link <code>free-direct</code> instead.
+    </li>
+    <li>
+      <strong>Replace WinAPI entry point if needed.</strong><br>
+      free-api provides a <code>FreeApiRunWinMain</code> bridge:
+      <pre><code>int main(int argc, char** argv) {
+    return FreeApiRunWinMain(&WinMain, argc, argv);
+}</code></pre>
+    </li>
+    <li>
+      <strong>Set C++20 standard.</strong><br>
+      free-direct requires C++20. If your game uses an older standard, you may need to
+      wrap it or update the standard in your CMake project.
+    </li>
+  </ol>
+
+  <h2>Common patterns and adaptations</h2>
+
+  <h3>DDColorMatch — identifying a color key from a surface pixel</h3>
+  <p>
+    Some old games use a helper function that calls <code>GetDC</code>, <code>SetPixel</code>,
+    <code>GetPixel</code>, then <code>ReleaseDC</code> and <code>Lock</code> to discover the
+    palette index that corresponds to a given RGB color. This pattern is supported in
+    free-direct's <code>GetDC</code> implementation for both 32-bit and 8-bit surfaces.
+    No changes are needed.
+  </p>
+
+  <h3>Windowed mode — screen vs. client coordinates</h3>
+  <p>
+    In original DirectDraw windowed mode, the primary surface represents the entire desktop.
+    Games often convert window-local (client) coordinates to screen coordinates before blitting.
+    free-direct automatically corrects this: when blitting to a primary surface that has a
+    clipper attached, it subtracts the window position from the destination rectangle.
+  </p>
+  <p>
+    If your game does <em>not</em> convert to screen coordinates, it will blit at the correct
+    position anyway (no correction applied when no clipper is present).
+  </p>
+
+  <h3>SetDisplayMode for fullscreen</h3>
+  <p>
+    <code>SetDisplayMode(640, 480, 8)</code> stores the logical resolution used when creating
+    the primary surface and triggers fullscreen via free-api. It does <em>not</em> change
+    the physical display mode. On modern monitors SDL3's letterbox scaling handles the rest.
+    Your code can call <code>SetDisplayMode</code> as before and it will work correctly.
+  </p>
+
+  <h3>8-bit palette rendering</h3>
+  <p>
+    8-bit paletted surface rendering works end-to-end:
+  </p>
+  <ol>
+    <li>Create surface with <code>DDPF_PALETTEINDEXED8</code>.</li>
+    <li>Create and attach a palette with <code>CreatePalette</code> + <code>SetPalette</code>.</li>
+    <li>Write palette indices via <code>Lock</code> / <code>Unlock</code>.</li>
+    <li>Blit to the primary surface (8-bit to 8-bit or 8-bit to 32-bit mix is handled).</li>
+    <li>On present, the primary surface's 8-bit indices are expanded to RGBA32 using the attached palette.</li>
+  </ol>
+  <div class="callout callout-note">
+    <div class="callout-label">Mixed BPP blits</div>
+    <p>
+      The blit engine handles 8→8 and 32→32 correctly. Mixed-depth blits (8→32 or 32→8)
+      are not supported — the blit returns <code>DD_OK</code> but copies no pixels in that case.
+      Ensure source and destination have the same bit depth.
+    </p>
+  </div>
+
+  <h3>Rotation — DDBLT_ROTATIONANGLE</h3>
+  <p>
+    The <code>DDBLT_ROTATIONANGLE</code> flag and <code>DDBLTFX.dwRotationAngle</code>
+    field are accepted but <strong>rotation is not performed</strong>. The blit proceeds
+    as a normal non-rotated copy. If your game uses rotation, you will need to apply it
+    manually (pre-rotate into a temporary surface via pixel manipulation or use SDL3
+    directly in a custom code path).
+  </p>
+
+  <h3>DirectSound looping audio</h3>
+  <p>
+    <code>DSBPLAY_LOOPING</code> is accepted but the buffer plays only once.
+    If your game relies on looping audio (background music, ambient sound), you will
+    need to re-call <code>Play()</code> after the buffer finishes, or implement a
+    looping wrapper. See <a href="developer-notes.html">Developer Notes</a> for the
+    recommended approach.
+  </p>
+
+  <h3>DirectInput</h3>
+  <p>
+    free-direct has no DirectInput implementation. Legacy game code that uses DirectInput
+    for keyboard or mouse input cannot be ported by replacing headers alone; the input
+    code must be adapted to use the Win32 message queue (which is provided by free-api)
+    or another input system.
+  </p>
+
+  <h3>IDirectDraw2 / IDirectDrawSurface2 / IDirectDrawSurface4</h3>
+  <p>
+    free-direct only implements <code>IDirectDraw</code> and <code>IDirectDrawSurface</code>
+    (DirectX 3 shapes). Calls to <code>QueryInterface</code> for newer interface versions
+    return <code>DDERR_UNSUPPORTED</code>. If your code requires <code>IDirectDraw2</code>
+    or <code>IDirectDrawSurface2</code>, you cannot use free-direct without adding those
+    interfaces.
+  </p>
+
+  <h2>What is known NOT to work</h2>
+  <ul>
+    <li>DirectInput (no header, no implementation)</li>
+    <li>Direct3D (3D pipeline)</li>
+    <li>Real DirectPlay networking</li>
+    <li>Looping audio (<code>DSBPLAY_LOOPING</code>)</li>
+    <li>Rotation blits (<code>DDBLT_ROTATIONANGLE</code>)</li>
+    <li>Mixed-depth blits (8→32 or 32→8)</li>
+    <li>COM <code>QueryInterface</code> to newer interface versions</li>
+    <li>Hardware acceleration (all rendering is software/CPU)</li>
+    <li>Overlays</li>
+    <li>Accurate stereo panning (<code>SetPan</code> is stored but not applied)</li>
+  </ul>
+
+  <h2>Debugging a ported game</h2>
+  <p>
+    Enable verbose logging to trace what is happening during port testing:
+  </p>
+  <pre><code># On Linux/macOS
+export FREE_DIRECT_DEBUG_DDRAW=1
+export FREE_DIRECT_DEBUG_PRESENTATION=1
+export FREE_DIRECT_DEBUG_COLORKEY=1
+./your-game
+
+# On Windows (cmd)
+set FREE_DIRECT_DEBUG_DDRAW=1
+your-game.exe</code></pre>
+  <p>
+    SDL_Log output goes to the terminal / stdout. Watch for surface IDs, blit flags,
+    color key values, and present call counts to identify problems.
+  </p>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Integration Guide — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / Integration Guide</div>
+    <h1>Integration Guide</h1>
+    <p>How to add free-direct to an existing C++ project, configure CMake, and initialize the library.</p>
+  </div>
+
+  <h2>Prerequisites</h2>
+  <p>Before adding free-direct, ensure your project can provide the following CMake targets:</p>
+  <ul>
+    <li><code>SDL3::SDL3</code> — SDL 3 base library</li>
+    <li><code>SDL3_image::SDL3_image</code> — SDL3_image (used for image loading in the demo; may not be strictly needed by your game)</li>
+    <li><code>SDL3_mixer::SDL3_mixer</code> — SDL3_mixer (linked by the demo; optional if you only use DirectSound)</li>
+    <li><code>free-api::free-api</code> — companion WinAPI compatibility layer (sibling repository)</li>
+  </ul>
+  <p>
+    The parent project <em>free-eggbert</em> provides all SDL targets through
+    <code>cmake/ThirdPartySDL.cmake</code>. If you are integrating free-direct into your own
+    project, you must supply these targets yourself (e.g. via <code>find_package</code> or
+    <code>FetchContent</code>).
+  </p>
+  <div class="callout callout-warn">
+    <div class="callout-label">Important</div>
+    <p>
+      free-direct's <code>CMakeLists.txt</code> calls <code>fatal_error</code> if the SDL
+      targets are missing at configure time. Ensure they are available before
+      <code>add_subdirectory</code> is called.
+    </p>
+  </div>
+
+  <h2>Adding free-direct via CMake</h2>
+  <p>
+    free-direct is consumed as an <code>add_subdirectory</code> source dependency.
+    Place it (or a submodule pointing to it) next to <code>free-api</code> in your repository:
+  </p>
+
+  <pre><code>your-project/
+├── free-api/        ← sibling repository / submodule
+├── free-direct/     ← sibling repository / submodule
+└── CMakeLists.txt</code></pre>
+
+  <p>In your root <code>CMakeLists.txt</code>:</p>
+
+  <pre><code>cmake_minimum_required(VERSION 3.20)
+project(YourGame LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── 1. Provide SDL3 targets (example: system installation) ──
+find_package(SDL3 REQUIRED)
+find_package(SDL3_image REQUIRED)
+find_package(SDL3_mixer REQUIRED)
+
+# ── 2. Add free-api first (free-direct depends on it) ──
+add_subdirectory(free-api)
+
+# ── 3. Add free-direct ──
+add_subdirectory(free-direct)
+
+# ── 4. Link your game target ──
+add_executable(YourGame src/main.cpp)
+target_link_libraries(YourGame
+    PRIVATE
+    free-direct        # brings in free-api transitively
+    SDL3::SDL3
+    SDL3_image::SDL3_image
+    SDL3_mixer::SDL3_mixer
+)</code></pre>
+
+  <p>
+    The <code>free-direct</code> target's public include directories expose
+    <code>include/</code>, so after linking, your code can use:
+  </p>
+  <pre><code>#include &lt;ddraw.h&gt;
+#include &lt;dsound.h&gt;
+#include &lt;dplay.h&gt;</code></pre>
+
+  <div class="callout callout-note">
+    <div class="callout-label">Include path note</div>
+    <p>
+      The include path is intentionally set up to mirror the legacy DirectX SDK layout.
+      <code>#include &lt;ddraw.h&gt;</code> resolves to
+      <code>free-direct/include/ddraw.h</code>, not to any system or SDK header.
+      Make sure you do not have a conflicting system <code>ddraw.h</code> earlier in the
+      include search path.
+    </p>
+  </div>
+
+  <h2>Build instructions (standalone demo)</h2>
+  <p>To build the included demo application:</p>
+  <pre><code>git clone https://github.com/openeggbert/free-direct.git
+cd free-direct
+
+# SDL3 targets must be provided — see the parent project free-eggbert
+# for the recommended ThirdPartySDL.cmake approach.
+cmake -B build
+cmake --build build
+
+./build/FREE_DIRECT</code></pre>
+
+  <h2>Initialization sequence</h2>
+  <p>
+    A typical initialization follows the same sequence as original DirectX&nbsp;3 game code.
+    No extra free-direct-specific setup is needed; just call the standard DirectDraw entry
+    points.
+  </p>
+
+  <pre><code>#include &lt;windows.h&gt;
+#include &lt;ddraw.h&gt;
+
+// 1. Create the DirectDraw object
+LPDIRECTDRAW dd = nullptr;
+if (FAILED(DirectDrawCreate(nullptr, &amp;dd, nullptr))) {
+    // handle error
+}
+
+// 2. Set cooperative level — provide the HWND from your window
+//    DDSCL_NORMAL for windowed, DDSCL_FULLSCREEN|DDSCL_EXCLUSIVE for fullscreen
+if (FAILED(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL))) {
+    dd->Release();
+    // handle error
+}
+
+// 3. (Optional) set the display mode for fullscreen
+//    This stores the logical resolution used by CreateSurface for the primary surface.
+dd->SetDisplayMode(640, 480, 8);  // width, height, bits-per-pixel
+
+// 4. Create the primary surface
+DDSURFACEDESC desc = {};
+desc.dwSize  = sizeof(DDSURFACEDESC);
+desc.dwFlags = DDSD_CAPS;
+desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+
+LPDIRECTDRAWSURFACE primary = nullptr;
+dd->CreateSurface(&amp;desc, &amp;primary, nullptr);
+
+// 5. Create an offscreen back buffer
+desc = {};
+desc.dwSize   = sizeof(DDSURFACEDESC);
+desc.dwFlags  = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+desc.dwWidth  = 640;
+desc.dwHeight = 480;
+desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+
+LPDIRECTDRAWSURFACE back = nullptr;
+dd->CreateSurface(&amp;desc, &amp;back, nullptr);
+
+// 6. Create and attach a clipper (required for windowed Blt-to-primary)
+LPDIRECTDRAWCLIPPER clipper = nullptr;
+dd->CreateClipper(0, &amp;clipper, nullptr);
+clipper->SetHWnd(0, hwnd);
+primary->SetClipper(clipper);
+clipper->Release();
+
+// ... render, blit, present ...
+
+// 7. Shutdown
+back->Release();
+primary->Release();
+dd->Release();</code></pre>
+
+  <h2>Replacing old DirectX 3 calls</h2>
+  <p>
+    In most cases you only need to:
+  </p>
+  <ol>
+    <li>Remove the original <code>ddraw.lib</code> / <code>dsound.lib</code> / <code>dplayx.lib</code> from your linker input.</li>
+    <li>Replace the Windows SDK include path with free-direct's <code>include/</code>.</li>
+    <li>Link <code>free-direct</code> instead.</li>
+  </ol>
+  <p>
+    Game source code that only uses the supported subset will compile and link without
+    modification. See the <a href="compatibility.html">Compatibility Table</a> for the
+    list of supported features and the <a href="migration.html">Migration Guide</a> for
+    patterns that require adaptation.
+  </p>
+
+  <h2>Optional CMake options</h2>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>CMake option</th><th>Default</th><th>Effect</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>FREE_DIRECT_DIAGNOSTICS</code></td>
+        <td><code>OFF</code></td>
+        <td>Enables atomic diagnostic counters (live object counts, blit/present totals). See <a href="developer-notes.html">Developer Notes</a>.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Enable from the parent project:</p>
+  <pre><code>set(FREE_DIRECT_DIAGNOSTICS ON CACHE BOOL "Enable Free Direct diagnostic counters")</code></pre>
+
+  <h2>Runtime environment variables</h2>
+  <p>
+    The following environment variables control runtime behavior without recompilation:
+  </p>
+
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Variable</th><th>Value</th><th>Effect</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>FREE_DIRECT_TARGET_FPS</code></td>
+        <td>integer, e.g. <code>60</code></td>
+        <td>Sets the frame-throttle target. Default 60. Set to a higher value (e.g. <code>120</code>) to reduce throttling.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_ENABLE_VSYNC</code></td>
+        <td><code>0</code> to disable</td>
+        <td>VSync is enabled by default. Set to <code>0</code> to disable <code>SDL_SetRenderVSync</code>.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_DDRAW</code></td>
+        <td><code>1</code></td>
+        <td>Verbose DirectDraw operation logging via SDL_Log.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_DSOUND</code></td>
+        <td><code>1</code></td>
+        <td>Verbose DirectSound operation logging.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_DSOUND_FORMAT</code></td>
+        <td><code>1</code></td>
+        <td>Detailed format/stream information for each sound buffer.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_PRESENTATION</code></td>
+        <td><code>1</code></td>
+        <td>Logs every PresentPrimary call including throttle and dirty checks.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_COLORKEY</code></td>
+        <td><code>1</code></td>
+        <td>Logs color key comparisons and per-blit copied/skipped pixel counts.</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_PERF</code></td>
+        <td><code>1</code></td>
+        <td>Prints per-second performance summary (presents/s, uploads/s, blts/s).</td>
+      </tr>
+      <tr>
+        <td><code>FREE_DIRECT_DEBUG_PRIMARY_CLEAR</code></td>
+        <td><code>1</code></td>
+        <td>Clears the window to a solid blue on startup to confirm the renderer is working.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Minimal example application</h2>
+  <p>
+    See <a href="examples.html">Code Examples</a> for a complete annotated minimal application
+    showing initialization, surface creation, blitting, and shutdown.
+  </p>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

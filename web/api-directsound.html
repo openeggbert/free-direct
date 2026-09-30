@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DirectSound API — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / DirectSound API</div>
+    <h1>DirectSound API Reference</h1>
+    <p>Complete reference for the DirectSound subset implemented in free-direct, backed by SDL3 audio streams.</p>
+  </div>
+
+  <div class="callout callout-warn">
+    <div class="callout-label">Partial implementation</div>
+    <p>
+      free-direct implements a <strong>read/write PCM buffer</strong> layer over SDL3.
+      Hardware acceleration, 3D audio, EAX effects, DSBPLAY_LOOPING, and stereo panning
+      are <strong>not functional</strong>. The implementation is designed to port legacy 2D
+      game audio that uses simple mono/stereo PCM sounds played once.
+    </p>
+  </div>
+
+  <h2>Contents</h2>
+  <ul>
+    <li><a href="#design">Design and internal architecture</a></li>
+    <li><a href="#global-functions">Global functions</a>
+      <ul><li><a href="#DirectSoundCreate">DirectSoundCreate</a></li></ul>
+    </li>
+    <li><a href="#IDirectSound">IDirectSound interface</a>
+      <ul>
+        <li><a href="#ds-AddRef">AddRef / Release</a></li>
+        <li><a href="#ds-SetCooperativeLevel">SetCooperativeLevel</a></li>
+        <li><a href="#ds-CreateSoundBuffer">CreateSoundBuffer</a></li>
+      </ul>
+    </li>
+    <li><a href="#IDirectSoundBuffer">IDirectSoundBuffer interface</a>
+      <ul>
+        <li><a href="#dsb-AddRef">AddRef / Release</a></li>
+        <li><a href="#dsb-Lock">Lock</a></li>
+        <li><a href="#dsb-Unlock">Unlock</a></li>
+        <li><a href="#dsb-Play">Play</a></li>
+        <li><a href="#dsb-Stop">Stop</a></li>
+        <li><a href="#dsb-GetStatus">GetStatus</a></li>
+        <li><a href="#dsb-SetVolume">SetVolume</a></li>
+        <li><a href="#dsb-SetPan">SetPan</a></li>
+        <li><a href="#dsb-SetCurrentPosition">SetCurrentPosition</a></li>
+        <li><a href="#dsb-GetCurrentPosition">GetCurrentPosition</a></li>
+      </ul>
+    </li>
+    <li><a href="#structs">Structs</a>
+      <ul>
+        <li><a href="#DSBUFFERDESC">DSBUFFERDESC</a></li>
+        <li><a href="#WAVEFORMAT">WAVEFORMAT</a></li>
+        <li><a href="#PCMWAVEFORMAT">PCMWAVEFORMAT</a></li>
+        <li><a href="#WAVEFORMATEX">WAVEFORMATEX</a></li>
+      </ul>
+    </li>
+    <li><a href="#flags">Flag constants</a>
+      <ul>
+        <li><a href="#DSBCAPS">DSBCAPS_* — buffer capability flags</a></li>
+        <li><a href="#DSBLOCK">DSBLOCK_* — lock flags</a></li>
+        <li><a href="#DSBSTATUS">DSBSTATUS_* — status flags</a></li>
+        <li><a href="#DSSCL">DSSCL_* — cooperative level</a></li>
+        <li><a href="#DSBPLAY">DSBPLAY_* — play flags</a></li>
+      </ul>
+    </li>
+    <li><a href="#result-codes">Result codes</a></li>
+    <li><a href="#limitations">Known limitations</a></li>
+  </ul>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="design">Design and internal architecture</h2>
+
+  <pre class="arch-diagram">
+  DirectSoundCreate()
+        │
+        ▼
+  DirectSoundImpl ──── SharedAudioDevice (singleton)
+        │                     │
+        │              SDL_AudioDeviceID (opened once on first Play)
+        │
+        ▼
+  DirectSoundBufferImpl
+    ├── std::vector&lt;uint8_t&gt;  ← raw PCM storage (dwBufferBytes)
+    ├── SDL_AudioStream*       ← per-buffer stream (created on Play)
+    ├── PCMWAVEFORMAT          ← format snapshot from DSBUFFERDESC
+    ├── long  volume_cb        ← centibels, default 0 (full volume)
+    ├── long  pan_cb           ← centibels, stored but NOT applied
+    └── bool  playing          ← set by Play(), cleared by Stop()
+  </pre>
+
+  <p>Key design points:</p>
+  <ul>
+    <li>One <strong>SharedAudioDevice</strong> singleton is opened on the first <code>Play()</code> call; all subsequent buffers share the same SDL audio device ID.</li>
+    <li>Each buffer owns a separate <strong>SDL_AudioStream</strong> created at play time. This stream is destroyed on <code>Stop()</code> or <code>Release()</code>.</li>
+    <li>Volume is converted from centibels to a linear gain: <code>gain = 10^(cb / 2000)</code>, applied with <code>SDL_SetAudioStreamGain</code>.</li>
+    <li>Stereo panning computes left/right gains using a constant-power curve but the result is <code>(void)</code>-discarded — pan is stored but not sent to SDL.</li>
+    <li>The PCM format is read from <code>DSBUFFERDESC.lpwfxFormat</code> cast to <code>PCMWAVEFORMAT*</code> to avoid LP64 struct-padding issues — see the <a href="#PCMWAVEFORMAT">PCMWAVEFORMAT section</a>.</li>
+    <li>Multiple simultaneous buffers each have their own SDL_AudioStream; SDL mixes them at the device level.</li>
+  </ul>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="global-functions">Global functions</h2>
+
+  <div class="api-entry" id="DirectSoundCreate">
+    <div class="api-entry-header">
+      <span class="api-name">DirectSoundCreate</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>Creates a DirectSound object. Entry point for all DirectSound use.</p>
+    <pre><code>HRESULT DirectSoundCreate(
+    LPGUID          lpGuid,
+    LPDIRECTSOUND*  ppDS,
+    IUnknown*       pUnkOuter
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>lpGuid</code></td><td>in</td><td><code>LPGUID</code></td>
+          <td>Device GUID. Pass <code>nullptr</code> to select the default audio device.
+          Any non-null value is accepted but ignored — there is always one audio device.</td>
+        </tr>
+        <tr>
+          <td><code>ppDS</code></td><td>out</td><td><code>LPDIRECTSOUND*</code></td>
+          <td>Receives the created <code>IDirectSound</code> pointer. Set to <code>nullptr</code> on failure. Must not be <code>nullptr</code> itself.</td>
+        </tr>
+        <tr>
+          <td><code>pUnkOuter</code></td><td>in</td><td><code>IUnknown*</code></td>
+          <td>COM aggregation outer object. Must be <code>nullptr</code>; any other value is silently ignored.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-note">
+      <div class="callout-label">No audio device opened yet</div>
+      <p>
+        <code>DirectSoundCreate</code> only allocates the <code>IDirectSound</code> object.
+        The SDL audio device is not opened until the first <code>Play()</code> call on any buffer.
+      </p>
+    </div>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Object created successfully.</td></tr>
+        <tr><td><code>DSERR_INVALIDPARAM</code></td><td><code>ppDS</code> is <code>nullptr</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="IDirectSound">IDirectSound interface</h2>
+  <p>Obtained from <code>DirectSoundCreate</code>. Pointer typedef: <code>LPDIRECTSOUND</code>.</p>
+
+  <div class="api-entry" id="ds-AddRef">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSound::AddRef / Release</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>
+      COM reference counting implemented with <code>std::atomic&lt;ULONG&gt;</code>.
+      <code>Release()</code> deletes the object when the count reaches zero.
+      Initial reference count after <code>DirectSoundCreate</code> is <strong>1</strong>.
+    </p>
+    <pre><code>ULONG AddRef();
+ULONG Release();</code></pre>
+    <p>Both return the new reference count after the operation.</p>
+  </div>
+
+  <div class="api-entry" id="ds-SetCooperativeLevel">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSound::SetCooperativeLevel</span>
+      <span class="status-pill status-partial">Partial — stored only</span>
+    </div>
+    <p>
+      Sets the cooperative level for the DirectSound object. In free-direct this call
+      is accepted for compatibility but does not change any SDL audio behavior.
+      Audio is always operated at the equivalent of <code>DSSCL_NORMAL</code>.
+    </p>
+    <pre><code>HRESULT SetCooperativeLevel(
+    HWND    hwnd,
+    DWORD   dwLevel
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>hwnd</code></td><td>in</td><td><code>HWND</code></td>
+          <td>Application window handle. Stored but not used — SDL audio does not require an HWND.</td>
+        </tr>
+        <tr>
+          <td><code>dwLevel</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Cooperative level. See <a href="#DSSCL">DSSCL_*</a> constants. Only <code>DSSCL_NORMAL</code> (0x00000001) is meaningful; all values are accepted without error.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="ds-CreateSoundBuffer">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSound::CreateSoundBuffer</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>
+      Creates a sound buffer. free-direct creates a software PCM buffer backed by
+      <code>std::vector&lt;uint8_t&gt;</code>. Hardware buffers are not supported —
+      <code>DSBCAPS_LOCHARDWARE</code> is silently treated as software.
+    </p>
+    <pre><code>HRESULT CreateSoundBuffer(
+    LPCDSBUFFERDESC      pcDSBufferDesc,
+    LPDIRECTSOUNDBUFFER* ppDSBuffer,
+    IUnknown*            pUnkOuter
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>pcDSBufferDesc</code></td><td>in</td><td><code>LPCDSBUFFERDESC</code></td>
+          <td>Pointer to a <a href="#DSBUFFERDESC">DSBUFFERDESC</a> describing the buffer. Must not be <code>nullptr</code>. <code>dwSize</code>, <code>dwBufferBytes</code>, and <code>lpwfxFormat</code> must all be valid.</td>
+        </tr>
+        <tr>
+          <td><code>ppDSBuffer</code></td><td>out</td><td><code>LPDIRECTSOUNDBUFFER*</code></td>
+          <td>Receives the created buffer object on success. Set to <code>nullptr</code> on failure. Must not be <code>nullptr</code> itself.</td>
+        </tr>
+        <tr>
+          <td><code>pUnkOuter</code></td><td>in</td><td><code>IUnknown*</code></td>
+          <td>COM aggregation — must be <code>nullptr</code>; silently ignored.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Accepted <code>DSBUFFERDESC.dwFlags</code> combinations and their effect:</p>
+    <table>
+      <thead><tr><th>Flag</th><th>Support</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>DSBCAPS_CTRLVOLUME</code></td><td><span class="status-pill status-implemented">Functional</span></td><td><code>SetVolume</code> applies gain via SDL.</td></tr>
+        <tr><td><code>DSBCAPS_CTRLPAN</code></td><td><span class="status-pill status-partial">Stored only</span></td><td><code>SetPan</code> stores the value; pan is not applied.</td></tr>
+        <tr><td><code>DSBCAPS_CTRLFREQUENCY</code></td><td><span class="status-pill status-unsupported">No-op</span></td><td>Flag accepted; no frequency shifting.</td></tr>
+        <tr><td><code>DSBCAPS_LOCSOFTWARE</code></td><td><span class="status-pill status-implemented">Functional</span></td><td>All buffers are software.</td></tr>
+        <tr><td><code>DSBCAPS_LOCHARDWARE</code></td><td><span class="status-pill status-partial">Treated as software</span></td><td>No hardware mixing available.</td></tr>
+        <tr><td><code>DSBCAPS_STATIC</code></td><td><span class="status-pill status-implemented">Accepted</span></td><td>No semantic difference from non-static.</td></tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Buffer created successfully.</td></tr>
+        <tr><td><code>DSERR_INVALIDPARAM</code></td><td><code>pcDSBufferDesc</code> or <code>ppDSBuffer</code> is <code>nullptr</code>, or <code>dwBufferBytes</code> is 0, or <code>lpwfxFormat</code> is <code>nullptr</code>.</td></tr>
+        <tr><td><code>DSERR_OUTOFMEMORY</code></td><td>Allocation of the buffer failed.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="IDirectSoundBuffer">IDirectSoundBuffer interface</h2>
+  <p>Obtained from <code>IDirectSound::CreateSoundBuffer</code>. Pointer typedef: <code>LPDIRECTSOUNDBUFFER</code>.</p>
+
+  <div class="api-entry" id="dsb-AddRef">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::AddRef / Release</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>
+      COM reference counting with <code>std::atomic&lt;ULONG&gt;</code>.
+      <code>Release()</code> when count reaches zero: calls <code>Stop()</code>,
+      destroys the SDL_AudioStream, frees the PCM vector.
+      Initial reference count is <strong>1</strong>.
+    </p>
+    <pre><code>ULONG AddRef();
+ULONG Release();</code></pre>
+    <p>Both return the new reference count.</p>
+  </div>
+
+  <div class="api-entry" id="dsb-Lock">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::Lock</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>
+      Obtains write access to a region of the PCM buffer. Returns one or two pointers
+      directly into the internal <code>std::vector&lt;uint8_t&gt;</code>. No mutex or
+      synchronization is used — caller must not call <code>Play()</code> while locked.
+    </p>
+    <pre><code>HRESULT Lock(
+    DWORD   dwWriteCursor,
+    DWORD   dwWriteBytes,
+    LPVOID* ppvAudioPtr1,
+    LPDWORD pdwAudioBytes1,
+    LPVOID* ppvAudioPtr2,
+    LPDWORD pdwAudioBytes2,
+    DWORD   dwFlags
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>dwWriteCursor</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Byte offset from the start of the buffer at which to begin the lock.
+          Ignored when <code>DSBLOCK_FROMWRITECURSOR</code> is set in <code>dwFlags</code>.</td>
+        </tr>
+        <tr>
+          <td><code>dwWriteBytes</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Number of bytes to lock. Must be ≤ <code>dwBufferBytes</code>.
+          When <code>DSBLOCK_ENTIREBUFFER</code> is set this value is ignored and the entire buffer is locked.</td>
+        </tr>
+        <tr>
+          <td><code>ppvAudioPtr1</code></td><td>out</td><td><code>LPVOID*</code></td>
+          <td>Receives a pointer to the first (and possibly only) segment of locked memory.
+          Points into the internal vector. Must not be <code>nullptr</code>.</td>
+        </tr>
+        <tr>
+          <td><code>pdwAudioBytes1</code></td><td>out</td><td><code>LPDWORD</code></td>
+          <td>Receives the byte count of the first segment. Must not be <code>nullptr</code>.</td>
+        </tr>
+        <tr>
+          <td><code>ppvAudioPtr2</code></td><td>out</td><td><code>LPVOID*</code></td>
+          <td>Receives a pointer to the second (wrap-around) segment, or <code>nullptr</code>
+          if no wrap occurred. May be <code>nullptr</code> (caller ignores wrap).</td>
+        </tr>
+        <tr>
+          <td><code>pdwAudioBytes2</code></td><td>out</td><td><code>LPDWORD</code></td>
+          <td>Receives the byte count of the second segment, or 0 if none.
+          May be <code>nullptr</code>.</td>
+        </tr>
+        <tr>
+          <td><code>dwFlags</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Lock flags. See <a href="#DSBLOCK">DSBLOCK_*</a> constants.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Wrap-around behaviour:</strong> The buffer is treated as circular.
+    If <code>dwWriteCursor + dwWriteBytes &gt; dwBufferBytes</code>:</p>
+    <ul>
+      <li>Segment 1: from <code>dwWriteCursor</code> to end-of-buffer → size = <code>dwBufferBytes − dwWriteCursor</code>.</li>
+      <li>Segment 2: from start of buffer → size = <code>dwWriteBytes − size1</code>.</li>
+    </ul>
+    <p>If no wrap, segment 2 pointer is <code>nullptr</code> and size is 0.</p>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Lock succeeded. Pointers valid for writing.</td></tr>
+        <tr><td><code>DSERR_INVALIDPARAM</code></td><td><code>ppvAudioPtr1</code> or <code>pdwAudioBytes1</code> is <code>nullptr</code>.</td></tr>
+        <tr><td><code>DSERR_INVALIDCALL</code></td><td>Requested region exceeds buffer size.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-Unlock">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::Unlock</span>
+      <span class="status-pill status-implemented">Implemented — no-op</span>
+    </div>
+    <p>
+      Signals write completion. In free-direct this is a <strong>no-op</strong> — the
+      vector is already in-place, no flush or copy is needed.
+      Parameters are accepted for API compatibility and then ignored.
+    </p>
+    <pre><code>HRESULT Unlock(
+    LPVOID  pvAudioPtr1,
+    DWORD   dwAudioBytes1,
+    LPVOID  pvAudioPtr2,
+    DWORD   dwAudioBytes2
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>pvAudioPtr1</code></td><td>in</td><td><code>LPVOID</code></td><td>First pointer from Lock. Ignored.</td></tr>
+        <tr><td><code>dwAudioBytes1</code></td><td>in</td><td><code>DWORD</code></td><td>Bytes written to first segment. Ignored.</td></tr>
+        <tr><td><code>pvAudioPtr2</code></td><td>in</td><td><code>LPVOID</code></td><td>Second pointer from Lock. Ignored.</td></tr>
+        <tr><td><code>dwAudioBytes2</code></td><td>in</td><td><code>DWORD</code></td><td>Bytes written to second segment. Ignored.</td></tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-Play">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::Play</span>
+      <span class="status-pill status-partial">Partial — looping not functional</span>
+    </div>
+    <p>
+      Starts playback. The entire PCM buffer is put into a new SDL_AudioStream and the
+      stream is bound to the shared device. The buffer plays once;
+      <code>DSBPLAY_LOOPING</code> is accepted but does not cause the buffer to repeat.
+    </p>
+    <pre><code>HRESULT Play(
+    DWORD  dwReserved1,
+    DWORD  dwPriority,
+    DWORD  dwFlags
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>dwReserved1</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Reserved — must be 0. Ignored by free-direct.</td>
+        </tr>
+        <tr>
+          <td><code>dwPriority</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Buffer priority for voice stealing. Accepted but not used — all buffers have equal priority under SDL.</td>
+        </tr>
+        <tr>
+          <td><code>dwFlags</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Play flags. <code>0</code> = play once. <code>DSBPLAY_LOOPING</code> (0x00000001) = accepted but looping does not occur.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Internal steps on Play():</strong></p>
+    <ol>
+      <li>Open <code>SharedAudioDevice</code> singleton if not yet open (<code>SDL_OpenAudioDevice</code>).</li>
+      <li>Create a new <code>SDL_AudioStream</code> for the buffer's PCM format (sample rate, channels, bit depth).</li>
+      <li>Apply current volume: compute <code>gain = 10^(volume_cb / 2000)</code>, call <code>SDL_SetAudioStreamGain(stream, gain)</code>.</li>
+      <li>Put all PCM data into the stream: <code>SDL_PutAudioStreamData(stream, data.data(), data.size())</code>.</li>
+      <li>Bind the stream to the audio device: <code>SDL_BindAudioStream(device, stream)</code>.</li>
+      <li>Set <code>playing = true</code>.</li>
+    </ol>
+
+    <div class="callout callout-warn">
+      <div class="callout-label">DSBPLAY_LOOPING not functional</div>
+      <p>
+        The flag is accepted without error, but the audio plays once and stops.
+        To simulate looping, poll <code>GetStatus</code> and re-call <code>Play()</code>
+        when the buffer finishes — or wrap it in a helper class. See
+        <a href="developer-notes.html">Developer Notes</a> for an implementation sketch.
+      </p>
+    </div>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Playback started successfully.</td></tr>
+        <tr><td><code>DSERR_INVALIDCALL</code></td><td>SDL audio device could not be opened.</td></tr>
+        <tr><td><code>DSERR_GENERIC</code></td><td>SDL_AudioStream creation or binding failed.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-Stop">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::Stop</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>
+      Stops playback. Unbinds the SDL_AudioStream from the device and destroys it.
+      The PCM vector contents are preserved. The buffer can be played again with
+      <code>Play()</code>. Calling Stop on an already-stopped buffer is harmless (idempotent).
+    </p>
+    <pre><code>HRESULT Stop();</code></pre>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-GetStatus">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::GetStatus</span>
+      <span class="status-pill status-partial">Partial</span>
+    </div>
+    <p>
+      Returns the current playback status. free-direct tracks a simple <code>playing</code>
+      boolean. <strong>It does not detect when SDL finishes consuming the stream</strong>,
+      so <code>DSBSTATUS_PLAYING</code> may remain set after audio has finished.
+    </p>
+    <pre><code>HRESULT GetStatus(
+    LPDWORD pdwStatus
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>pdwStatus</code></td><td>out</td><td><code>LPDWORD</code></td>
+          <td>Receives a bitmask of <a href="#DSBSTATUS">DSBSTATUS_*</a> flags. Set to 0 if the buffer is stopped.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Flag returned</th><th>Value</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>DSBSTATUS_PLAYING</code></td><td>0x00000001</td><td>Set after <code>Play()</code>; cleared only by <code>Stop()</code> or <code>Release()</code>.</td></tr>
+        <tr><td><code>DSBSTATUS_LOOPING</code></td><td>0x00000004</td><td>Never set — looping is not implemented.</td></tr>
+        <tr><td><code>DSBSTATUS_BUFFERLOST</code></td><td>0x00000002</td><td>Never set — CPU buffers are never lost.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-warn">
+      <div class="callout-label">Status does not auto-clear on completion</div>
+      <p>
+        free-direct does not poll SDL to detect end-of-stream.
+        <code>DSBSTATUS_PLAYING</code> remains set until <code>Stop()</code> is called
+        explicitly. Do not rely on this flag alone to detect when audio playback ends.
+      </p>
+    </div>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Status written successfully.</td></tr>
+        <tr><td><code>DSERR_INVALIDPARAM</code></td><td><code>pdwStatus</code> is <code>nullptr</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-SetVolume">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::SetVolume</span>
+      <span class="status-pill status-implemented">Implemented</span>
+    </div>
+    <p>
+      Sets the playback volume. Volume is specified in <strong>centibels</strong>
+      (hundredths of a decibel). Converted to a linear gain and applied to the
+      SDL_AudioStream immediately if one is open; stored for future <code>Play()</code> calls otherwise.
+    </p>
+    <pre><code>HRESULT SetVolume(
+    LONG lVolume
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>lVolume</code></td><td>in</td><td><code>LONG</code></td>
+          <td>Volume in centibels. Range: <code>DSBVOLUME_MIN</code> (−10000, ≈ silence) to <code>DSBVOLUME_MAX</code> (0, full volume). Values above 0 are not defined by the original API.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Value</th><th>dB</th><th>Linear gain</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>0</code></td><td>0 dB</td><td>1.000</td><td>Full volume (default)</td></tr>
+        <tr><td><code>−500</code></td><td>−5 dB</td><td>≈ 0.562</td><td>About half perceived loudness</td></tr>
+        <tr><td><code>−1000</code></td><td>−10 dB</td><td>≈ 0.316</td><td>Roughly one-third amplitude</td></tr>
+        <tr><td><code>−2000</code></td><td>−20 dB</td><td>≈ 0.100</td><td>One-tenth amplitude</td></tr>
+        <tr><td><code>−10000</code></td><td>−100 dB</td><td>≈ 0.00001</td><td>Essentially silent</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Conversion formula:</strong> <code>float gain = powf(10.0f, lVolume / 2000.0f);</code></p>
+    <p>Applied with <code>SDL_SetAudioStreamGain(stream, gain)</code> if a stream is open.</p>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-SetPan">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::SetPan</span>
+      <span class="status-pill status-partial">Stored only — not applied</span>
+    </div>
+    <p>
+      Sets the stereo pan position. The value and the computed left/right gains are
+      stored but the result is <code>(void)</code>-discarded before it reaches SDL.
+      <strong>Pan has no audible effect.</strong>
+    </p>
+    <pre><code>HRESULT SetPan(
+    LONG lPan
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>lPan</code></td><td>in</td><td><code>LONG</code></td>
+          <td>Pan in centibels. −10000 = full left, 0 = center, +10000 = full right.
+          Stored in the buffer but not applied to SDL. All audio is mixed at center.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-warn">
+      <div class="callout-label">Pan not applied to SDL</div>
+      <p>
+        The implementation computes constant-power left/right gains but passes them to
+        <code>(void)left; (void)right;</code> — the computed values are discarded.
+        This is a known limitation; see <a href="developer-notes.html">Developer Notes</a>
+        for the recommended path to add proper panning.
+      </p>
+    </div>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-SetCurrentPosition">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::SetCurrentPosition</span>
+      <span class="status-pill status-partial">Stored — not applied to active stream</span>
+    </div>
+    <p>
+      Sets the playback start position. Stored in the buffer but not used to seek
+      within an active SDL stream (SDL_AudioStream does not support seeking).
+      Effective only before <code>Play()</code>.
+    </p>
+    <pre><code>HRESULT SetCurrentPosition(
+    DWORD dwNewPosition
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>dwNewPosition</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Byte offset from start of buffer. Values beyond the buffer size are clamped.
+          When <code>Play()</code> is called, the PCM data is fed from this offset if it has been set before Play.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="dsb-GetCurrentPosition">
+    <div class="api-entry-header">
+      <span class="api-name">IDirectSoundBuffer::GetCurrentPosition</span>
+      <span class="status-pill status-stub">Stub — always returns 0</span>
+    </div>
+    <p>
+      Returns the current play and write cursor positions. free-direct always returns 0
+      for both — SDL_AudioStream does not expose a consumption position.
+    </p>
+    <pre><code>HRESULT GetCurrentPosition(
+    LPDWORD pdwCurrentPlayCursor,
+    LPDWORD pdwCurrentWriteCursor
+);</code></pre>
+
+    <table>
+      <thead><tr><th>Parameter</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>pdwCurrentPlayCursor</code></td><td>out</td><td><code>LPDWORD</code></td>
+          <td>Receives the play cursor position. Always set to 0. May be <code>nullptr</code> (skip this output).</td>
+        </tr>
+        <tr>
+          <td><code>pdwCurrentWriteCursor</code></td><td>out</td><td><code>LPDWORD</code></td>
+          <td>Receives the safe write cursor position. Always set to 0. May be <code>nullptr</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Return value</th><th>Condition</th></tr></thead>
+      <tbody>
+        <tr><td><code>DS_OK</code></td><td>Always returned.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="structs">Structs</h2>
+
+  <div class="api-entry" id="DSBUFFERDESC">
+    <div class="api-entry-header">
+      <span class="api-name">DSBUFFERDESC</span>
+    </div>
+    <p>Describes a sound buffer. Passed to <code>IDirectSound::CreateSoundBuffer</code>.</p>
+    <pre><code>typedef struct {
+    DWORD          dwSize;        // sizeof(DSBUFFERDESC)
+    DWORD          dwFlags;       // DSBCAPS_* capability flags
+    DWORD          dwBufferBytes; // PCM buffer size in bytes
+    DWORD          dwReserved;    // must be 0
+    LPWAVEFORMATEX lpwfxFormat;   // pointer to PCMWAVEFORMAT (see note)
+} DSBUFFERDESC;</code></pre>
+
+    <table>
+      <thead><tr><th>Field</th><th>Dir</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>dwSize</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Structure size in bytes. Must be <code>sizeof(DSBUFFERDESC)</code> before passing to <code>CreateSoundBuffer</code>.</td>
+        </tr>
+        <tr>
+          <td><code>dwFlags</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Combination of <a href="#DSBCAPS">DSBCAPS_*</a> flags. Controls which features are enabled. <code>DSBCAPS_CTRLVOLUME</code> is the most useful flag in free-direct.</td>
+        </tr>
+        <tr>
+          <td><code>dwBufferBytes</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Total byte size of the PCM data area. A <code>std::vector&lt;uint8_t&gt;</code> of exactly this size is allocated. Must be &gt; 0.</td>
+        </tr>
+        <tr>
+          <td><code>dwReserved</code></td><td>in</td><td><code>DWORD</code></td>
+          <td>Reserved — set to 0. Ignored by free-direct.</td>
+        </tr>
+        <tr>
+          <td><code>lpwfxFormat</code></td><td>in</td><td><code>LPWAVEFORMATEX</code></td>
+          <td>Pointer to a <a href="#PCMWAVEFORMAT">PCMWAVEFORMAT</a> (typed as LPWAVEFORMATEX for API compatibility).
+          free-direct casts this to <code>PCMWAVEFORMAT*</code> — always fill a <code>PCMWAVEFORMAT</code> to avoid LP64 padding issues. Must not be <code>nullptr</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="WAVEFORMAT">
+    <div class="api-entry-header">
+      <span class="api-name">WAVEFORMAT</span>
+    </div>
+    <p>Base wave format structure. Embedded as the first member of <code>PCMWAVEFORMAT</code>.</p>
+    <pre><code>typedef struct {
+    WORD  wFormatTag;       // audio format type
+    WORD  nChannels;        // number of channels
+    DWORD nSamplesPerSec;   // sample rate in Hz
+    DWORD nAvgBytesPerSec;  // nSamplesPerSec * nBlockAlign
+    WORD  nBlockAlign;      // bytes per sample frame
+} WAVEFORMAT;
+// sizeof(WAVEFORMAT) = 14 bytes on LP64 (no internal padding)</code></pre>
+
+    <table>
+      <thead><tr><th>Field</th><th>Byte offset</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>wFormatTag</code></td><td>0</td><td><code>WORD</code></td><td>Format type. <code>1</code> = WAVE_FORMAT_PCM (only supported value).</td></tr>
+        <tr><td><code>nChannels</code></td><td>2</td><td><code>WORD</code></td><td>Channel count. <code>1</code> = mono, <code>2</code> = stereo. Both are passed through to SDL.</td></tr>
+        <tr><td><code>nSamplesPerSec</code></td><td>4</td><td><code>DWORD</code></td><td>Samples per second per channel. Common values: 8000, 11025, 22050, 44100.</td></tr>
+        <tr><td><code>nAvgBytesPerSec</code></td><td>8</td><td><code>DWORD</code></td><td>Average byte transfer rate = <code>nSamplesPerSec × nBlockAlign</code>. Not used by free-direct for processing.</td></tr>
+        <tr><td><code>nBlockAlign</code></td><td>12</td><td><code>WORD</code></td><td>Bytes per sample frame = <code>nChannels × (wBitsPerSample / 8)</code>. E.g. stereo 16-bit = 4.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="api-entry" id="PCMWAVEFORMAT">
+    <div class="api-entry-header">
+      <span class="api-name">PCMWAVEFORMAT</span>
+    </div>
+    <p>
+      PCM wave format descriptor. <strong>This is the correct struct to pass as
+      <code>lpwfxFormat</code> in free-direct.</strong>
+    </p>
+    <pre><code>typedef struct {
+    WAVEFORMAT wf;            // base format (14 bytes)
+    WORD       wBitsPerSample; // bits per sample (at byte offset 14)
+} PCMWAVEFORMAT;
+// sizeof(PCMWAVEFORMAT) = 16 bytes</code></pre>
+
+    <table>
+      <thead><tr><th>Field</th><th>Byte offset</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>wf</code></td><td>0</td><td><code>WAVEFORMAT</code></td><td>Base format fields (see <a href="#WAVEFORMAT">WAVEFORMAT</a>).</td></tr>
+        <tr><td><code>wBitsPerSample</code></td><td>14</td><td><code>WORD</code></td><td>Bits per sample per channel. <code>8</code> = unsigned 8-bit PCM, <code>16</code> = signed 16-bit PCM LE. free-direct reads this field at offset 14.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="callout callout-danger">
+      <div class="callout-label">Critical: use PCMWAVEFORMAT, not WAVEFORMATEX</div>
+      <p>On LP64 systems (Linux 64-bit, macOS 64-bit):</p>
+      <ul>
+        <li><code>PCMWAVEFORMAT.wBitsPerSample</code> is at byte offset <strong>14</strong>.</li>
+        <li><code>WAVEFORMATEX.wBitsPerSample</code> is at byte offset <strong>16</strong> (due to DWORD alignment padding after the WORD <code>nBlockAlign</code> in some compiler layouts).</li>
+      </ul>
+      <p>
+        free-direct always reads <code>wBitsPerSample</code> at offset 14.
+        If you fill a <code>WAVEFORMATEX</code> and cast it, free-direct will read
+        padding bytes as the bit depth and open the SDL stream with incorrect parameters,
+        causing silence or noise.
+      </p>
+      <pre><code>// CORRECT: use PCMWAVEFORMAT
+PCMWAVEFORMAT pcm = {};
+pcm.wf.wFormatTag      = 1;      // WAVE_FORMAT_PCM
+pcm.wf.nChannels       = 1;      // mono
+pcm.wf.nSamplesPerSec  = 22050;
+pcm.wf.nBlockAlign     = 2;      // 1 ch * 2 bytes
+pcm.wf.nAvgBytesPerSec = 44100;
+pcm.wBitsPerSample     = 16;
+bufDesc.lpwfxFormat = (LPWAVEFORMATEX)&amp;pcm;</code></pre>
+    </div>
+  </div>
+
+  <div class="api-entry" id="WAVEFORMATEX">
+    <div class="api-entry-header">
+      <span class="api-name">WAVEFORMATEX</span>
+    </div>
+    <p>
+      Extended wave format. Defined in <code>dsound.h</code> for compile compatibility.
+      <strong>Do not use this struct directly as <code>lpwfxFormat</code> in free-direct</strong>
+      — use <a href="#PCMWAVEFORMAT">PCMWAVEFORMAT</a> instead.
+    </p>
+    <pre><code>typedef struct {
+    WORD  wFormatTag;
+    WORD  nChannels;
+    DWORD nSamplesPerSec;
+    DWORD nAvgBytesPerSec;
+    WORD  nBlockAlign;
+    WORD  wBitsPerSample;  // at offset 16 on LP64 (NOT offset 14)
+    WORD  cbSize;          // extra bytes beyond this struct
+} WAVEFORMATEX;</code></pre>
+
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>wFormatTag</code></td><td><code>WORD</code></td><td><code>1</code> = WAVE_FORMAT_PCM.</td></tr>
+        <tr><td><code>nChannels</code></td><td><code>WORD</code></td><td>1 = mono, 2 = stereo.</td></tr>
+        <tr><td><code>nSamplesPerSec</code></td><td><code>DWORD</code></td><td>Sample rate in Hz.</td></tr>
+        <tr><td><code>nAvgBytesPerSec</code></td><td><code>DWORD</code></td><td><code>nSamplesPerSec × nBlockAlign</code>.</td></tr>
+        <tr><td><code>nBlockAlign</code></td><td><code>WORD</code></td><td><code>nChannels × (wBitsPerSample / 8)</code>.</td></tr>
+        <tr><td><code>wBitsPerSample</code></td><td><code>WORD</code></td><td>Bits per sample. <strong>At offset 16 on LP64</strong>, not offset 14. Do not use this field path with free-direct.</td></tr>
+        <tr><td><code>cbSize</code></td><td><code>WORD</code></td><td>Extra data size appended after this struct. 0 for PCM.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="flags">Flag constants</h2>
+
+  <h3 id="DSBCAPS">DSBCAPS_* — buffer capability flags</h3>
+  <p>Passed in <code>DSBUFFERDESC.dwFlags</code> to <code>CreateSoundBuffer</code>.</p>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>DSBCAPS_PRIMARYBUFFER</code></td><td>0x00000001</td><td><span class="status-pill status-unsupported">No</span></td><td>Primary mixer output buffer. Not implemented.</td></tr>
+      <tr><td><code>DSBCAPS_STATIC</code></td><td>0x00000002</td><td><span class="status-pill status-implemented">Yes</span></td><td>Buffer loaded once, played many times. Accepted — all buffers are effectively static.</td></tr>
+      <tr><td><code>DSBCAPS_LOCHARDWARE</code></td><td>0x00000004</td><td><span class="status-pill status-partial">Treated as software</span></td><td>Force hardware mixing. No hardware mixing; silently treated as software.</td></tr>
+      <tr><td><code>DSBCAPS_LOCSOFTWARE</code></td><td>0x00000008</td><td><span class="status-pill status-implemented">Yes</span></td><td>Force software mixing. Default for all buffers.</td></tr>
+      <tr><td><code>DSBCAPS_CTRL3D</code></td><td>0x00000010</td><td><span class="status-pill status-unsupported">No</span></td><td>3D positional audio. Not implemented.</td></tr>
+      <tr><td><code>DSBCAPS_CTRLFREQUENCY</code></td><td>0x00000020</td><td><span class="status-pill status-unsupported">No-op</span></td><td>Frequency (pitch) control. Accepted but SetFrequency not implemented.</td></tr>
+      <tr><td><code>DSBCAPS_CTRLPAN</code></td><td>0x00000040</td><td><span class="status-pill status-partial">Stored only</span></td><td>Stereo pan control. SetPan stores the value but does not apply it.</td></tr>
+      <tr><td><code>DSBCAPS_CTRLVOLUME</code></td><td>0x00000080</td><td><span class="status-pill status-implemented">Yes</span></td><td>Volume control. SetVolume is fully functional via SDL_SetAudioStreamGain.</td></tr>
+      <tr><td><code>DSBCAPS_CTRLDEFAULT</code></td><td>0x000000E0</td><td><span class="status-pill status-partial">Partial</span></td><td>Combined CTRLFREQUENCY|CTRLPAN|CTRLVOLUME. Volume works; pan stored only; frequency no-op.</td></tr>
+      <tr><td><code>DSBCAPS_CTRLALL</code></td><td>0x000001F0</td><td><span class="status-pill status-partial">Partial</span></td><td>All controls. Only volume is functional.</td></tr>
+      <tr><td><code>DSBCAPS_STICKYFOCUS</code></td><td>0x00004000</td><td><span class="status-pill status-unsupported">No</span></td><td>Continue when app loses focus. SDL audio is always running; no special handling.</td></tr>
+      <tr><td><code>DSBCAPS_GLOBALFOCUS</code></td><td>0x00008000</td><td><span class="status-pill status-unsupported">No</span></td><td>Global audio focus. Not implemented.</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="DSBLOCK">DSBLOCK_* — lock flags</h3>
+  <p>Passed as <code>dwFlags</code> to <code>IDirectSoundBuffer::Lock</code>.</p>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DSBLOCK_FROMWRITECURSOR</code></td><td>0x00000001</td>
+        <td><span class="status-pill status-implemented">Yes</span></td>
+        <td>Ignore <code>dwWriteCursor</code> and lock from the current write cursor (always 0 in free-direct — the buffer is always fully lockable from offset 0).</td>
+      </tr>
+      <tr>
+        <td><code>DSBLOCK_ENTIREBUFFER</code></td><td>0x00000002</td>
+        <td><span class="status-pill status-implemented">Yes</span></td>
+        <td>Lock the entire buffer. Overrides <code>dwWriteBytes</code>; equivalent to passing <code>dwBufferBytes</code> as the size.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="DSBSTATUS">DSBSTATUS_* — status flags</h3>
+  <p>Returned by <code>IDirectSoundBuffer::GetStatus</code>.</p>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DSBSTATUS_PLAYING</code></td><td>0x00000001</td>
+        <td><span class="status-pill status-partial">Partial</span></td>
+        <td>Buffer is playing. Set by Play(); cleared by Stop(). Does not auto-clear on stream end.</td>
+      </tr>
+      <tr>
+        <td><code>DSBSTATUS_BUFFERLOST</code></td><td>0x00000002</td>
+        <td><span class="status-pill status-unsupported">Never set</span></td>
+        <td>Buffer memory lost. CPU-side buffers never become lost.</td>
+      </tr>
+      <tr>
+        <td><code>DSBSTATUS_LOOPING</code></td><td>0x00000004</td>
+        <td><span class="status-pill status-unsupported">Never set</span></td>
+        <td>Buffer looping. Looping not implemented; never returned.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="DSSCL">DSSCL_* — cooperative level values</h3>
+  <p>Passed to <code>IDirectSound::SetCooperativeLevel</code>.</p>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>DSSCL_NORMAL</code></td><td>0x00000001</td><td><span class="status-pill status-implemented">Yes</span></td><td>Normal shared access. The only level that has semantic meaning in free-direct (SDL audio is always shared).</td></tr>
+      <tr><td><code>DSSCL_PRIORITY</code></td><td>0x00000002</td><td><span class="status-pill status-partial">Accepted</span></td><td>Priority access. Accepted without error; treated as DSSCL_NORMAL.</td></tr>
+      <tr><td><code>DSSCL_EXCLUSIVE</code></td><td>0x00000003</td><td><span class="status-pill status-partial">Accepted</span></td><td>Exclusive access. Accepted; no exclusive device ownership occurs.</td></tr>
+      <tr><td><code>DSSCL_WRITEPRIMARY</code></td><td>0x00000004</td><td><span class="status-pill status-unsupported">No</span></td><td>Write to primary buffer. Primary buffers not implemented.</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="DSBPLAY">DSBPLAY_* — play flags</h3>
+  <p>Passed as <code>dwFlags</code> to <code>IDirectSoundBuffer::Play</code>.</p>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DSBPLAY_LOOPING</code></td><td>0x00000001</td>
+        <td><span class="status-pill status-partial">Accepted, not functional</span></td>
+        <td>Loop playback continuously. Accepted without error but buffer plays only once. Re-call Play() to simulate looping.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="result-codes">Result codes</h2>
+
+  <h3>Success</h3>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>DS_OK</code></td><td>0x00000000</td><td>Operation succeeded. Equivalent to <code>S_OK</code>.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Error codes actively returned</h3>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Returned by</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DSERR_INVALIDPARAM</code></td><td>0x80070057</td>
+        <td>DirectSoundCreate, CreateSoundBuffer, Lock, GetStatus</td>
+        <td>A required pointer is <code>nullptr</code>, or a required field is zero or invalid.</td>
+      </tr>
+      <tr>
+        <td><code>DSERR_OUTOFMEMORY</code></td><td>0x80070008</td>
+        <td>CreateSoundBuffer</td>
+        <td>Memory allocation for the buffer failed.</td>
+      </tr>
+      <tr>
+        <td><code>DSERR_INVALIDCALL</code></td><td>0x88780032</td>
+        <td>Lock, Play</td>
+        <td>Lock: region exceeds buffer size. Play: SDL audio device could not be opened.</td>
+      </tr>
+      <tr>
+        <td><code>DSERR_GENERIC</code></td><td>0x88780081</td>
+        <td>Play</td>
+        <td>SDL_AudioStream creation or binding to device failed.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Compile-compatibility constants (defined, not returned)</h3>
+  <p>These constants are defined in <code>dsound.h</code> to allow legacy code to compile. free-direct never returns them.</p>
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th></tr></thead>
+    <tbody>
+      <tr><td><code>DSERR_ALLOCATED</code></td><td>0x8878000A</td></tr>
+      <tr><td><code>DSERR_CONTROLUNAVAIL</code></td><td>0x8878001E</td></tr>
+      <tr><td><code>DSERR_BADFORMAT</code></td><td>0x88780064</td></tr>
+      <tr><td><code>DSERR_NODRIVER</code></td><td>0x88780078</td></tr>
+      <tr><td><code>DSERR_OTHERAPP</code></td><td>0x88780082</td></tr>
+      <tr><td><code>DSERR_BUFFERLOST</code></td><td>0x88780096</td></tr>
+      <tr><td><code>DSERR_UNINITIALIZED</code></td><td>0x888700AA</td></tr>
+      <tr><td><code>DSERR_UNSUPPORTED</code></td><td>0x80004001</td></tr>
+      <tr><td><code>DSERR_PRIOLEVELNEEDED</code></td><td>0x88780046</td></tr>
+    </tbody>
+  </table>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <h2 id="limitations">Known limitations</h2>
+
+  <table>
+    <thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>DSBPLAY_LOOPING</td><td><span class="status-pill status-unsupported">Not functional</span></td><td>Flag accepted; plays once. Re-call Play() to loop.</td></tr>
+      <tr><td>Stereo panning (SetPan)</td><td><span class="status-pill status-partial">Stored only</span></td><td>Gains computed but voided; all audio plays at center.</td></tr>
+      <tr><td>Frequency shifting</td><td><span class="status-pill status-unsupported">Not implemented</span></td><td>No SetFrequency; DSBCAPS_CTRLFREQUENCY is a no-op.</td></tr>
+      <tr><td>3D positional audio</td><td><span class="status-pill status-unsupported">Not implemented</span></td><td>No IDirectSound3DBuffer or IDirectSound3DListener.</td></tr>
+      <tr><td>Primary buffer</td><td><span class="status-pill status-unsupported">Not implemented</span></td><td>DSBCAPS_PRIMARYBUFFER is not supported.</td></tr>
+      <tr><td>GetStatus completion detection</td><td><span class="status-pill status-partial">Incomplete</span></td><td>DSBSTATUS_PLAYING does not auto-clear on stream end.</td></tr>
+      <tr><td>GetCurrentPosition</td><td><span class="status-pill status-stub">Stub</span></td><td>Always returns 0 for both cursors.</td></tr>
+      <tr><td>SetCurrentPosition</td><td><span class="status-pill status-partial">Stored only</span></td><td>Value stored; not applied to an active SDL stream.</td></tr>
+      <tr><td>Multiple simultaneous buffers</td><td><span class="status-pill status-implemented">Supported</span></td><td>Each buffer has its own SDL_AudioStream; SDL mixes at device level.</td></tr>
+      <tr><td>Mixed sample rates</td><td><span class="status-pill status-implemented">Supported</span></td><td>SDL resamples each stream independently to the device rate.</td></tr>
+      <tr><td>8-bit PCM</td><td><span class="status-pill status-implemented">Supported</span></td><td>SDL_AUDIO_U8 format is passed through correctly.</td></tr>
+      <tr><td>16-bit PCM</td><td><span class="status-pill status-implemented">Supported</span></td><td>SDL_AUDIO_S16LE format is passed through correctly.</td></tr>
+      <tr><td>Hardware acceleration</td><td><span class="status-pill status-unsupported">Not available</span></td><td>All mixing is in SDL software; no hardware voice management.</td></tr>
+      <tr><td>EAX / DSP effects</td><td><span class="status-pill status-unsupported">Not implemented</span></td><td>No DirectSound effects processing of any kind.</td></tr>
+      <tr><td>WAVEFORMATEX as lpwfxFormat</td><td><span class="status-pill status-unsupported">Do not use</span></td><td>LP64 padding places wBitsPerSample at offset 16 instead of 14; free-direct reads offset 14. Always use PCMWAVEFORMAT.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-tip">
+    <div class="callout-label">How to implement looping</div>
+    <p>
+      Since <code>DSBPLAY_LOOPING</code> is not functional, the recommended workaround
+      is to monitor playback from within the game loop and re-play the buffer.
+      A simple wrapper class that tracks elapsed time vs. buffer duration and calls
+      <code>Play()</code> again when needed is the cleanest approach.
+      See <a href="developer-notes.html">Developer Notes</a> for an implementation sketch.
+    </p>
+  </div>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>

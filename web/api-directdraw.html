@@ -1,0 +1,1817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DirectDraw API — free-direct</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="site-wrapper">
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="index.html">
+      <span class="project-name">free-direct</span>
+      <span class="project-sub">DirectX 3 subset for SDL3</span>
+    </a>
+  </div>
+  <nav>
+    <div class="nav-section-label">Getting Started</div>
+    <a href="index.html">Home</a>
+    <a href="overview.html">Project Overview</a>
+    <a href="integration.html">Integration Guide</a>
+
+    <div class="nav-section-label">Reference</div>
+    <a href="api-directdraw.html">DirectDraw API</a>
+    <a href="api-directsound.html">DirectSound API</a>
+    <a href="api-directplay.html">DirectPlay API</a>
+    <a href="compatibility.html">Compatibility Table</a>
+
+    <div class="nav-section-label">Guides</div>
+    <a href="examples.html">Code Examples</a>
+    <a href="migration.html">Migration Guide</a>
+    <a href="developer-notes.html">Developer Notes</a>
+  </nav>
+</aside>
+
+<main class="main-content">
+<div class="content-body">
+
+  <div class="page-header">
+    <div class="breadcrumb"><a href="index.html">free-direct</a> / DirectDraw API</div>
+    <h1>DirectDraw API Reference</h1>
+    <p>
+      Complete documentation of all interfaces, methods, structs, flags, and result codes
+      declared in <code>include/ddraw.h</code>. Based directly on the source code in
+      <code>src/directdraw/DirectDraw.cpp</code>.
+    </p>
+  </div>
+
+  <div class="callout callout-note">
+    <div class="callout-label">Status notation</div>
+    <p>
+      Each entry carries one of:
+      <span class="status status-implemented">Implemented</span> — works as expected,
+      <span class="status status-partial">Partial</span> — works for the common case with documented gaps,
+      <span class="status status-stub">Stub</span> — compiles, returns success, performs no real work,
+      <span class="status status-unsupported">Not supported</span> — absent or always errors.
+    </p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       TOC
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2>Contents</h2>
+  <ul>
+    <li><a href="#global-function">Global function — DirectDrawCreate</a></li>
+    <li><a href="#idirectdraw">IDirectDraw interface</a></li>
+    <li><a href="#idirectdrawsurface">IDirectDrawSurface interface</a></li>
+    <li><a href="#idirectdrawpalette">IDirectDrawPalette interface</a></li>
+    <li><a href="#idirectdrawclipper">IDirectDrawClipper interface</a></li>
+    <li><a href="#structs">Structs and types</a>
+      <ul>
+        <li><a href="#ddsurfacedesc">DDSURFACEDESC</a></li>
+        <li><a href="#ddpixelformat">DDPIXELFORMAT</a></li>
+        <li><a href="#ddcolorkey">DDCOLORKEY</a></li>
+        <li><a href="#ddscaps">DDSCAPS</a></li>
+        <li><a href="#ddbltfx">DDBLTFX</a></li>
+        <li><a href="#paletteentry">PALETTEENTRY</a></li>
+      </ul>
+    </li>
+    <li><a href="#flags">Flags reference</a>
+      <ul>
+        <li><a href="#ddscaps-flags">DDSCAPS_* surface capability flags</a></li>
+        <li><a href="#ddsd-flags">DDSD_* surface description flags</a></li>
+        <li><a href="#ddblt-flags">DDBLT_* blit flags</a></li>
+        <li><a href="#ddbltfast-flags">DDBLTFAST_* fast-blit flags</a></li>
+        <li><a href="#ddckey-flags">DDCKEY_* color key flags</a></li>
+        <li><a href="#ddscl-flags">DDSCL_* cooperative level flags</a></li>
+        <li><a href="#ddpcaps-flags">DDPCAPS_* palette capability flags</a></li>
+        <li><a href="#ddpf-flags">DDPF_* pixel format flags</a></li>
+      </ul>
+    </li>
+    <li><a href="#result-codes">Result codes</a></li>
+    <li><a href="#typedefs">Pointer typedefs</a></li>
+  </ul>
+
+  <hr>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       GLOBAL FUNCTION
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="global-function">Global function</h2>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">DirectDrawCreate</span>
+      <span class="api-entry-kind">function</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI DirectDrawCreate(
+    const GUID* lpGUID,
+    LPDIRECTDRAW* lplpDD,
+    IUnknown*     pUnkOuter
+);</code></pre>
+      <p>
+        Creates a new DirectDraw device object backed by an SDL3 renderer.
+        This is the entry point for all DirectDraw usage.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpGUID</code></td><td><code>const GUID*</code></td><td>in</td>
+            <td>
+              <strong>Ignored.</strong> In the original API this selects a specific DirectDraw
+              driver (NULL = primary display driver, a specific GUID = a secondary adapter).
+              free-direct always creates one SDL-backed instance regardless of this value.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lplpDD</code></td><td><code>LPDIRECTDRAW*</code></td><td>out</td>
+            <td>
+              Receives the pointer to the newly created <code>IDirectDraw</code> object.
+              Must not be NULL. The returned object has an initial reference count of 1.
+              Caller must call <code>Release()</code> when done.
+            </td>
+          </tr>
+          <tr>
+            <td><code>pUnkOuter</code></td><td><code>IUnknown*</code></td><td>in</td>
+            <td>
+              Must be NULL. COM aggregation is not supported. Passing a non-NULL value
+              returns <code>DDERR_INVALIDPARAMS</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Object created successfully.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lplpDD</code> is NULL, or <code>pUnkOuter</code> is non-NULL.</td></tr>
+        <tr><td><code>DDERR_OUTOFMEMORY</code></td><td>Heap allocation for the internal object failed.</td></tr>
+      </table></div>
+
+      <h4>Ownership and lifetime</h4>
+      <p>
+        Caller owns the returned object. Call <code>Release()</code> exactly once when done.
+        All surfaces, palettes, and clippers created through this object hold their own
+        references and are independent.
+      </p>
+
+      <h4>Behavioral difference from original DirectX 3</h4>
+      <p>
+        The original function consults the DirectDraw driver registry and can fail if no
+        display driver is installed. free-direct always succeeds on any SDL3-capable platform.
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       IDirectDraw
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="idirectdraw">IDirectDraw interface</h2>
+  <p>
+    Returned by <code>DirectDrawCreate</code>. Provides top-level device operations:
+    cooperative level, display mode, and object factories for surfaces, palettes, and clippers.
+  </p>
+  <pre><code>typedef struct IDirectDraw* LPDIRECTDRAW;</code></pre>
+
+  <!-- AddRef / Release -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::AddRef</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>ULONG WINAPI AddRef();</code></pre>
+      <p>Increments the internal reference count by 1. Returns the new count.</p>
+      <p>Thread-safe: uses <code>std::atomic&lt;ULONG&gt;</code> internally.</p>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::Release</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>ULONG WINAPI Release();</code></pre>
+      <p>
+        Decrements the reference count by 1 and returns the new count.
+        When the count reaches 0, the object is destroyed:
+      </p>
+      <ul>
+        <li>The SDL renderer is destroyed (<code>SDL_DestroyRenderer</code>).</li>
+        <li>The window is restored from fullscreen via <code>FreeApiSetWindowFullscreen(false)</code>.</li>
+        <li>The SDL window handle is released (but not destroyed — the window belongs to the caller).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- QueryInterface -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::QueryInterface</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-stub">Stub</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI QueryInterface(const GUID&amp; riid, void** ppvObject);</code></pre>
+      <p>
+        Always returns <code>DDERR_UNSUPPORTED</code>. COM interface promotion (e.g. to
+        <code>IDirectDraw2</code>, <code>IDirectDraw4</code>) is not implemented.
+      </p>
+    </div>
+  </div>
+
+  <!-- SetCooperativeLevel -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::SetCooperativeLevel</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetCooperativeLevel(HWND hWnd, DWORD dwFlags);</code></pre>
+      <p>
+        Associates the DirectDraw object with a window, creates the SDL renderer
+        for that window, and optionally requests fullscreen mode.
+        <strong>Must be called before any surfaces are created.</strong>
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>hWnd</code></td><td><code>HWND</code></td><td>in</td>
+            <td>
+              Handle to the application window. free-api uses SDL windows internally;
+              the HWND is a reinterpret-cast of <code>SDL_Window*</code>.
+              Must not be NULL — returns <code>DDERR_INVALIDPARAMS</code> if NULL.
+            </td>
+          </tr>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Cooperative level flags. See <a href="#ddscl-flags">DDSCL_* flags</a> below.
+              The combination actually determines windowed vs. fullscreen behavior.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>What happens internally</h4>
+      <ol>
+        <li>Stores <code>hWnd</code> and casts it to <code>SDL_Window*</code>.</li>
+        <li>If <code>DDSCL_FULLSCREEN</code>: calls <code>FreeApiSetWindowFullscreen(true)</code>.</li>
+        <li>If <code>DDSCL_NORMAL</code>: calls <code>FreeApiSetWindowFullscreen(false)</code>.</li>
+        <li>Destroys any pre-existing renderer attached to the window (legacy re-init pattern).</li>
+        <li>Calls <code>SDL_CreateRenderer(sdlWindow, NULL)</code> to create a hardware-accelerated renderer.</li>
+        <li>If the default renderer fails, falls back to <code>SDL_CreateRenderer(sdlWindow, "software")</code>.</li>
+        <li>Enables VSync via <code>SDL_SetRenderVSync(renderer, 1)</code> unless <code>FREE_DIRECT_ENABLE_VSYNC=0</code>.</li>
+      </ol>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Renderer created successfully.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>hWnd</code> is NULL.</td></tr>
+        <tr><td><code>DDERR_GENERIC</code></td><td>Both default and software renderer creation failed.</td></tr>
+      </table></div>
+
+      <h4>Limitations vs. original DirectX 3</h4>
+      <ul>
+        <li>Does not acquire exclusive hardware access.</li>
+        <li><code>DDSCL_EXCLUSIVE</code> is accepted but provides no additional privilege.</li>
+        <li>Multiple calls on the same object destroy and recreate the renderer.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- SetDisplayMode -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::SetDisplayMode</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetDisplayMode(DWORD dwWidth, DWORD dwHeight, DWORD dwBPP);</code></pre>
+      <p>
+        Stores the game's <em>logical</em> rendering resolution and requests fullscreen mode.
+        Does <strong>not</strong> change the physical display resolution.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwWidth</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Logical width in pixels (e.g. 640). Stored internally as
+              <code>displayModeWidth_</code> and used as the primary surface width
+              when <code>CreateSurface</code> is subsequently called with
+              <code>DDSCAPS_PRIMARYSURFACE</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>dwHeight</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Logical height in pixels (e.g. 480). Stored as <code>displayModeHeight_</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>dwBPP</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Bits per pixel requested (e.g. 8, 16, 32). <strong>Stored but not used</strong>
+              by the current implementation. Primary surface BPP is always determined by the
+              <code>DDPIXELFORMAT</code> field in <code>CreateSurface</code>, or defaults to
+              32-bit when none is provided.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Side effect</h4>
+      <p>
+        Calls <code>FreeApiSetWindowFullscreen(hwnd_, true)</code> if a window has already
+        been associated via <code>SetCooperativeLevel</code>.
+        SDL3's logical presentation (letterbox scaling) is applied at first present.
+      </p>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Always returned (values are stored unconditionally).</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- CreateSurface -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::CreateSurface</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI CreateSurface(
+    const DDSURFACEDESC*  lpDDSurfaceDesc,
+    LPDIRECTDRAWSURFACE*  lplpDDSurface,
+    IUnknown*             pUnkOuter
+);</code></pre>
+      <p>
+        Creates a DirectDraw surface object. Allocates a CPU pixel buffer immediately.
+        The exact type and dimensions depend on the descriptor.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDDSurfaceDesc</code></td><td><code>const DDSURFACEDESC*</code></td><td>in</td>
+            <td>
+              Pointer to a filled <a href="#ddsurfacedesc">DDSURFACEDESC</a> structure.
+              <code>dwSize</code> must equal <code>sizeof(DDSURFACEDESC)</code>.
+              Must not be NULL.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lplpDDSurface</code></td><td><code>LPDIRECTDRAWSURFACE*</code></td><td>out</td>
+            <td>
+              Receives the new surface pointer. Must not be NULL.
+              The returned object has an initial reference count of 1.
+            </td>
+          </tr>
+          <tr>
+            <td><code>pUnkOuter</code></td><td><code>IUnknown*</code></td><td>in</td>
+            <td>Must be NULL. Returns <code>DDERR_INVALIDPARAMS</code> if non-NULL.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Supported surface types (determined by ddsCaps.dwCaps)</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Cap flag</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>DDSCAPS_PRIMARYSURFACE</code></td>
+            <td>
+              Creates the primary surface. Dimensions: uses <code>displayModeWidth_</code> ×
+              <code>displayModeHeight_</code> if <code>SetDisplayMode</code> was called,
+              otherwise defaults to 640 × 480. BPP: 32-bit (unless the descriptor sets
+              <code>DDPF_PALETTEINDEXED8</code>). The descriptor's <code>dwWidth</code>/
+              <code>dwHeight</code> fields are ignored for the primary surface.
+              Cannot be combined with any offscreen cap.
+            </td>
+          </tr>
+          <tr>
+            <td><code>DDSCAPS_OFFSCREENPLAIN</code></td>
+            <td>
+              Creates an offscreen surface. Requires <code>DDSD_WIDTH | DDSD_HEIGHT</code>
+              in <code>dwFlags</code>. BPP comes from <code>ddpfPixelFormat.dwRGBBitCount</code>
+              if <code>DDSD_PIXELFORMAT</code> is set, otherwise defaults to 32.
+              Only 8 and 32 are accepted; any other value is promoted to 32.
+            </td>
+          </tr>
+          <tr>
+            <td><code>DDSCAPS_SYSTEMMEMORY</code></td>
+            <td>
+              Treated identically to <code>DDSCAPS_OFFSCREENPLAIN</code>.
+              Used by legacy code to explicitly request a CPU-side surface.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Surface created.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td>NULL pointer, wrong <code>dwSize</code>, invalid cap combination, or missing width/height for offscreen.</td></tr>
+        <tr><td><code>DDERR_OUTOFMEMORY</code></td><td>Pixel buffer allocation failed.</td></tr>
+      </table></div>
+
+      <h4>Pixel buffer layout after creation</h4>
+      <ul>
+        <li>8-bit: <code>width × height</code> bytes, one byte per pixel = palette index.</li>
+        <li>32-bit: <code>width × height × 4</code> bytes, four bytes per pixel in R,G,B,A order.</li>
+        <li>All pixels initialized to 0.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- CreatePalette -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::CreatePalette</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI CreatePalette(
+    DWORD                dwFlags,
+    LPPALETTEENTRY       lpColorTable,
+    LPDIRECTDRAWPALETTE* lplpDDPalette,
+    IUnknown*            pUnkOuter
+);</code></pre>
+      <p>Creates a palette object holding up to 256 color entries.</p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Capability flags. <code>DDPCAPS_8BIT</code> (0x4) is the expected value for
+              256-entry 8-bit palettes. The flag is stored but not further interpreted;
+              all palettes are always 256 entries.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lpColorTable</code></td><td><code>LPPALETTEENTRY</code></td><td>in</td>
+            <td>
+              Pointer to an array of 256 <a href="#paletteentry">PALETTEENTRY</a> values.
+              If NULL, all 256 entries are initialized to <code>{0,0,0,0}</code> (black, opaque).
+            </td>
+          </tr>
+          <tr>
+            <td><code>lplpDDPalette</code></td><td><code>LPDIRECTDRAWPALETTE*</code></td><td>out</td>
+            <td>
+              Receives the new palette pointer. Must not be NULL.
+              Initial reference count is 1.
+            </td>
+          </tr>
+          <tr>
+            <td><code>pUnkOuter</code></td><td><code>IUnknown*</code></td><td>in</td>
+            <td>Must be NULL.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Palette created.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lplpDDPalette</code> is NULL or <code>pUnkOuter</code> is non-NULL.</td></tr>
+        <tr><td><code>DDERR_OUTOFMEMORY</code></td><td>Allocation failed.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- CreateClipper -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDraw::CreateClipper</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI CreateClipper(
+    DWORD                 dwFlags,
+    LPDIRECTDRAWCLIPPER*  lplpDDClipper,
+    IUnknown*             pUnkOuter
+);</code></pre>
+      <p>
+        Creates a clipper object. In free-direct the clipper's main function is to
+        signal that a surface is operating in windowed mode, enabling automatic
+        screen-to-client coordinate translation during <code>Blt</code> calls on the primary surface.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Ignored. Pass 0.</td>
+          </tr>
+          <tr>
+            <td><code>lplpDDClipper</code></td><td><code>LPDIRECTDRAWCLIPPER*</code></td><td>out</td>
+            <td>Receives the new clipper pointer. Initial reference count is 1.</td>
+          </tr>
+          <tr>
+            <td><code>pUnkOuter</code></td><td><code>IUnknown*</code></td><td>in</td>
+            <td>Must be NULL.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Clipper created.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lplpDDClipper</code> is NULL or <code>pUnkOuter</code> non-NULL.</td></tr>
+        <tr><td><code>DDERR_OUTOFMEMORY</code></td><td>Allocation failed.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       IDirectDrawSurface
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="idirectdrawsurface">IDirectDrawSurface interface</h2>
+  <p>
+    The main rendering surface. Obtained via <code>IDirectDraw::CreateSurface</code>.
+    Represents either the primary surface (what is displayed) or an offscreen surface
+    (used as a back buffer, sprite sheet, or scratch space).
+  </p>
+  <pre><code>typedef struct IDirectDrawSurface* LPDIRECTDRAWSURFACE;</code></pre>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::AddRef / Release</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>ULONG WINAPI AddRef();
+ULONG WINAPI Release();</code></pre>
+      <p>
+        Standard reference counting. When <code>Release()</code> reaches 0:
+      </p>
+      <ul>
+        <li>The SDL texture (if any) is destroyed via <code>SDL_DestroyTexture</code>.</li>
+        <li>The attached palette (if any) has its reference released.</li>
+        <li>The attached clipper (if any) has its reference released.</li>
+        <li>Any attached DC is destroyed via <code>FreeApiDestroySurfaceDC</code>.</li>
+        <li>The CPU pixel buffer (<code>std::vector&lt;uint8_t&gt;</code>) is freed.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::QueryInterface</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-stub">Stub</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI QueryInterface(const GUID&amp; riid, void** ppvObject);</code></pre>
+      <p>Always returns <code>DDERR_UNSUPPORTED</code>. Interface promotion not implemented.</p>
+    </div>
+  </div>
+
+  <!-- Blt -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::Blt</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI Blt(
+    LPRECT               lpDestRect,
+    LPDIRECTDRAWSURFACE  lpDDSrcSurface,
+    LPRECT               lpSrcRect,
+    DWORD                dwFlags,
+    LPDDBLTFX            lpDDBltFx
+);</code></pre>
+      <p>
+        General-purpose blit. Operates entirely in CPU memory. Two modes are supported:
+        color fill (when <code>DDBLT_COLORFILL</code> is set) and surface-to-surface copy
+        (when <code>lpDDSrcSurface</code> is non-NULL).
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDestRect</code></td><td><code>LPRECT</code></td><td>in</td>
+            <td>
+              Destination rectangle on <em>this</em> surface. If NULL, the entire surface is
+              the destination. Coordinates are clamped to surface bounds.
+              <br><br>
+              <strong>Windowed coordinate adjustment:</strong> when this surface is the
+              primary surface and has a clipper attached, the rectangle is adjusted from
+              screen coordinates to window-local coordinates by subtracting the SDL window
+              position (<code>SDL_GetWindowPosition</code>). This compensates for legacy game
+              code that converts client coords to screen coords before blitting.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lpDDSrcSurface</code></td><td><code>LPDIRECTDRAWSURFACE</code></td><td>in</td>
+            <td>
+              Source surface for surface-to-surface copy. Pass NULL when using
+              <code>DDBLT_COLORFILL</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lpSrcRect</code></td><td><code>LPRECT</code></td><td>in</td>
+            <td>
+              Source rectangle on <code>lpDDSrcSurface</code>. If NULL, the entire source
+              surface is used. Coordinates are clamped to source surface bounds.
+            </td>
+          </tr>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Bitmask of <a href="#ddblt-flags">DDBLT_*</a> flags controlling the blit mode.
+              The most important flags are:
+              <ul>
+                <li><code>DDBLT_COLORFILL</code> — fill destination with <code>lpDDBltFx-&gt;dwFillColor</code>.</li>
+                <li><code>DDBLT_KEYSRC</code> — apply source color key transparency.</li>
+                <li><code>DDBLT_WAIT</code> — accepted, no-op.</li>
+                <li><code>DDBLT_ROTATIONANGLE</code> — accepted, rotation NOT performed.</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td><code>lpDDBltFx</code></td><td><code>LPDDBLTFX</code></td><td>in</td>
+            <td>
+              Pointer to a <a href="#ddbltfx">DDBLTFX</a> structure providing effect parameters.
+              Required when <code>DDBLT_COLORFILL</code> is set (returns
+              <code>DDERR_INVALIDPARAMS</code> if NULL in that case).
+              Ignored for plain surface-to-surface blits.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Color fill mode (<code>DDBLT_COLORFILL</code>)</h4>
+      <p>Fills the destination rectangle with a solid color from <code>lpDDBltFx-&gt;dwFillColor</code>:</p>
+      <ul>
+        <li><strong>32-bit surfaces:</strong> <code>dwFillColor</code> = <code>0x00RRGGBB</code>.
+          Alpha byte is set to 255 (opaque).</li>
+        <li><strong>8-bit surfaces:</strong> the low byte of <code>dwFillColor</code> is used as
+          the palette index. The color key value 0 makes index 0 transparent in subsequent blits.</li>
+      </ul>
+
+      <h4>Surface-to-surface copy</h4>
+      <p>Copies pixels from the source surface rectangle to the destination rectangle:</p>
+      <ul>
+        <li>Nearest-neighbor scaling when source and destination rectangles have different sizes.</li>
+        <li>Only 8→8 and 32→32 bit depth combinations are handled.
+          Mixed depths (8→32 or 32→8) skip all pixels silently.</li>
+        <li>Source color key is applied when <code>DDBLT_KEYSRC</code> is set and
+          the source has a color key (see <code>SetColorKey</code>).</li>
+      </ul>
+
+      <h4>Auto-present behavior</h4>
+      <p>
+        If the destination is the primary surface, <code>owner-&gt;renderer_</code> is
+        non-NULL, and <code>Flip()</code> has never been called on the owning
+        <code>IDirectDraw</code> instance, <code>PresentPrimary</code> is called
+        automatically after a successful blit. This supports the Speedy Blupi pattern
+        of blitting directly to the primary without a separate Flip call.
+      </p>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Blit completed (or fill completed).</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td>COLORFILL without DDBLTFX, or source surface type mismatch.</td></tr>
+        <tr><td><code>DDERR_UNSUPPORTED</code></td><td>Unsupported flag combination (no source, no fill).</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- BltFast -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::BltFast</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI BltFast(
+    DWORD                dwX,
+    DWORD                dwY,
+    LPDIRECTDRAWSURFACE  lpDDSrcSurface,
+    LPRECT               lpSrcRect,
+    DWORD                dwTrans
+);</code></pre>
+      <p>
+        Fast surface-to-surface copy without scaling. Copies the source rectangle to
+        position <code>(dwX, dwY)</code> on this surface. The destination rectangle is
+        always the same size as the source rectangle.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwX</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>X coordinate of the top-left corner of the destination on this surface.</td>
+          </tr>
+          <tr>
+            <td><code>dwY</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Y coordinate of the top-left corner of the destination on this surface.</td>
+          </tr>
+          <tr>
+            <td><code>lpDDSrcSurface</code></td><td><code>LPDIRECTDRAWSURFACE</code></td><td>in</td>
+            <td>Source surface. Must not be NULL; returns <code>DDERR_INVALIDPARAMS</code> if NULL.</td>
+          </tr>
+          <tr>
+            <td><code>lpSrcRect</code></td><td><code>LPRECT</code></td><td>in</td>
+            <td>
+              Source rectangle. If NULL, the entire source surface is copied.
+              The destination area is computed as
+              <code>(dwX, dwY, dwX + srcWidth, dwY + srcHeight)</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>dwTrans</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Transparency flags. See <a href="#ddbltfast-flags">DDBLTFAST_*</a>:
+              <ul>
+                <li><code>DDBLTFAST_NOCOLORKEY</code> (0): copy all pixels including those matching the color key.</li>
+                <li><code>DDBLTFAST_SRCCOLORKEY</code> (1): skip pixels whose value falls within the source color key range.</li>
+              </ul>
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Copy completed.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lpDDSrcSurface</code> is NULL or type mismatch.</td></tr>
+      </table></div>
+
+      <p>Auto-present behavior is the same as <code>Blt</code>.</p>
+    </div>
+  </div>
+
+  <!-- Flip -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::Flip</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI Flip(
+    LPDIRECTDRAWSURFACE  lpDDSurfaceTargetOverride,
+    DWORD                dwFlags
+);</code></pre>
+      <p>
+        Presents the primary surface to the screen by uploading the CPU pixel buffer
+        to SDL and calling <code>SDL_RenderPresent</code>.
+        <strong>This is not a real DirectDraw page flip.</strong>
+        There is no flip chain; only the primary surface's CPU buffer is presented.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDDSurfaceTargetOverride</code></td><td><code>LPDIRECTDRAWSURFACE</code></td><td>in</td>
+            <td><strong>Ignored.</strong> In the original API this selects a specific surface from a flip chain.</td>
+          </tr>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td><strong>Ignored.</strong> In the original API controls flip timing (DDFLIP_WAIT etc.).</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Effect of calling Flip</h4>
+      <p>After the first call to <code>Flip()</code>:</p>
+      <ul>
+        <li><code>owner_-&gt;usesFlip_</code> is set to true.</li>
+        <li>Auto-present from <code>Blt</code> / <code>BltFast</code> is disabled.</li>
+        <li><code>Flip()</code> becomes the only way to update the screen.</li>
+      </ul>
+
+      <h4>Presentation pipeline (called internally)</h4>
+      <ol>
+        <li><strong>Frame throttle:</strong> if called within the frame interval (default 1000 ms / 60 = 16.67 ms) since the last present, returns <code>DD_OK</code> immediately.</li>
+        <li><strong>Dirty check:</strong> if the primary surface pixel buffer has not been written since the last present, skips upload and present.</li>
+        <li><strong>Palette expansion (8-bit only):</strong> expands all pixel indices to RGBA32 using the attached palette (or a default 3:3:2 palette if none is attached). Uses a cached <code>paletteConvertBuffer_</code> to avoid per-frame heap allocation.</li>
+        <li><strong>Texture upload:</strong> <code>SDL_UpdateTexture</code> uploads the pixel data to a cached streaming <code>SDL_Texture</code> (RGBA32, STREAMING access).</li>
+        <li><strong>Render clear:</strong> <code>SDL_RenderClear</code> with black.</li>
+        <li><strong>Logical presentation (once):</strong> <code>SDL_SetRenderLogicalPresentation(renderer, W, H, SDL_LOGICAL_PRESENTATION_LETTERBOX)</code> is called on the first present to set up letterbox scaling.</li>
+        <li><strong>Render:</strong> <code>SDL_RenderTexture(renderer, texture, NULL, NULL)</code>.</li>
+        <li><strong>Present:</strong> <code>SDL_RenderPresent</code> exactly once.</li>
+      </ol>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Present complete (or skipped due to throttle/dirty check).</td></tr>
+        <tr><td><code>DDERR_UNSUPPORTED</code></td><td>Called on a non-primary surface, or no renderer available.</td></tr>
+        <tr><td><code>DDERR_GENERIC</code></td><td>SDL texture creation failed.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- Lock -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::Lock</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI Lock(
+    LPRECT           lpDestRect,
+    LPDDSURFACEDESC  lpDDSurfaceDesc,
+    DWORD            dwFlags,
+    HANDLE           hEvent
+);</code></pre>
+      <p>
+        Provides direct CPU access to the surface's pixel buffer.
+        Returns a pointer to the pixel data via <code>lpDDSurfaceDesc-&gt;lpSurface</code>.
+        The lock is always immediately available — there is no GPU synchronization.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDestRect</code></td><td><code>LPRECT</code></td><td>in</td>
+            <td>
+              <strong>Accepted but ignored.</strong> In the original API, a partial lock
+              returns a pointer offset into the buffer. free-direct always returns a pointer
+              to the full buffer beginning regardless of <code>lpDestRect</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lpDDSurfaceDesc</code></td><td><code>LPDDSURFACEDESC</code></td><td>in/out</td>
+            <td>
+              Caller must fill <code>dwSize = sizeof(DDSURFACEDESC)</code> before calling.
+              On success, the following fields are filled:
+              <ul>
+                <li><code>dwFlags</code>: set to indicate valid fields.</li>
+                <li><code>dwWidth</code>, <code>dwHeight</code>: surface dimensions.</li>
+                <li><code>lPitch</code>: bytes per row = <code>width × (bpp / 8)</code>.</li>
+                <li><code>lpSurface</code>: pointer directly into the <code>std::vector&lt;uint8_t&gt;</code>.</li>
+                <li><code>ddsCaps.dwCaps</code>: <code>DDSCAPS_PRIMARYSURFACE</code> or <code>DDSCAPS_OFFSCREENPLAIN</code>.</li>
+                <li><code>ddpfPixelFormat</code>: bit count and format flags.</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              <strong>Ignored.</strong> In the original API: <code>DDLOCK_WAIT</code>,
+              <code>DDLOCK_READONLY</code>, <code>DDLOCK_WRITEONLY</code>.
+              free-direct always returns the buffer immediately.
+            </td>
+          </tr>
+          <tr>
+            <td><code>hEvent</code></td><td><code>HANDLE</code></td><td>in</td>
+            <td><strong>Ignored.</strong> Pass NULL.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Lock successful; <code>lpDDSurfaceDesc-&gt;lpSurface</code> is valid.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lpDDSurfaceDesc</code> is NULL or <code>dwSize</code> is wrong.</td></tr>
+      </table></div>
+
+      <div class="callout callout-warn">
+        <div class="callout-label">Dirty flag note</div>
+        <p>
+          Writing to the pixel buffer via the <code>lpSurface</code> pointer does <em>not</em>
+          automatically mark the primary surface dirty. After modifying pixels directly,
+          call a blit method (even a no-op blit) to trigger the dirty flag, or the changes
+          may not appear until the next frame that is dirty for another reason.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Unlock -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::Unlock</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI Unlock(LPVOID lpSurfaceData);</code></pre>
+      <p>
+        No-op. Always returns <code>DD_OK</code>. The <code>lpSurfaceData</code> parameter is
+        ignored. There is no hardware lock to release and the pixel buffer pointer remains valid.
+      </p>
+    </div>
+  </div>
+
+  <!-- GetSurfaceDesc -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::GetSurfaceDesc</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI GetSurfaceDesc(LPDDSURFACEDESC lpDDSurfaceDesc);</code></pre>
+      <p>
+        Fills a <code>DDSURFACEDESC</code> with the current surface properties.
+        Caller must set <code>dwSize = sizeof(DDSURFACEDESC)</code> before calling.
+        Returns the same information as <code>Lock</code> but without providing a pixel pointer
+        for primary surfaces.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDDSurfaceDesc</code></td><td><code>LPDDSURFACEDESC</code></td><td>out</td>
+            <td>
+              Must not be NULL. Must have <code>dwSize = sizeof(DDSURFACEDESC)</code>.
+              Fields filled: <code>dwFlags</code>, <code>dwWidth</code>, <code>dwHeight</code>,
+              <code>ddsCaps</code>, <code>ddpfPixelFormat</code>.
+              For offscreen surfaces: also <code>lPitch</code> and <code>lpSurface</code>.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Descriptor filled.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td>NULL pointer or wrong <code>dwSize</code>.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- SetColorKey -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::SetColorKey</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetColorKey(DWORD dwFlags, LPDDCOLORKEY lpDDColorKey);</code></pre>
+      <p>
+        Sets the color key for transparent blits from this surface.
+        Only source blit color keys are supported.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>
+              Must be <code>DDCKEY_SRCBLT</code> (0x8). Any other value returns
+              <code>DDERR_UNSUPPORTED</code>. Destination color keys and overlay color
+              keys are not implemented.
+            </td>
+          </tr>
+          <tr>
+            <td><code>lpDDColorKey</code></td><td><code>LPDDCOLORKEY</code></td><td>in</td>
+            <td>
+              Pointer to a <a href="#ddcolorkey">DDCOLORKEY</a> structure defining the
+              transparent range. If NULL, clears the color key (disables transparency).
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Color key comparison semantics</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Surface BPP</th><th>Comparison</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>8-bit</td>
+            <td>
+              The palette index byte is compared against
+              <code>dwColorSpaceLowValue</code> and <code>dwColorSpaceHighValue</code>.
+              Pixel is transparent if <code>index &gt;= low &amp;&amp; index &lt;= high</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>32-bit</td>
+            <td>
+              Two comparisons are performed:
+              <ol>
+                <li><em>Raw:</em> packed 4-byte pixel value vs. key range.</li>
+                <li><em>RGB-masked:</em> alpha byte zeroed in both pixel and key, then compared.</li>
+              </ol>
+              Pixel is transparent if <em>either</em> comparison matches.
+              This handles keys generated by the DDColorMatch pattern (GetDC/SetPixel/GetPixel).
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Color key stored.</td></tr>
+        <tr><td><code>DDERR_UNSUPPORTED</code></td><td><code>dwFlags</code> is not <code>DDCKEY_SRCBLT</code>.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- SetPalette -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::SetPalette</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetPalette(LPDIRECTDRAWPALETTE lpDDPalette);</code></pre>
+      <p>Associates a palette with this surface. Reference-counted.</p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDDPalette</code></td><td><code>LPDIRECTDRAWPALETTE</code></td><td>in</td>
+            <td>
+              The palette to attach. If non-NULL, <code>AddRef()</code> is called on it.
+              The previous palette (if any) has <code>Release()</code> called.
+              Pass NULL to detach the current palette.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Effect</h4>
+      <ul>
+        <li>On an 8-bit primary surface: the palette is used during <code>PresentPrimary</code>
+          to expand indices to RGBA32. If no palette is set, a default 3:3:2 palette is used.</li>
+        <li>On an 8-bit offscreen surface: the palette is used during <code>GetDC</code>
+          (expansion to RGBA32) and <code>ReleaseDC</code> (nearest-match quantization).</li>
+        <li>On 32-bit surfaces: the palette is stored but has no effect on rendering.</li>
+      </ul>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Always returned.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- SetClipper -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::SetClipper</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetClipper(LPDIRECTDRAWCLIPPER lpDDClipper);</code></pre>
+      <p>Associates a clipper with this surface. Reference-counted.</p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lpDDClipper</code></td><td><code>LPDIRECTDRAWCLIPPER</code></td><td>in</td>
+            <td>
+              Clipper to attach. If non-NULL, <code>AddRef()</code> is called.
+              Previous clipper is released. Pass NULL to detach.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Effect</h4>
+      <p>
+        The presence of a clipper on the primary surface activates windowed-mode
+        coordinate adjustment in <code>Blt</code>: destination rectangles expressed
+        in screen coordinates are translated to window-local coordinates by subtracting
+        the SDL window's position.
+      </p>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Always returned.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- IsLost / Restore -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::IsLost</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-stub">Stub</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI IsLost();</code></pre>
+      <p>
+        Always returns <code>DD_OK</code> (not lost).
+        Surfaces in free-direct are CPU-resident and never lose their content.
+        Legacy game code that polls <code>IsLost()</code> in a loop will not spin.
+      </p>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::Restore</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-stub">Stub</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI Restore();</code></pre>
+      <p>Always returns <code>DD_OK</code>. No restoration is needed.</p>
+    </div>
+  </div>
+
+  <!-- GetDC / ReleaseDC -->
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::GetDC</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI GetDC(HDC* lphDC);</code></pre>
+      <p>
+        Returns a GDI-compatible device context backed by the surface's pixel buffer.
+        Needed by the <em>DDColorMatch</em> pattern: <code>GetDC</code> → <code>SetPixel</code>
+        → <code>Lock</code> → read index back → <code>Unlock</code> → <code>ReleaseDC</code>.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>lphDC</code></td><td><code>HDC*</code></td><td>out</td>
+            <td>Receives the HDC. Must not be NULL.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Behavior by surface format</h4>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Format</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>32-bit</td>
+            <td>
+              DC is created directly over the CPU pixel buffer via
+              <code>FreeApiCreateSurfaceDC(pixels, w, h, pitch, 32)</code>.
+              Modifications are immediately visible in the pixel buffer.
+            </td>
+          </tr>
+          <tr>
+            <td>8-bit</td>
+            <td>
+              A temporary 32-bit RGBA buffer is allocated (<code>dcTempBuffer_</code>).
+              The 256 palette entries are read, then each pixel index is expanded to RGBA.
+              The DC is created over this temporary buffer.
+              See <code>ReleaseDC</code> for how changes are written back.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>DC returned in <code>*lphDC</code>.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lphDC</code> is NULL.</td></tr>
+        <tr><td><code>DDERR_UNSUPPORTED</code></td><td>Pixel buffer is empty.</td></tr>
+        <tr><td><code>DDERR_GENERIC</code></td><td>DC creation via free-api failed.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawSurface::ReleaseDC</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI ReleaseDC(HDC hDC);</code></pre>
+      <p>
+        Releases the device context returned by <code>GetDC</code>.
+        For 8-bit surfaces, converts the modified temporary RGBA buffer back to palette
+        indices using nearest-match squared-RGB distance for each pixel, then frees the
+        temporary buffer.
+        Destroys the DC so a fresh one is created on the next <code>GetDC</code> call.
+      </p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>hDC</code></td><td><code>HDC</code></td><td>in</td>
+            <td>Must be the HDC returned by the most recent <code>GetDC</code> on this surface.
+              Returns <code>DDERR_INVALIDPARAMS</code> if it does not match.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>DC released.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td>DC does not match the surface's attached DC.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       IDirectDrawPalette
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="idirectdrawpalette">IDirectDrawPalette interface</h2>
+  <p>
+    Holds a table of up to 256 <code>PALETTEENTRY</code> values.
+    Obtained via <code>IDirectDraw::CreatePalette</code> and attached to surfaces via
+    <code>IDirectDrawSurface::SetPalette</code>.
+  </p>
+  <pre><code>typedef struct IDirectDrawPalette* LPDIRECTDRAWPALETTE;</code></pre>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawPalette::AddRef / Release</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>ULONG WINAPI AddRef();
+ULONG WINAPI Release();</code></pre>
+      <p>
+        Standard reference counting. <code>Release()</code> to 0 frees the palette's
+        256-entry internal array.
+      </p>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawPalette::GetEntries</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI GetEntries(
+    DWORD           dwFlags,
+    DWORD           dwBase,
+    DWORD           dwNumEntries,
+    LPPALETTEENTRY  lpEntries
+);</code></pre>
+      <p>Reads a contiguous range of palette entries into the caller-provided array.</p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Ignored. Pass 0.</td>
+          </tr>
+          <tr>
+            <td><code>dwBase</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Index of the first entry to read (0–255).</td>
+          </tr>
+          <tr>
+            <td><code>dwNumEntries</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Number of entries to read. <code>dwBase + dwNumEntries</code> must be ≤ 256.</td>
+          </tr>
+          <tr>
+            <td><code>lpEntries</code></td><td><code>LPPALETTEENTRY</code></td><td>out</td>
+            <td>Caller-allocated array of at least <code>dwNumEntries</code> <a href="#paletteentry">PALETTEENTRY</a> structures.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Entries copied.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lpEntries</code> is NULL or range out of bounds.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawPalette::SetEntries</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetEntries(
+    DWORD           dwFlags,
+    DWORD           dwBase,
+    DWORD           dwNumEntries,
+    LPPALETTEENTRY  lpEntries
+);</code></pre>
+      <p>Writes a contiguous range of palette entries from the caller-provided array.</p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Ignored. Pass 0.</td>
+          </tr>
+          <tr>
+            <td><code>dwBase</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Index of the first entry to write (0–255).</td>
+          </tr>
+          <tr>
+            <td><code>dwNumEntries</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Number of entries to write. <code>dwBase + dwNumEntries</code> must be ≤ 256.</td>
+          </tr>
+          <tr>
+            <td><code>lpEntries</code></td><td><code>LPPALETTEENTRY</code></td><td>in</td>
+            <td>Array of <code>dwNumEntries</code> entries to copy into the palette.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Entries written.</td></tr>
+        <tr><td><code>DDERR_INVALIDPARAMS</code></td><td><code>lpEntries</code> is NULL or range out of bounds.</td></tr>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       IDirectDrawClipper
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="idirectdrawclipper">IDirectDrawClipper interface</h2>
+  <p>
+    Used in windowed mode to signal that blits to the primary surface should translate
+    screen coordinates to window-local coordinates. Obtained via
+    <code>IDirectDraw::CreateClipper</code>.
+  </p>
+  <pre><code>typedef struct IDirectDrawClipper* LPDIRECTDRAWCLIPPER;</code></pre>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawClipper::AddRef / Release</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-implemented">Implemented</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>ULONG WINAPI AddRef();
+ULONG WINAPI Release();</code></pre>
+      <p>Standard reference counting. <code>Release()</code> to 0 frees the clipper object.</p>
+    </div>
+  </div>
+
+  <div class="api-entry">
+    <div class="api-entry-header">
+      <span class="api-entry-name">IDirectDrawClipper::SetHWnd</span>
+      <span class="api-entry-kind">method</span>
+      <span class="status status-partial">Partial</span>
+    </div>
+    <div class="api-entry-body">
+      <pre><code>HRESULT WINAPI SetHWnd(DWORD dwFlags, HWND hWnd);</code></pre>
+      <p>Stores the HWND associated with this clipper.</p>
+
+      <h4>Parameters</h4>
+      <div class="table-wrap"><table class="param-table">
+        <thead><tr><th>Parameter</th><th>Type</th><th>Direction</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>dwFlags</code></td><td><code>DWORD</code></td><td>in</td>
+            <td>Ignored. Pass 0.</td>
+          </tr>
+          <tr>
+            <td><code>hWnd</code></td><td><code>HWND</code></td><td>in</td>
+            <td>
+              The window handle to associate. Stored internally as <code>hwnd_</code>.
+              Not actively used for clip region management — only its presence on a surface
+              matters for coordinate translation.
+            </td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <h4>Return values</h4>
+      <div class="table-wrap"><table>
+        <tr><td><code>DD_OK</code></td><td>Always returned.</td></tr>
+      </table></div>
+
+      <h4>Limitation vs. original DirectX 3</h4>
+      <p>
+        In original DirectDraw, the clipper maintains a clip list (RGNDATA) based on the
+        visible region of the HWND. free-direct does not maintain clip regions;
+        it only uses the window position for coordinate translation.
+      </p>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       STRUCTS
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="structs">Structs and types</h2>
+
+  <!-- DDSURFACEDESC -->
+  <h3 id="ddsurfacedesc">DDSURFACEDESC</h3>
+  <pre><code>typedef struct _DDSURFACEDESC {
+    DWORD        dwSize;              // [in] Must be sizeof(DDSURFACEDESC)
+    DWORD        dwFlags;             // [in] Bitmask of DDSD_* flags indicating which fields are valid
+    DWORD        dwHeight;            // [in/out] Surface height in pixels
+    DWORD        dwWidth;             // [in/out] Surface width in pixels
+    union {
+        LONG     lPitch;              // [out] Bytes per scan line (stride)
+        DWORD    dwLinearSize;        // Not used by free-direct
+    };
+    DWORD        dwBackBufferCount;   // Not used by free-direct
+    union {
+        DWORD    dwMipMapCount;       // Not used
+        DWORD    dwZBufferBitDepth;   // Not used
+        DWORD    dwRefreshRate;       // Not used
+    };
+    DWORD        dwAlphaBitDepth;     // Not used
+    DWORD        dwReserved;          // Reserved, always 0
+    LPVOID       lpSurface;           // [out] Pointer to pixel buffer (set by Lock/GetSurfaceDesc)
+    DDCOLORKEY   ddckCKDestOverlay;   // Not used by free-direct
+    DDCOLORKEY   ddckCKDestBlt;       // Not used by free-direct
+    DDCOLORKEY   ddckCKSrcOverlay;    // Not used by free-direct
+    DDCOLORKEY   ddckCKSrcBlt;        // Not used by free-direct
+    DDPIXELFORMAT ddpfPixelFormat;    // [in] Pixel format for CreateSurface; [out] in Lock/GetSurfaceDesc
+    DDSCAPS      ddsCaps;             // [in] Surface capability flags (DDSCAPS_*)
+} DDSURFACEDESC, *LPDDSURFACEDESC;</code></pre>
+
+  <p>Used as input to <code>CreateSurface</code> and as output from <code>Lock</code> and <code>GetSurfaceDesc</code>.</p>
+
+  <h4>Field notes</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Usage context</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>dwSize</code></td><td>All calls</td><td>Must equal <code>sizeof(DDSURFACEDESC)</code> or the call fails.</td></tr>
+      <tr><td><code>dwFlags</code></td><td>CreateSurface (in)</td><td>Bitmask of <code>DDSD_*</code> flags indicating which other fields contain valid input.</td></tr>
+      <tr><td><code>dwHeight</code></td><td>CreateSurface (in), Lock/GetSurfaceDesc (out)</td><td>Surface height in pixels. Required for offscreen surfaces (<code>DDSD_HEIGHT</code> must be set).</td></tr>
+      <tr><td><code>dwWidth</code></td><td>CreateSurface (in), Lock/GetSurfaceDesc (out)</td><td>Surface width in pixels. Required for offscreen surfaces (<code>DDSD_WIDTH</code> must be set).</td></tr>
+      <tr><td><code>lPitch</code></td><td>Lock/GetSurfaceDesc (out)</td><td>Bytes per row = <code>width × (bpp / 8)</code>. Use this value (not <code>width × 4</code>) to step between rows when accessing <code>lpSurface</code>.</td></tr>
+      <tr><td><code>lpSurface</code></td><td>Lock/GetSurfaceDesc (out)</td><td>Direct pointer into the <code>std::vector&lt;uint8_t&gt;</code>. Valid until the surface is destroyed. For primary surfaces, only set by Lock, not by GetSurfaceDesc.</td></tr>
+      <tr><td><code>ddpfPixelFormat</code></td><td>CreateSurface (in), Lock/GetSurfaceDesc (out)</td><td>Pixel format description. Required with <code>DDSD_PIXELFORMAT</code> flag to select 8-bit vs 32-bit in CreateSurface.</td></tr>
+      <tr><td><code>ddsCaps</code></td><td>CreateSurface (in), GetSurfaceDesc (out)</td><td>Capability flags. The <code>dwCaps</code> member selects the surface type.</td></tr>
+    </tbody>
+  </table></div>
+
+  <!-- DDPIXELFORMAT -->
+  <h3 id="ddpixelformat">DDPIXELFORMAT</h3>
+  <pre><code>typedef struct _DDPIXELFORMAT {
+    DWORD dwSize;            // [in] Must be sizeof(DDPIXELFORMAT)
+    DWORD dwFlags;           // [in/out] DDPF_* flags
+    DWORD dwFourCC;          // Not used by free-direct
+    union {
+        DWORD dwRGBBitCount; // Bits per pixel (8 or 32)
+        DWORD dwYUVBitCount; // Not used
+        DWORD dwZBufferBitDepth; // Not used
+        DWORD dwAlphaBitDepth;   // Not used
+    };
+    union {
+        DWORD dwRBitMask;    // [out] 0x00FF0000 for 32-bit RGB
+        DWORD dwYBitMask;    // Not used
+    };
+    union {
+        DWORD dwGBitMask;    // [out] 0x0000FF00 for 32-bit RGB
+        DWORD dwUBitMask;    // Not used
+    };
+    union {
+        DWORD dwBBitMask;    // [out] 0x000000FF for 32-bit RGB
+        DWORD dwVBitMask;    // Not used
+    };
+    union {
+        DWORD dwRGBAlphaBitMask; // Not used (alpha is always 0xFF internally)
+        DWORD dwYUVAlphaBitMask; // Not used
+    };
+} DDPIXELFORMAT, *LPDDPIXELFORMAT;</code></pre>
+
+  <h4>Values written by GetSurfaceDesc / Lock</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Surface type</th><th>dwFlags</th><th>dwRGBBitCount</th><th>dwRBitMask / G / B</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>8-bit paletted</td>
+        <td><code>DDPF_PALETTEINDEXED8</code> (0x20)</td>
+        <td>8</td>
+        <td>0 / 0 / 0 (no RGB masks for indexed)</td>
+      </tr>
+      <tr>
+        <td>32-bit RGB</td>
+        <td><code>DDPF_RGB</code> (0x40)</td>
+        <td>32</td>
+        <td>0x00FF0000 / 0x0000FF00 / 0x000000FF</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- DDCOLORKEY -->
+  <h3 id="ddcolorkey">DDCOLORKEY</h3>
+  <pre><code>typedef struct _DDCOLORKEY {
+    DWORD dwColorSpaceLowValue;   // Low end of the transparent color range (inclusive)
+    DWORD dwColorSpaceHighValue;  // High end of the transparent color range (inclusive)
+} DDCOLORKEY, *LPDDCOLORKEY;</code></pre>
+  <p>
+    Defines a range of pixel values to be treated as transparent in blits.
+    Pixel <code>p</code> is transparent if <code>dwColorSpaceLowValue &lt;= p &lt;= dwColorSpaceHighValue</code>.
+  </p>
+  <p>
+    For a single-color key (the most common case), set both fields to the same value.
+    Example for magenta on a 32-bit surface: <code>{0x00FF00FF, 0x00FF00FF}</code>.
+    Example for palette index 0 on an 8-bit surface: <code>{0, 0}</code>.
+  </p>
+
+  <!-- DDSCAPS -->
+  <h3 id="ddscaps">DDSCAPS</h3>
+  <pre><code>typedef struct _DDSCAPS {
+    DWORD dwCaps;  // Bitmask of DDSCAPS_* flags
+} DDSCAPS, *LPDDSCAPS;</code></pre>
+  <p>Simple wrapper around a capability bitmask. Used in <code>DDSURFACEDESC.ddsCaps</code>.</p>
+
+  <!-- DDBLTFX -->
+  <h3 id="ddbltfx">DDBLTFX</h3>
+  <pre><code>typedef struct _DDBLTFX {
+    DWORD     dwSize;              // [in] Must be sizeof(DDBLTFX)
+    DWORD     dwDDFX;              // Not used by free-direct
+    DWORD     dwROP;               // Not used by free-direct
+    DWORD     dwDDROP;             // Not used by free-direct
+    DWORD     dwRotationAngle;     // Accepted but rotation NOT performed
+    DWORD     dwZBufferDestConst;  // Not used
+    DWORD     dwZBufferDestOverlap;// Not used
+    DWORD     dwZBufferSrcConst;   // Not used
+    DWORD     dwZBufferSrcOverlap; // Not used
+    DWORD     dwYCbCrDestConst;    // Not used
+    DWORD     dwYCbCrSrcConst;     // Not used
+    DWORD     dwAlphaDestConst;    // Not used
+    DWORD     dwAlphaSrcConst;     // Not used
+    DWORD     dwFillColor;         // [in] Fill color for DDBLT_COLORFILL
+    DDCOLORKEY ddckDestColorkey;   // Not used
+    DDCOLORKEY ddckSrcColorkey;    // Not used (color key is stored on the surface, not here)
+} DDBLTFX, *LPDDBLTFX;</code></pre>
+
+  <h4>Field notes</h4>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Field</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>dwSize</code></td>
+        <td>Must equal <code>sizeof(DDBLTFX)</code>.</td>
+      </tr>
+      <tr>
+        <td><code>dwFillColor</code></td>
+        <td>
+          Used only when <code>DDBLT_COLORFILL</code> is set in <code>Blt</code>.<br>
+          <strong>32-bit surfaces:</strong> interpreted as <code>0x00RRGGBB</code>.
+          The alpha byte is forced to 255.<br>
+          <strong>8-bit surfaces:</strong> the low byte (bits 0–7) is used as the palette index.
+        </td>
+      </tr>
+      <tr>
+        <td><code>dwRotationAngle</code></td>
+        <td>
+          Accepted in the struct (can be set without error) but the rotation is never applied.
+          The blit proceeds as a standard copy.
+        </td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- PALETTEENTRY -->
+  <h3 id="paletteentry">PALETTEENTRY</h3>
+  <pre><code>typedef struct tagPALETTEENTRY {
+    BYTE peRed;    // Red component (0–255)
+    BYTE peGreen;  // Green component (0–255)
+    BYTE peBlue;   // Blue component (0–255)
+    BYTE peFlags;  // Flags (ignored by free-direct; pass 0)
+} PALETTEENTRY, *PPALETTEENTRY, *LPPALETTEENTRY;</code></pre>
+  <p>
+    One entry in a 256-color palette. <code>peFlags</code> is accepted but ignored.
+    Used in arrays of 256 entries with <code>CreatePalette</code>, <code>GetEntries</code>,
+    and <code>SetEntries</code>.
+  </p>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       FLAGS
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="flags">Flags reference</h2>
+
+  <h3 id="ddscaps-flags">DDSCAPS_* surface capability flags</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>DDSCAPS_PRIMARYSURFACE</code></td><td>0x00000200</td><td><span class="status status-implemented">Implemented</span></td>
+        <td>Primary (displayed) surface. Size comes from <code>SetDisplayMode</code> or defaults to 640×480.</td></tr>
+      <tr><td><code>DDSCAPS_OFFSCREENPLAIN</code></td><td>0x00000040</td><td><span class="status status-implemented">Implemented</span></td>
+        <td>Plain offscreen surface in system memory. Width and height required.</td></tr>
+      <tr><td><code>DDSCAPS_SYSTEMMEMORY</code></td><td>0x00000800</td><td><span class="status status-implemented">Implemented</span></td>
+        <td>Explicitly system-memory surface. Treated identically to OFFSCREENPLAIN.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ddsd-flags">DDSD_* surface description flags</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>DDSD_CAPS</code></td><td>0x00000001</td><td>Indicates <code>ddsCaps</code> is valid. Always required for <code>CreateSurface</code>.</td></tr>
+      <tr><td><code>DDSD_HEIGHT</code></td><td>0x00000002</td><td>Indicates <code>dwHeight</code> is valid. Required for offscreen surfaces.</td></tr>
+      <tr><td><code>DDSD_WIDTH</code></td><td>0x00000004</td><td>Indicates <code>dwWidth</code> is valid. Required for offscreen surfaces.</td></tr>
+      <tr><td><code>DDSD_PITCH</code></td><td>0x00000008</td><td>Indicates <code>lPitch</code> is valid. Set in the output of <code>Lock</code>/<code>GetSurfaceDesc</code> for offscreen surfaces.</td></tr>
+      <tr><td><code>DDSD_LPSURFACE</code></td><td>0x00000800</td><td>Indicates <code>lpSurface</code> is valid. Set in the output of <code>Lock</code>/<code>GetSurfaceDesc</code> for offscreen surfaces.</td></tr>
+      <tr><td><code>DDSD_PIXELFORMAT</code></td><td>0x00001000</td><td>Indicates <code>ddpfPixelFormat</code> is valid. Set this in <code>CreateSurface</code> to specify 8-bit or 32-bit format explicitly.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ddblt-flags">DDBLT_* blit flags (used with Blt)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DDBLT_COLORFILL</code></td><td>0x00000400</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Fill the destination rectangle with <code>DDBLTFX.dwFillColor</code>. Source surface must be NULL.</td>
+      </tr>
+      <tr>
+        <td><code>DDBLT_KEYSRC</code></td><td>0x00008000</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Apply the source surface's color key. Transparent pixels are not copied to the destination.</td>
+      </tr>
+      <tr>
+        <td><code>DDBLT_WAIT</code></td><td>0x00000010</td>
+        <td><span class="status status-stub">Stub</span></td>
+        <td>Accepted; no-op. Original meaning: wait until hardware is ready rather than returning DDERR_WASSTILLDRAWING.</td>
+      </tr>
+      <tr>
+        <td><code>DDBLT_ROTATIONANGLE</code></td><td>0x01000000</td>
+        <td><span class="status status-unsupported">Not supported</span></td>
+        <td>Accepted in the flags bitmask (does not cause an error). Rotation angle from <code>DDBLTFX.dwRotationAngle</code> is received but not applied. The blit proceeds without rotation.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ddbltfast-flags">DDBLTFAST_* fast-blit transparency flags (used with BltFast)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DDBLTFAST_NOCOLORKEY</code></td><td>0x00000000</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Copy all pixels including those matching the color key. This is the default (value 0).</td>
+      </tr>
+      <tr>
+        <td><code>DDBLTFAST_SRCCOLORKEY</code></td><td>0x00000001</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Skip pixels that match the source surface's color key range.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ddckey-flags">DDCKEY_* color key type flags (used with SetColorKey)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DDCKEY_SRCBLT</code></td><td>0x00000008</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Set the source blit color key. Used to define which pixel values are transparent when this surface is blitted onto another.</td>
+      </tr>
+    </tbody>
+  </table></div>
+  <p>All other DDCKEY_* values (DDCKEY_DESTBLT, DDCKEY_SRCOVERLAY, DDCKEY_DESTOVERLAY) return <code>DDERR_UNSUPPORTED</code>.</p>
+
+  <h3 id="ddscl-flags">DDSCL_* cooperative level flags (used with SetCooperativeLevel)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DDSCL_FULLSCREEN</code></td><td>0x00000001</td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Request fullscreen mode. Calls <code>FreeApiSetWindowFullscreen(true)</code>. Actual fullscreen depends on the free-api and SDL3 window support.</td>
+      </tr>
+      <tr>
+        <td><code>DDSCL_EXCLUSIVE</code></td><td>0x00000010</td>
+        <td><span class="status status-partial">Partial</span></td>
+        <td>Accepted. In combination with DDSCL_FULLSCREEN indicates exclusive fullscreen. No additional effect in free-direct.</td>
+      </tr>
+      <tr>
+        <td><code>DDSCL_NORMAL</code></td><td>0x00000008</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Windowed (normal) mode. Calls <code>FreeApiSetWindowFullscreen(false)</code>.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ddpcaps-flags">DDPCAPS_* palette capability flags (used with CreatePalette)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DDPCAPS_8BIT</code></td><td>0x00000004</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>256-entry palette for 8-bit paletted surfaces. Always accepted; all palettes are 256 entries regardless.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h3 id="ddpf-flags">DDPF_* pixel format flags (used in DDPIXELFORMAT.dwFlags)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Support</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>DDPF_RGB</code></td><td>0x00000040</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Surface contains raw RGB data. Use with <code>dwRGBBitCount = 32</code> for 32-bit RGBA surfaces.</td>
+      </tr>
+      <tr>
+        <td><code>DDPF_PALETTEINDEXED8</code></td><td>0x00000020</td>
+        <td><span class="status status-implemented">Implemented</span></td>
+        <td>Surface uses 8-bit palette indices. Each byte is an index into a 256-entry PALETTEENTRY table.</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       RESULT CODES
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="result-codes">Result codes</h2>
+
+  <h3>Actively returned by the implementation</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>DD_OK</code></td><td>0x00000000</td><td>Success.</td></tr>
+      <tr><td><code>DDERR_GENERIC</code></td><td>0x88760000</td><td>Unspecified failure (e.g. SDL renderer creation failed, SDL texture creation failed).</td></tr>
+      <tr><td><code>DDERR_INVALIDPARAMS</code></td><td>0x88760064</td><td>A required parameter was NULL, out of range, or had a wrong size field.</td></tr>
+      <tr><td><code>DDERR_OUTOFMEMORY</code></td><td>0x8876017C</td><td>Heap allocation failed (new returned nullptr).</td></tr>
+      <tr><td><code>DDERR_UNSUPPORTED</code></td><td>0x88760032</td><td>QueryInterface, unsupported DDCKEY flags, or unsupported Blt flag combination.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Defined for compile compatibility, not actively returned</h3>
+  <p>
+    All other <code>DDERR_*</code> constants (<code>DDERR_ALREADYINITIALIZED</code>,
+    <code>DDERR_SURFACELOST</code>, <code>DDERR_NOCOLORKEY</code>, etc.) are defined in
+    <code>ddraw.h</code> with unique HRESULT values so that game code that references them
+    compiles without modification. The implementation does not return them.
+  </p>
+
+  <p>Use the <code>SUCCEEDED(hr)</code> and <code>FAILED(hr)</code> macros to check results:</p>
+  <pre><code>#define SUCCEEDED(hr)  (((HRESULT)(hr)) >= 0)
+#define FAILED(hr)     (((HRESULT)(hr)) < 0)</code></pre>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       TYPEDEFS
+  ════════════════════════════════════════════════════════════════════════ -->
+  <h2 id="typedefs">Pointer typedefs</h2>
+  <pre><code>typedef struct IDirectDraw*         LPDIRECTDRAW;
+typedef struct IDirectDrawSurface*  LPDIRECTDRAWSURFACE;
+typedef struct IDirectDrawPalette*  LPDIRECTDRAWPALETTE;
+typedef struct IDirectDrawClipper*  LPDIRECTDRAWCLIPPER;</code></pre>
+  <p>
+    These are plain pointer typedefs matching the legacy DirectX convention.
+    They are compatible with the concrete implementation classes used internally
+    (since the public interface classes are pure virtual bases).
+  </p>
+
+</div>
+</main>
+</div>
+<script src="nav.js"></script>
+</body>
+</html>
