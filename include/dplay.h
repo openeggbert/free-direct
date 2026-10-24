@@ -68,6 +68,11 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 #define DPERR_INVALIDINTERFACE ((HRESULT)0x8877002FL)
 #define DPERR_NOTLOBBIED ((HRESULT)0x88770030L)
 #define DPERR_NOAGGREGATION ((HRESULT)0x88770033L)
+/* Named by blupi_recon's CNetwork error trace (src/network.cpp:33, 41,
+   TraceErrorDP); never returned here. Values continue this header's own
+   sequence, which is not the DirectX SDK's (no wire compatibility). */
+#define DPERR_BUFFERTOOSMALL ((HRESULT)0x88770034L)
+#define DPERR_NOCAPS ((HRESULT)0x88770035L)
 /** @} */
 
 #ifndef E_NOINTERFACE
@@ -232,6 +237,13 @@ HRESULT WINAPI DirectPlayEnumerateA(LPDPENUMDPCALLBACKA lpEnumCallback, LPVOID l
  * @note Status: IMPLEMENTED
  */
 HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID lpContext);
+/**
+ * @brief The ANSI entry point under its generic name, as in the DirectX SDK headers (this
+ * subset has no UNICODE builds). Call site: blupi_recon src/network.cpp:112
+ * (`CNetwork::EnumProviders`).
+ * @note Status: IMPLEMENTED
+ */
+#define DirectPlayEnumerate DirectPlayEnumerateA
 /**
  * @brief Creates a DirectPlay object.
  *
