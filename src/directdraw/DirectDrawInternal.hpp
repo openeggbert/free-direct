@@ -123,6 +123,23 @@ namespace free_direct_directdraw {
         }
     }
 
+    /** @brief RGB888 to RGB565 by truncation, as GDI stores a color in a 16-bit surface. */
+    inline uint16_t PackRgb565(const uint8_t r, const uint8_t g, const uint8_t b)
+    {
+        return static_cast<uint16_t>(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+    }
+
+    /** @brief RGB565 to RGB888, replicating the high bits into the low ones. */
+    inline void UnpackRgb565(const uint16_t v, uint8_t& r, uint8_t& g, uint8_t& b)
+    {
+        const unsigned r5 = (v >> 11) & 0x1Fu;
+        const unsigned g6 = (v >> 5) & 0x3Fu;
+        const unsigned b5 = v & 0x1Fu;
+        r = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+        g = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+        b = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+    }
+
     inline const char* BoolToText(const bool value)
     {
         return value ? "yes" : "no";
@@ -209,6 +226,10 @@ class DirectDrawSurfaceImpl;
         [[nodiscard]] const std::vector<uint8_t>& GetPixels() const { return pixels_; }
         [[nodiscard]] bool HasPalette() const { return palette_ != nullptr; }
         [[nodiscard]] uint64_t GetDebugId() const { return debugId_; }
+        /// The palette GDI uses for this 8-bit surface: its own, else the primary surface's
+        /// (an offscreen surface shares the display palette, as on real DirectDraw), else the
+        /// default 3-3-2 palette.
+        void GetGdiPalette(PALETTEENTRY entries[256]) const;
 
         HRESULT FillColor(const RECT* destRect, DWORD fillColor);
         HRESULT BlitFrom(const DirectDrawSurfaceImpl& source,
@@ -318,6 +339,17 @@ class DirectDrawSurfaceImpl;
         /// Display mode requested by SetDisplayMode (game logical resolution).
         int displayModeWidth_ = 0;
         int displayModeHeight_ = 0;
+        /// Depth requested by SetDisplayMode (0 until it is called). With honorDisplayBpp_,
+        /// surfaces created without DDSD_PIXELFORMAT take it (16, a high-colour desktop, while it
+        /// is 0).
+        int displayModeBpp_ = 0;
+        /// The CMake option FREE_DIRECT_HONOR_DISPLAY_BPP, or the environment variable of the
+        /// same name (0/1) when set; read once, in the constructor.
+#if FREE_DIRECT_HONOR_DISPLAY_BPP
+        bool honorDisplayBpp_ = true;
+#else
+        bool honorDisplayBpp_ = false;
+#endif
         /// Perf counters (per-second summary when FREE_DIRECT_DEBUG_PERF=1).
         uint64_t perfWindowStart_ = 0;
         uint64_t perfBltCalls_ = 0;

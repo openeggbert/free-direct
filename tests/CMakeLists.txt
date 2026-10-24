@@ -56,9 +56,11 @@ target_link_libraries(directdraw_tests
         SDL3_mixer::SDL3_mixer
 )
 add_test(NAME directdraw_tests COMMAND directdraw_tests)
+# FREE_DIRECT_HONOR_DISPLAY_BPP=0: the tests are written for 32-bit default surfaces whatever the
+# build's option; Test_CreateSurface_WithoutPixelFormat_TakesDisplayDepth sets it both ways.
 set_tests_properties(directdraw_tests PROPERTIES
         LABELS "directdraw"
-        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy;FREE_DIRECT_HONOR_DISPLAY_BPP=0"
 )
 
 # DirectSound tests: same rationale as directdraw_tests, needs the real free-direct library and
@@ -113,7 +115,7 @@ target_link_libraries(integration_tests
 add_test(NAME integration_tests COMMAND integration_tests)
 set_tests_properties(integration_tests PROPERTIES
         LABELS "integration"
-        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy;FREE_DIRECT_HONOR_DISPLAY_BPP=0"
 )
 
 # ENet transport-level tests: gated at the CMake level (not just skipped at runtime) behind

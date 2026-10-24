@@ -50,8 +50,14 @@ namespace free_direct_directdraw {
                 presentIntervalNs_ = 1000000000ULL / static_cast<uint64_t>(fps);
             }
         }
+        // FREE_DIRECT_HONOR_DISPLAY_BPP=0/1 overrides the CMake option of the same name.
+        const char* honorCStr = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_HONOR_DISPLAY_BPP");
+        if (honorCStr && honorCStr[0] != '\0') {
+            honorDisplayBpp_ = honorCStr[0] != '0';
+        }
         perfWindowStart_ = SDL_GetTicksNS();
-        DirectDrawLog("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s", BoolToText(debugPrimaryClearEnabled_));
+        DirectDrawLog("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s honorDisplayBpp=%s",
+                BoolToText(debugPrimaryClearEnabled_), BoolToText(honorDisplayBpp_));
     }
 
     DirectDrawImpl::~DirectDrawImpl()
@@ -281,7 +287,23 @@ namespace free_direct_directdraw {
             }
         }
 
-        if (bpp != 8 && bpp != 32) bpp = 32;
+        // Real DirectDraw in exclusive mode gives a surface created without DDSD_PIXELFORMAT the
+        // display mode's depth. blupi_recon (Speedy Blupi 1's unchanged source) depends on it:
+        // its DDColorMatch reads the key back through Lock and masks it with
+        // (1 << dwRGBBitCount) - 1 (blupi_recon src/ddutil.cpp:375), which is undefined for 32
+        // and yields a key of 0, so sprites lose their transparency. Off by default
+        // (honorDisplayBpp_) so free-eggbert and planetblupi keep their all-32-bit surfaces
+        // (docs/directdraw-limitations.md). Without SetDisplayMode (DDSCL_NORMAL, windowed)
+        // surfaces take the desktop's depth: a 16-bit high-colour desktop, consistent with the
+        // palette-less display Free API's GetDeviceCaps reports.
+        if (honorDisplayBpp_ && (lpDDSurfaceDesc->dwFlags & DDSD_PIXELFORMAT) == 0) {
+            if (displayModeBpp_ == 8 || displayModeBpp_ == 16) {
+                bpp = displayModeBpp_;
+            } else if (displayModeBpp_ == 0) {
+                bpp = 16;
+            }
+        }
+        if (bpp != 8 && bpp != 16 && bpp != 32) bpp = 32;
 
         // Bound width/height before ever constructing DirectDrawSurfaceImpl, which otherwise
         // resizes its pixel buffer unconditionally (docs/audit_ddraw.md §4.4, F4,
@@ -331,6 +353,7 @@ namespace free_direct_directdraw {
 
         displayModeWidth_ = static_cast<int>(dwWidth);
         displayModeHeight_ = static_cast<int>(dwHeight);
+        displayModeBpp_ = static_cast<int>(dwBPP);
 
         if (hwnd_) {
             FreeApiSetWindowFullscreen(hwnd_, true);
@@ -521,6 +544,22 @@ namespace free_direct_directdraw {
                 SDL_UpdateTexture(primary.texture_, NULL, primary.paletteConvertBuffer_.data(), primary.GetWidth() * 4);
                 FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
             }
+        } else if (primary.GetBPP() == 16) {
+            const size_t pixelCount = static_cast<size_t>(primary.GetWidth()) * static_cast<size_t>(primary.GetHeight());
+            primary.paletteConvertBuffer_.resize(pixelCount);
+            const uint8_t* src = primary.GetPixels().data();
+            for (size_t i = 0; i < pixelCount; ++i) {
+                const uint16_t v = static_cast<uint16_t>(src[i * 2u] | (src[i * 2u + 1u] << 8));
+                uint8_t r, g, b;
+                UnpackRgb565(v, r, g, b);
+                primary.paletteConvertBuffer_[i] = static_cast<uint32_t>(r)
+                        | (static_cast<uint32_t>(g) << 8)
+                        | (static_cast<uint32_t>(b) << 16)
+                        | 0xFF000000u;
+            }
+            PresentLog("free-direct PresentPrimary: uploading 16-bit RGB565->RGBA32");
+            SDL_UpdateTexture(primary.texture_, NULL, primary.paletteConvertBuffer_.data(), primary.GetWidth() * 4);
+            FREE_DIRECT_DIAG_INC_TOTAL(sdlTextureUpdateCallsTotal);
         } else {
             PresentLog("free-direct PresentPrimary: uploading 32-bit RGBA");
             SDL_UpdateTexture(primary.texture_, NULL, primary.GetPixels().data(), primary.GetWidth() * 4);

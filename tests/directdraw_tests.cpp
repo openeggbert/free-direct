@@ -1366,6 +1366,236 @@ void Test_BltFast_NoUnconditionalLogOutput_WhenDebugFlagsUnset() {
     CHECK(g_logCallCount == 0);
 }
 
+// ===== Group 10: 16-bit (RGB565) surfaces and the display depth =====
+// blupi_recon (Speedy Blupi 1's unchanged source) runs on 8- and 16-bit surfaces: its
+// DDColorMatch (src/ddutil.cpp:360-380) reads the color key back through Lock and masks it with
+// (1 << dwRGBBitCount) - 1.
+
+uint16_t ReadPixel16(LPDIRECTDRAWSURFACE surface, int index) {
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->Lock(nullptr, &desc, 0, nullptr) == DD_OK);
+    const uint16_t value = static_cast<uint16_t*>(desc.lpSurface)[index];
+    surface->Unlock(desc.lpSurface);
+    return value;
+}
+
+void WritePixel16(LPDIRECTDRAWSURFACE surface, int index, uint16_t value) {
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->Lock(nullptr, &desc, 0, nullptr) == DD_OK);
+    static_cast<uint16_t*>(desc.lpSurface)[index] = value;
+    surface->Unlock(desc.lpSurface);
+}
+
+void Test_CreateSurface_16Bit_ReturnsRgb565Format() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 32, 32, 16);
+
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->GetSurfaceDesc(&desc) == DD_OK);
+    CHECK(desc.ddpfPixelFormat.dwRGBBitCount == 16);
+    CHECK(desc.ddpfPixelFormat.dwFlags == DDPF_RGB);
+    CHECK(desc.ddpfPixelFormat.dwRBitMask == 0xF800);
+    CHECK(desc.ddpfPixelFormat.dwGBitMask == 0x07E0);
+    CHECK(desc.ddpfPixelFormat.dwBBitMask == 0x001F);
+    CHECK(desc.lPitch == 64); // 16bpp: 2 bytes/pixel
+
+    surface->Release();
+    dd->Release();
+}
+
+void Test_BltFast_SrcColorKey_16Bit_SkipsKeyedPixels() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE src = CreateOffscreenSurface(dd, 2, 1, 16);
+    LPDIRECTDRAWSURFACE dst = CreateOffscreenSurface(dd, 2, 1, 16);
+
+    WritePixel16(src, 0, 0x001F); // will be the color key (blue)
+    WritePixel16(src, 1, 0xF800); // opaque (red)
+    DDCOLORKEY key{0x001F, 0x001F};
+    CHECK(src->SetColorKey(DDCKEY_SRCBLT, &key) == DD_OK);
+    WritePixel16(dst, 0, 0x1234);
+    WritePixel16(dst, 1, 0x1234);
+
+    CHECK(dst->BltFast(0, 0, src, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+    CHECK(ReadPixel16(dst, 0) == 0x1234); // keyed pixel skipped
+    CHECK(ReadPixel16(dst, 1) == 0xF800); // opaque pixel copied
+
+    CHECK(dst->BltFast(0, 0, src, nullptr, DDBLTFAST_NOCOLORKEY) == DD_OK);
+    CHECK(ReadPixel16(dst, 0) == 0x001F); // without the key, everything is copied
+
+    src->Release();
+    dst->Release();
+    dd->Release();
+}
+
+void Test_Blt_ColorFill_16Bit_WritesRawValue() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 4, 4, 16);
+
+    DDBLTFX fx{};
+    std::memset(&fx, 0, sizeof(fx));
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = 0x07E0;
+    CHECK(surface->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+    CHECK(ReadPixel16(surface, 0) == 0x07E0);
+    CHECK(ReadPixel16(surface, 15) == 0x07E0);
+
+    surface->Release();
+    dd->Release();
+}
+
+// DDColorMatch's round trip: SetPixel through the DC, the packed value read back through Lock,
+// then the color GetPixel saved written back.
+void Test_GetDCReleaseDC_16Bit_PacksColorsToRgb565() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 4, 4, 16);
+    WritePixel16(surface, 0, 0x07E0);
+
+    HDC hdc = nullptr;
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    const COLORREF saved = GetPixel(hdc, 0, 0);
+    CHECK(saved == RGB(0, 255, 0)); // expanded with the low bits replicated
+    SetPixel(hdc, 0, 0, RGB(255, 0, 255));
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+    CHECK(ReadPixel16(surface, 0) == 0xF81F);
+
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    SetPixel(hdc, 0, 0, saved);
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+    CHECK(ReadPixel16(surface, 0) == 0x07E0);
+
+    surface->Release();
+    dd->Release();
+}
+
+void Test_Flip_16BitPrimary_PresentsExpandedColor() {
+    HWND hwnd = CreateTestWindow();
+    LPDIRECTDRAW dd = CreateDirectDrawWithTargetFps("1000");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    desc.dwFlags = DDSD_CAPS | DDSD_PIXELFORMAT;
+    desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+    desc.ddpfPixelFormat.dwRGBBitCount = 16;
+    LPDIRECTDRAWSURFACE primary = nullptr;
+    CHECK(dd->CreateSurface(&desc, &primary, nullptr) == DD_OK);
+
+    DDBLTFX fx{};
+    std::memset(&fx, 0, sizeof(fx));
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = 0x841F; // R 16/31, G 32/63, B 31/31
+    CHECK(primary->Blt(nullptr, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(static_cast<uint8_t>(pixel & 0xFFu) == 132);         // R: (16 << 3) | (16 >> 2)
+    CHECK(static_cast<uint8_t>((pixel >> 8) & 0xFFu) == 130);  // G: (32 << 2) | (32 >> 4)
+    CHECK(static_cast<uint8_t>((pixel >> 16) & 0xFFu) == 255); // B: (31 << 3) | (31 >> 2)
+
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
+// An offscreen 8-bit surface without a palette of its own shares the display (primary) palette
+// for GDI, as on real DirectDraw: blupi_recon's DDCopyBitmap draws its 8-bit images into such
+// surfaces through the DC.
+void Test_GetDC_8BitOffscreenWithoutPalette_UsesPrimaryPalette() {
+    LPDIRECTDRAW dd = CreateDirectDrawNoWindow();
+
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    desc.dwFlags = DDSD_CAPS | DDSD_PIXELFORMAT;
+    desc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+    desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    desc.ddpfPixelFormat.dwFlags = DDPF_PALETTEINDEXED8;
+    desc.ddpfPixelFormat.dwRGBBitCount = 8;
+    LPDIRECTDRAWSURFACE primary = nullptr;
+    CHECK(dd->CreateSurface(&desc, &primary, nullptr) == DD_OK);
+
+    PALETTEENTRY entries[256] = {};
+    entries[7] = {10, 20, 30, 0};
+    LPDIRECTDRAWPALETTE palette = nullptr;
+    CHECK(dd->CreatePalette(DDPCAPS_8BIT, entries, &palette, nullptr) == DD_OK);
+    CHECK(primary->SetPalette(palette) == DD_OK);
+
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 4, 4, 8);
+    HDC hdc = nullptr;
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    SetPixel(hdc, 0, 0, RGB(10, 20, 30));
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+
+    DDSURFACEDESC lock{};
+    std::memset(&lock, 0, sizeof(lock));
+    lock.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->Lock(nullptr, &lock, 0, nullptr) == DD_OK);
+    CHECK(static_cast<uint8_t*>(lock.lpSurface)[0] == 7);
+    surface->Unlock(lock.lpSurface);
+
+    surface->Release();
+    palette->Release();
+    primary->Release();
+    dd->Release();
+}
+
+// With FREE_DIRECT_HONOR_DISPLAY_BPP, a surface created without DDSD_PIXELFORMAT takes the
+// display depth: 16 (a high-colour desktop) until SetDisplayMode, then its depth. Without it
+// every such surface stays 32-bit, as free-eggbert and planetblupi expect. The environment
+// variable (read when the DirectDraw object is created) selects either, whatever the build's
+// CMake option.
+LPDIRECTDRAW CreateDirectDrawHonoringDisplayBpp(const char* honor) {
+    SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_HONOR_DISPLAY_BPP", honor, 1);
+    LPDIRECTDRAW dd = nullptr;
+    CHECK(DirectDrawCreate(nullptr, &dd, nullptr) == DD_OK);
+    SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_HONOR_DISPLAY_BPP", "0", 1);
+    return dd;
+}
+
+DWORD CreatedBppWithoutPixelFormat(LPDIRECTDRAW dd) {
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT;
+    desc.dwWidth = 8;
+    desc.dwHeight = 8;
+    desc.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+    LPDIRECTDRAWSURFACE surface = nullptr;
+    CHECK(dd->CreateSurface(&desc, &surface, nullptr) == DD_OK);
+    if (!surface) return 0;
+    DDSURFACEDESC got{};
+    std::memset(&got, 0, sizeof(got));
+    got.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->GetSurfaceDesc(&got) == DD_OK);
+    surface->Release();
+    return got.ddpfPixelFormat.dwRGBBitCount;
+}
+
+void Test_CreateSurface_WithoutPixelFormat_TakesDisplayDepth() {
+    LPDIRECTDRAW honoring = CreateDirectDrawHonoringDisplayBpp("1");
+    CHECK(CreatedBppWithoutPixelFormat(honoring) == 16);
+    CHECK(honoring->SetDisplayMode(640, 480, 8) == DD_OK);
+    CHECK(CreatedBppWithoutPixelFormat(honoring) == 8);
+    CHECK(honoring->SetDisplayMode(640, 480, 16) == DD_OK);
+    CHECK(CreatedBppWithoutPixelFormat(honoring) == 16);
+    honoring->Release();
+
+    LPDIRECTDRAW plain = CreateDirectDrawHonoringDisplayBpp("0");
+    CHECK(CreatedBppWithoutPixelFormat(plain) == 32);
+    CHECK(plain->SetDisplayMode(640, 480, 8) == DD_OK);
+    CHECK(CreatedBppWithoutPixelFormat(plain) == 32);
+    plain->Release();
+}
+
 int main() {
     // Group 2: creation/lifecycle
     Test_DirectDrawCreate_ReturnsOk();
@@ -1444,6 +1674,15 @@ int main() {
 
     // Group 9: logging gate regression guard
     Test_BltFast_NoUnconditionalLogOutput_WhenDebugFlagsUnset();
+
+    // Group 10: 16-bit surfaces and the display depth
+    Test_CreateSurface_16Bit_ReturnsRgb565Format();
+    Test_BltFast_SrcColorKey_16Bit_SkipsKeyedPixels();
+    Test_Blt_ColorFill_16Bit_WritesRawValue();
+    Test_GetDCReleaseDC_16Bit_PacksColorsToRgb565();
+    Test_Flip_16BitPrimary_PresentsExpandedColor();
+    Test_GetDC_8BitOffscreenWithoutPalette_UsesPrimaryPalette();
+    Test_CreateSurface_WithoutPixelFormat_TakesDisplayDepth();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectDraw tests passed.\n");

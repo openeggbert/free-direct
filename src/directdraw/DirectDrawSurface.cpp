@@ -143,7 +143,16 @@ namespace free_direct_directdraw {
         // Both branches fall through to the shared MarkDirty() tail below (docs/audit_ddraw.md
         // §5.1, F7, TASK-24H-0157) - the 8-bit branch used to return early here, skipping it, so
         // a fill on an 8-bit primary surface would never be flagged for presentation.
-        if (bpp_ == 8) {
+        if (bpp_ == 16) {
+            const auto value = static_cast<uint16_t>(fillColor & 0xFFFFu);
+            for (int y = fillRect.top; y < fillRect.bottom; ++y) {
+                for (int x = fillRect.left; x < fillRect.right; ++x) {
+                    const size_t offset = (static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)) * 2u;
+                    pixels_[offset + 0u] = static_cast<uint8_t>(value & 0xFFu);
+                    pixels_[offset + 1u] = static_cast<uint8_t>(value >> 8);
+                }
+            }
+        } else if (bpp_ == 8) {
             const auto index = static_cast<uint8_t>(fillColor & 0xFFu);
             for (int y = fillRect.top; y < fillRect.bottom; ++y) {
                 for (int x = fillRect.left; x < fillRect.right; ++x) {
@@ -177,7 +186,8 @@ namespace free_direct_directdraw {
      * @brief Copy pixels from a source surface to this surface (CPU-to-CPU blit).
      *
      * Works on both primary and offscreen destination surfaces.
-     * Handles 8-bit and 32-bit pixel formats, optional source color key, and scaling.
+     * Handles 8-bit, 16-bit (RGB565) and 32-bit pixel formats, optional source color key, and
+     * scaling.
      * Marks the destination surface dirty if it is the primary surface.
      *
      * @note Status: IMPLEMENTED
@@ -214,7 +224,7 @@ namespace free_direct_directdraw {
         // taking the general scaling path below in that case.
         const bool isUnscaled = (srcWidth == dstWidth) && (srcHeight == dstHeight);
         const bool colorKeyActive = useSrcColorKey && source.hasSrcColorKey_;
-        if (isUnscaled && !colorKeyActive && bpp_ == source.GetBPP() && (bpp_ == 8 || bpp_ == 32)) {
+        if (isUnscaled && !colorKeyActive && bpp_ == source.GetBPP() && (bpp_ == 8 || bpp_ == 16 || bpp_ == 32)) {
             const size_t bytesPerPixel = static_cast<size_t>(bpp_ / 8);
             const size_t rowBytes = static_cast<size_t>(dstWidth) * bytesPerPixel;
             for (int y = 0; y < dstHeight; ++y) {
@@ -264,6 +274,26 @@ namespace free_direct_directdraw {
                         }
                     }
                     pixels_[dstOffset] = index;
+                    ++copied;
+                    continue;
+                }
+
+                if (bpp_ == 16 && source.GetBPP() == 16) {
+                    const size_t srcOffset = (static_cast<size_t>(srcY) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(srcX)) * 2u;
+                    const size_t dstOffset = (static_cast<size_t>(dstY) * static_cast<size_t>(width_) + static_cast<size_t>(dstX)) * 2u;
+                    const uint8_t lo = source.GetPixels()[srcOffset + 0u];
+                    const uint8_t hi = source.GetPixels()[srcOffset + 1u];
+                    if (useSrcColorKey && source.hasSrcColorKey_) {
+                        const uint32_t value = static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 8u);
+                        const uint32_t srcKeyLow = source.colorKey_.dwColorSpaceLowValue & 0xFFFFu;
+                        const uint32_t srcKeyHigh = source.colorKey_.dwColorSpaceHighValue & 0xFFFFu;
+                        if (value >= srcKeyLow && value <= srcKeyHigh) {
+                            ++skipped;
+                            continue;
+                        }
+                    }
+                    pixels_[dstOffset + 0u] = lo;
+                    pixels_[dstOffset + 1u] = hi;
                     ++copied;
                     continue;
                 }
@@ -527,6 +557,23 @@ namespace free_direct_directdraw {
         return DD_OK;
     }
 
+    void DirectDrawSurfaceImpl::GetGdiPalette(PALETTEENTRY entries[256]) const
+    {
+        if (palette_) {
+            palette_->GetEntries(0, 0, 256, entries);
+            return;
+        }
+        if (owner_) {
+            for (const DirectDrawSurfaceImpl* surface : owner_->liveSurfaces_) {
+                if (surface != this && surface->type_ == SurfaceType::Primary && surface->palette_) {
+                    surface->palette_->GetEntries(0, 0, 256, entries);
+                    return;
+                }
+            }
+        }
+        GetDefault332Palette(entries);
+    }
+
     /** @note Status: STUB - Surfaces are currently kept resident in this backend. */
     HRESULT WINAPI DirectDrawSurfaceImpl::IsLost()
     {
@@ -544,8 +591,10 @@ namespace free_direct_directdraw {
      *
      * For 32-bit surfaces the DC points directly to the pixel buffer.
      * For 8-bit paletted surfaces a temporary 32-bit RGBA buffer is allocated,
-     * palette-expanded from the native 8-bit pixels, and the DC is created over
-     * that temp buffer.  ReleaseDC converts the temp buffer back to palette indices.
+     * palette-expanded from the native 8-bit pixels (GetGdiPalette), and the DC is
+     * created over that temp buffer.  ReleaseDC converts the temp buffer back to
+     * palette indices. 16-bit (RGB565) surfaces work the same way: expanded on GetDC,
+     * packed back by truncation on ReleaseDC.
      * This is needed so that DDColorMatch (SetPixel/GetPixel -> Lock -> read back)
      * works correctly for palette-index color key matching.
      *
@@ -587,16 +636,30 @@ namespace free_direct_directdraw {
                                                delta);
                 }
                 PALETTEENTRY entries[256] = {};
-                if (palette_) {
-                    palette_->GetEntries(0, 0, 256, entries);
-                } else {
-                    GetDefault332Palette(entries);
-                }
+                GetGdiPalette(entries);
                 for (size_t i = 0; i < pixelCount; ++i) {
                     const uint8_t idx = pixels_[i];
                     dcTempBuffer_[i * 4u + 0u] = entries[idx].peRed;
                     dcTempBuffer_[i * 4u + 1u] = entries[idx].peGreen;
                     dcTempBuffer_[i * 4u + 2u] = entries[idx].peBlue;
+                    dcTempBuffer_[i * 4u + 3u] = 255;
+                }
+                attachedDc_ = FreeApiCreateSurfaceDC(dcTempBuffer_.data(), width_, height_, width_ * 4, 32);
+            } else if (bpp_ == 16) {
+                // GDI draws into a temporary 32-bit copy; ReleaseDC packs it back to RGB565.
+                const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+                const size_t oldCapacity = dcTempBuffer_.capacity();
+                dcTempBuffer_.resize(pixelCount * 4u);
+                if (dcTempBuffer_.capacity() != oldCapacity) {
+                    const auto delta = static_cast<int64_t>(dcTempBuffer_.capacity() - oldCapacity);
+                    diagDcTempCapacityBytes_ = dcTempBuffer_.capacity();
+                    FREE_DIRECT_DIAG_ADD_BYTES(ddSurfaceDcTempCapacityBytes,
+                                               ddSurfaceDcTempCapacityHighWaterBytes,
+                                               delta);
+                }
+                for (size_t i = 0; i < pixelCount; ++i) {
+                    const uint16_t v = static_cast<uint16_t>(pixels_[i * 2u] | (pixels_[i * 2u + 1u] << 8));
+                    UnpackRgb565(v, dcTempBuffer_[i * 4u + 0u], dcTempBuffer_[i * 4u + 1u], dcTempBuffer_[i * 4u + 2u]);
                     dcTempBuffer_[i * 4u + 3u] = 255;
                 }
                 attachedDc_ = FreeApiCreateSurfaceDC(dcTempBuffer_.data(), width_, height_, width_ * 4, 32);
@@ -642,13 +705,18 @@ namespace free_direct_directdraw {
         }
 
         // For 8-bit surfaces, convert the temp 32-bit buffer back to palette indices.
+        if (bpp_ == 16 && !dcTempBuffer_.empty()) {
+            const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+            for (size_t i = 0; i < pixelCount; ++i) {
+                const uint16_t v = PackRgb565(dcTempBuffer_[i * 4u + 0u], dcTempBuffer_[i * 4u + 1u], dcTempBuffer_[i * 4u + 2u]);
+                pixels_[i * 2u + 0u] = static_cast<uint8_t>(v & 0xFFu);
+                pixels_[i * 2u + 1u] = static_cast<uint8_t>(v >> 8);
+            }
+            dcTempBuffer_.clear();
+        }
         if (bpp_ == 8 && !dcTempBuffer_.empty()) {
             PALETTEENTRY entries[256] = {};
-            if (palette_) {
-                palette_->GetEntries(0, 0, 256, entries);
-            } else {
-                GetDefault332Palette(entries);
-            }
+            GetGdiPalette(entries);
             const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
             for (size_t i = 0; i < pixelCount; ++i) {
                 const uint8_t r = dcTempBuffer_[i * 4u + 0u];
@@ -711,6 +779,10 @@ namespace free_direct_directdraw {
             lpDDSurfaceDesc->ddpfPixelFormat.dwRBitMask = 0x00FF0000;
             lpDDSurfaceDesc->ddpfPixelFormat.dwGBitMask = 0x0000FF00;
             lpDDSurfaceDesc->ddpfPixelFormat.dwBBitMask = 0x000000FF;
+        } else if (bpp_ == 16) {
+            lpDDSurfaceDesc->ddpfPixelFormat.dwRBitMask = 0xF800;
+            lpDDSurfaceDesc->ddpfPixelFormat.dwGBitMask = 0x07E0;
+            lpDDSurfaceDesc->ddpfPixelFormat.dwBBitMask = 0x001F;
         }
 
         if (type_ == SurfaceType::Offscreen) {

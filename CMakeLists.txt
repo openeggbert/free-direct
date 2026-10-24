@@ -116,6 +116,16 @@ target_sources(free-direct
         src/directplay/LoopbackDirectPlayTransport.cpp
         src/diagnostics/Diagnostics.cpp
 )
+# Surfaces created without DDSD_PIXELFORMAT take the display's depth, as on real DirectDraw:
+# the one passed to SetDisplayMode (8 or 16), or a 16-bit desktop's in windowed mode, instead of
+# always 32 bits. Off by default: free-eggbert and planetblupi are tested with 32-bit surfaces;
+# blupi_recon's unchanged source needs it (docs/directdraw-limitations.md). The environment
+# variable FREE_DIRECT_HONOR_DISPLAY_BPP=0/1 overrides it at run time.
+option(FREE_DIRECT_HONOR_DISPLAY_BPP "Surfaces take the depth requested by SetDisplayMode" OFF)
+if(FREE_DIRECT_HONOR_DISPLAY_BPP)
+    target_compile_definitions(free-direct PRIVATE FREE_DIRECT_HONOR_DISPLAY_BPP=1)
+endif()
+
 # Compile-time-gated diagnostics counters (off by default; zero overhead when off).
 # Enable from the parent project via:
 #   set(FREE_DIRECT_DIAGNOSTICS ON CACHE BOOL "Enable Free Direct diagnostics")
