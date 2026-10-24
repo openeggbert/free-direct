@@ -1332,3 +1332,36 @@ any Phase 18 item. **Partially met**: single-player validation items above all h
 2026-07-18 results recorded in `NEXT.md`. The DirectPlay multiplayer end-to-end items remain
 genuinely unmet, blocked externally on `free-eggbert`'s decompilation - not assumed, explicitly
 recorded as blocked.
+
+## Phase BR — blupi_recon as the third target game (2026-10-24)
+
+The owner added `../blupi_recon` (Speedy Blupi 1 and 2, matching reconstruction, compiled
+unchanged by its `freeapi/` build) as a third target game (CLAUDE.md). Work on branch
+`blupi-recon`, not committed. Verified: `ctest` 9/9 with `FREE_DIRECT_HONOR_DISPLAY_BPP` OFF and
+ON; `../planetblupi/build` rebuilt and reaches its title; blupi_recon's SB1, SB2 and Eggbert 2
+builds reach a mission with music, SB1's choose-player screen and SB2's title pixel-identical to
+blupi_recon's oracle-verified SDL3 port (except the cursor).
+
+- [x] Name blupi_recon as the third target game (CLAUDE.md "Project Mission", "Scope and
+  Non-Scope", "DirectX 3 Subset Policy"). Documentation only.
+- [x] DirectPlay: `#define DirectPlayEnumerate DirectPlayEnumerateA`. Call site: blupi_recon
+  src/network.cpp:112 (`CNetwork::EnumProviders`).
+- [x] DirectPlay: `DPERR_BUFFERTOOSMALL`, `DPERR_NOCAPS`, continuing this header's own value
+  sequence (0x88770034/35, unique in `TraceErrorDP`'s switch). Call site: blupi_recon
+  src/network.cpp:33, 41.
+- [x] DirectDraw: 16-bit (RGB565) surfaces — fill, same-depth blit with source key, GDI round trip
+  through GetDC/ReleaseDC (truncation), `GetSurfaceDesc` masks 0xF800/0x07E0/0x001F, presentation
+  with replicated bits. Acceptance: `directdraw_tests` `Test_CreateSurface_16Bit_ReturnsRgb565Format`,
+  `Test_BltFast_SrcColorKey_16Bit_SkipsKeyedPixels`, `Test_Blt_ColorFill_16Bit_WritesRawValue`,
+  `Test_GetDCReleaseDC_16Bit_PacksColorsToRgb565`, `Test_Flip_16BitPrimary_PresentsExpandedColor`.
+- [x] DirectDraw: `FREE_DIRECT_HONOR_DISPLAY_BPP` (CMake option and environment variable, off by
+  default): surfaces created without `DDSD_PIXELFORMAT` take `SetDisplayMode`'s depth, 16 in
+  windowed mode. Call site: blupi_recon src/ddutil.cpp:375 (DDColorMatch's
+  `(1 << dwRGBBitCount) - 1`) with src/pixmap.cpp:194-198 (`SetDisplayMode(..., 8 or 16)`).
+  Acceptance: `Test_CreateSurface_WithoutPixelFormat_TakesDisplayDepth` (both settings);
+  the other DirectDraw/integration tests run with the variable at 0.
+- [x] DirectDraw: GDI on an 8-bit offscreen surface without its own palette uses the primary's.
+  Call site: blupi_recon src/ddutil.cpp (DDCopyBitmap's StretchBlt into the surface DC) in 8-bit
+  mode. Acceptance: `Test_GetDC_8BitOffscreenWithoutPalette_UsesPrimaryPalette`.
+- [x] docs/directdraw-limitations.md: the dwBPP section updated.
+- [ ] free-eggbert smoke test against this branch (no build tree on disk at the time).

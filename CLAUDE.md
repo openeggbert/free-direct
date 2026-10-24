@@ -16,7 +16,8 @@ FreeDirect is a **C++20 compatibility layer** that reimplements a **narrow, game
 DirectX 3 (2D)** so that specific legacy Win32/DirectX games can run on modern platforms without
 the original DirectX SDK or Windows.
 
-**There are exactly two named target games, both sibling repositories:**
+**There are exactly three named target games, all sibling repositories** (the third was added on
+2026-10-24 at the owner's request):
 
 - `../free-eggbert` — *Speedy Blupi*. Uses DirectDraw, DirectSound, **and** DirectPlay
   (`include/network.hpp`, `src/network.cpp`, `src/decnet.cpp`, `src/event.cpp` implement a full
@@ -25,8 +26,14 @@ the original DirectX SDK or Windows.
   (`GetDC`/`ReleaseDC`/`IsLost`/`Restore`/`BltFast`/palette/clipper calls throughout `src/*.cpp`).
   Confirmed by grep to have **zero** DirectPlay/`dplay`/`IDirectPlay` usage — it is single-player
   only. DirectPlay scope is therefore defined solely by `free-eggbert`.
+- `../blupi_recon` — the matching reconstruction of *Speedy Blupi 1* (`src/`) and *Speedy Blupi
+  2 / Speedy Eggbert 2* (`games/sb2/src/`), compiled **unchanged** by its `freeapi/` build. Same
+  DirectDraw/DirectSound/DirectPlay lineage as `free-eggbert` (its `CNetwork` calls the same
+  subset), but its source can never be edited to suit FreeDirect: it needs real 8/16-bit
+  surfaces (`FREE_DIRECT_HONOR_DISPLAY_BPP`, docs/directdraw-limitations.md) and the DirectX SDK
+  names it spells (`DirectPlayEnumerate`, `DPERR_BUFFERTOOSMALL`, `DPERR_NOCAPS`).
 
-The layer is driven by **what these two target games actually call**, not by an ambition to cover
+The layer is driven by **what these target games actually call**, not by an ambition to cover
 the DirectX 3 API surface. If neither target game calls an API, that API is out of scope until a
 new target call site is identified in one of them.
 
@@ -38,8 +45,8 @@ to occur, rather than existing as a plausible-looking stub.
 
 ## Scope and Non-Scope
 
-**FreeDirect's scope is bounded by the union of real call sites in exactly two target games:
-`free-eggbert` and `planetblupi`. FreeDirect must not grow into a general-purpose DirectX 3
+**FreeDirect's scope is bounded by the union of real call sites in exactly three target games:
+`free-eggbert`, `planetblupi` and `blupi_recon`. FreeDirect must not grow into a general-purpose DirectX 3
 reimplementation, and must not accumulate API surface or behavior that neither game needs.**
 
 **In scope:**
@@ -80,8 +87,8 @@ first go through Phase 0-style call-site verification (see `plan.md`), not be im
 
 ## DirectX 3 Subset Policy
 
-- The subset boundary is defined by **actual call sites** in the two named target games' source,
-  `../free-eggbert` and `../planetblupi`, when present as sibling checkouts.
+- The subset boundary is defined by **actual call sites** in the named target games' source,
+  `../free-eggbert`, `../planetblupi` and `../blupi_recon`, when present as sibling checkouts.
 - When one or both sibling repositories do not exist, do not guess at call sites. Add or update a
   `plan.md` task to perform the call-site inventory once the sibling repository is available, and
   be explicit in commit/PR messages that coverage decisions are provisional until that inventory

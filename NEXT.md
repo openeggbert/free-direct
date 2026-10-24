@@ -4,6 +4,13 @@ _Last updated: 2026-07-19, after commit `af80a98`. This file is a living status 
 durable backlog — see `plan.md` for the full task-level history and `CLAUDE.md` for the project
 charter/policy rules that govern this repository._
 
+## 0. blupi_recon support (2026-10-24, branch `blupi-recon`, not committed)
+
+Third target game `../blupi_recon` added at the owner's request: plan.md "Phase BR". Build: a
+fresh `build/` (system SDL3 through free-api's `FREE_API_USE_SYSTEM_SDL3=ON`,
+`FREE_DIRECT_BUILD_TESTS=ON`) builds; `ctest` 9/9 with `FREE_DIRECT_HONOR_DISPLAY_BPP` OFF (left
+configured that way) and ON. Known gap: free-eggbert was not rebuilt against this branch.
+
 ## 1. Project summary
 
 **FreeDirect** is a C++20 compatibility layer that reimplements a narrow, game-driven subset of

@@ -257,6 +257,7 @@ Current known limitations:
 * Some compatibility paths are intentionally minimal (`SetDisplayMode`, `IsLost`, `Restore`).
 * `GetDC` support is minimal and intended for compatibility helpers.
 * 8-bit rendering is supported through palette conversion on present; full hardware-era semantics are not replicated.
+* 16-bit (RGB565) surfaces are supported. With `FREE_DIRECT_HONOR_DISPLAY_BPP` (CMake option or environment variable, off by default) surfaces created without `DDSD_PIXELFORMAT` take the display depth (`SetDisplayMode`'s 8 or 16, 16 in windowed mode) instead of 32 bits; blupi_recon needs it (see `docs/directdraw-limitations.md`).
 * Source color-key range handling is implemented for the used subset; broader legacy edge cases are still partial.
 
 Debug logging and performance options:

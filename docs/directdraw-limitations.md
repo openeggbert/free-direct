@@ -43,7 +43,25 @@ findable rather than silently papered over, matching this project's Documentatio
 if the `SetDisplayMode`/`dwBPP` gap is ever fixed (which would make real 8-bit primaries
 reachable) or if a new call site is found.
 
-## SetDisplayMode's dwBPP is accepted but never used (new finding, TASK-24H-0053)
+## SetDisplayMode's dwBPP: honoured behind FREE_DIRECT_HONOR_DISPLAY_BPP (2026-10-24)
+
+**Update.** blupi_recon (the unchanged Speedy Blupi 1 and 2 source, third target game) needs the
+gap below closed: its `DDColorMatch` (`blupi_recon src/ddutil.cpp:375`) masks the key it reads
+back through `Lock` with `(1 << dwRGBBitCount) - 1`, which is undefined for 32 bits and yields 0 on
+x86, so on all-32-bit surfaces every sprite loses its transparent color. free-eggbert patched that
+line in its own copy; blupi_recon cannot. With `FREE_DIRECT_HONOR_DISPLAY_BPP` (CMake option, or
+the environment variable of the same name, 0/1; off by default) a surface created without
+`DDSD_PIXELFORMAT` takes the display depth: the one passed to `SetDisplayMode` (8 or 16), or 16 (a
+high-colour desktop, consistent with Free API's palette-less `GetDeviceCaps`) in windowed mode
+before any `SetDisplayMode`. 16-bit surfaces are RGB565: `FillColor`/`BlitFrom` copy the raw
+values and compare a source key on them, `GetDC` expands to a temporary 32-bit buffer that
+`ReleaseDC` packs back by truncation (as GDI stores a color), presentation expands with the high
+bits replicated. An 8-bit offscreen surface without a palette of its own now uses the primary's
+palette for GDI (`GetGdiPalette`), as on real DirectDraw. All surfaces then share one depth, so the
+mixed-depth gap above stays unreachable. Tests: `directdraw_tests` group 10. The original finding
+follows.
+
+### Original finding (TASK-24H-0053)
 
 `IDirectDraw::SetDisplayMode(dwWidth, dwHeight, dwBPP)` stores `dwWidth`/`dwHeight` into
 `displayModeWidth_`/`displayModeHeight_` (used later by `CreateSurface` to size the primary
