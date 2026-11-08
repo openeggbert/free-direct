@@ -130,6 +130,8 @@ implemented by design - see [docs/directplay-limitations.md](docs/directplay-lim
 the full deviation table and each resolution, and
 [docs/directplay-design.md](docs/directplay-design.md) Decisions 20-26 for the full rationale.
 
+Future work: [Public relay server for Free Direct multiplayer](docs/directplay-public-relay-task.md) describes the proposed Internet room service, browser/native WSS transport, prerequisite API fixes, deployment and acceptance tests. **This server is not implemented yet.**
+
 ---
 
 ## Technologies
