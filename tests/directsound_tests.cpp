@@ -346,6 +346,64 @@ void Test_Play_CalledTwiceInARow_StillReportsPlaying() {
     ds->Release();
 }
 
+// Vehicle engines in blupi_recon use short static PCM buffers with Play(..., 1).
+// Observe several buffer durations without calling Play again: the control must
+// finish naturally, while the engine keeps playing until explicitly stopped.
+void Test_Play_LoopingOutlivesOneShot_StopsWithoutRefilling() {
+    struct Format { WORD bits, channels; DWORD rate; };
+    const Format formats[] = {{16, 1, 11025}, {8, 2, 22050}, {16, 2, 44100}};
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    for (const auto& format : formats) {
+        const DWORD bytes = (format.rate / 10) * format.channels * (format.bits / 8);
+        LPDIRECTSOUNDBUFFER engine = CreatePcmBuffer(ds, bytes, format.bits, format.channels, format.rate);
+        LPDIRECTSOUNDBUFFER control = CreatePcmBuffer(ds, bytes, format.bits, format.channels, format.rate);
+        CHECK(control->Play(0, 0, 0) == DS_OK);
+        CHECK(engine->Play(0, 0, DSBPLAY_LOOPING) == DS_OK);
+        SDL_Delay(350);
+        DWORD status = 0;
+        CHECK(control->GetStatus(&status) == DS_OK);
+        CHECK(status == 0);
+        CHECK(engine->GetStatus(&status) == DS_OK);
+        CHECK(status == (DSBSTATUS_PLAYING | DSBSTATUS_LOOPING));
+        CHECK(engine->SetVolume(-600) == DS_OK);
+        SDL_Delay(200);
+        CHECK(engine->GetStatus(&status) == DS_OK);
+        CHECK(status == (DSBSTATUS_PLAYING | DSBSTATUS_LOOPING));
+        CHECK(engine->Stop() == DS_OK);
+        SDL_Delay(150);
+        CHECK(engine->GetStatus(&status) == DS_OK);
+        CHECK(status == 0); // the audio callback must not resurrect a stopped loop
+        engine->Release();
+        control->Release();
+    }
+    ds->Release();
+}
+
+void Test_Play_LoopThenOneShot_CancelsLooping() {
+    LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 2204, 16, 1, 11025);
+    CHECK(buf->Play(0, 0, DSBPLAY_LOOPING) == DS_OK);
+    SDL_Delay(300);
+    CHECK(buf->Play(0, 0, 0) == DS_OK);
+    DWORD status = 0;
+    CHECK(buf->GetStatus(&status) == DS_OK);
+    CHECK((status & DSBSTATUS_LOOPING) == 0);
+    SDL_Delay(300);
+    CHECK(buf->GetStatus(&status) == DS_OK);
+    CHECK(status == 0);
+    // Destroy while the callback can be active, then reuse the shared device.
+    CHECK(buf->Play(0, 0, DSBPLAY_LOOPING) == DS_OK);
+    SDL_Delay(100);
+    buf->Release();
+    buf = CreatePcmBuffer(ds, 2204, 16, 1, 11025);
+    CHECK(buf->Play(0, 0, 0) == DS_OK);
+    SDL_Delay(300);
+    CHECK(buf->GetStatus(&status) == DS_OK);
+    CHECK(status == 0);
+    buf->Release();
+    ds->Release();
+}
+
 // Real code path: `Stop()` only calls `SDL_ClearAudioStream` `if (stream_)` - a buffer that was
 // never Play()'d has a null stream_, so Stop() must be a safe no-op, not a crash or error.
 void Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp() {
@@ -620,6 +678,8 @@ int main() {
     Test_GetStatus_FreshBuffer_NotPlaying();
     Test_GetStatus_NullOutParam_ReturnsInvalidParam();
     Test_Play_CalledTwiceInARow_StillReportsPlaying();
+    Test_Play_LoopingOutlivesOneShot_StopsWithoutRefilling();
+    Test_Play_LoopThenOneShot_CancelsLooping();
     Test_Stop_OnNeverPlayedBuffer_IsSafeNoOp();
     Test_TwoBuffers_PlaySimultaneously_BothReportPlayingIndependently();
     Test_100SimultaneousBuffers_AllPlayIndependently();

@@ -100,7 +100,7 @@ these tags.
 | `SetCooperativeLevel` | IMPLEMENTED |
 | `CreateSoundBuffer` | IMPLEMENTED |
 | `GetStatus` | IMPLEMENTED |
-| `Play` | PARTIAL (looping not implemented) |
+| `Play` | IMPLEMENTED (static buffers, including looping) |
 | `Stop` | IMPLEMENTED |
 | `Lock` / `Unlock` | IMPLEMENTED |
 | `SetCurrentPosition` | PARTIAL (stream is not seekable) |
@@ -341,8 +341,9 @@ Any format SDL3 can convert from is also accepted; unsupported formats fall back
 ### Play / Stop / GetStatus behaviour
 
 - `Play()`: clears the SDL stream, inserts PCM data from `playCursor_`, resets cursor to 0.
-- `Stop()`: calls `SDL_ClearAudioStream` — the buffer is quiet until the next `Play()`.
-- `GetStatus()`: sets `DSBSTATUS_PLAYING` if `SDL_GetAudioStreamQueued() > 0`.
+- `Play(..., DSBPLAY_LOOPING)`: repeats a snapshot of the entire static PCM buffer through an SDL stream callback. Refilling is independent of game-loop timing; loop boundaries are not flushed.
+- `Stop()`: disables refilling and clears the stream under the same SDL lock used by the callback.
+- `GetStatus()`: reports `DSBSTATUS_PLAYING` for queued audio or an active loop, plus `DSBSTATUS_LOOPING` for repeated playback. Finite playback flushes the resampler tail.
 
 ### Volume behaviour
 
@@ -361,7 +362,6 @@ Any format SDL3 can convert from is also accepted; unsupported formats fall back
 
 ### Limitations
 
-- Looping (`DSBPLAY_LOOPING = 0x1`) is accepted but ignored (TODO).
 - `SetCurrentPosition()` updates an internal cursor but the SDL stream is not seekable.
 - Accurate stereo panning for mono sources requires a per-sample callback (TODO).
 - Capture and 3D audio are not implemented.

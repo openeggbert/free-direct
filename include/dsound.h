@@ -8,7 +8,7 @@
  *   - IDirectSound::CreateSoundBuffer    IMPLEMENTED
  *   - IDirectSoundBuffer::Lock           IMPLEMENTED
  *   - IDirectSoundBuffer::Unlock         IMPLEMENTED
- *   - IDirectSoundBuffer::Play           PARTIAL (no looping)
+ *   - IDirectSoundBuffer::Play           IMPLEMENTED (static buffers)
  *   - IDirectSoundBuffer::Stop           IMPLEMENTED
  *   - IDirectSoundBuffer::GetStatus      IMPLEMENTED
  *   - IDirectSoundBuffer::SetCurrentPosition PARTIAL
@@ -19,8 +19,9 @@
  * @note Thread safety: DirectSound objects are not thread-safe beyond their own reference
  * counting (`AddRef`/`Release`, which use `std::atomic`). Every other operation - buffer content,
  * volume/pan, playback state, and so on - assumes all calls on a given object happen from a
- * single thread. This matches both target games' actual usage (`../free-eggbert`,
- * `../planetblupi` are both single-threaded Win32 message-loop programs) and is not
+ * single thread. Internal loop refilling runs under the SDL stream lock. The public-call
+ * convention matches both target games (`../free-eggbert`, `../planetblupi` are single-threaded
+ * Win32 message-loop programs) and is not
  * independently synchronized (docs/audit_dsound.md §6.3, S4, TASK-24H-0167) - do not call into
  * these objects concurrently from more than one thread.
  * @note Status: PARTIAL
@@ -109,6 +110,10 @@ typedef struct IDirectSoundBuffer* LPDIRECTSOUNDBUFFER;
  * @note Status: IMPLEMENTED
  */
 #define DSBSTATUS_PLAYING 0x00000001L
+#define DSBSTATUS_LOOPING 0x00000004L
+
+/** @brief Repeat the static buffer until Stop(). */
+#define DSBPLAY_LOOPING 0x00000001L
 
 /**
  * @brief Legacy DirectSound buffer descriptor.
@@ -186,9 +191,9 @@ public:
     virtual ULONG WINAPI AddRef() = 0;
     /** @brief Decrements object reference count; frees on zero and stops SDL stream. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
-    /** @brief Returns DSBSTATUS_PLAYING when the SDL stream has queued audio. @note Status: IMPLEMENTED */
+    /** @brief Returns DSBSTATUS_PLAYING for queued audio or an active loop, plus DSBSTATUS_LOOPING. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI GetStatus(LPDWORD pdwStatus) = 0;
-    /** @brief Feeds PCM data into SDL_AudioStream; looping not implemented. @note Status: PARTIAL */
+    /** @brief Plays static PCM once or repeatedly with DSBPLAY_LOOPING. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI Play(DWORD dwReserved1, DWORD dwPriority, DWORD dwFlags) = 0;
     /** @brief Clears the SDL_AudioStream (silences output immediately). @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI Stop() = 0;

@@ -13,17 +13,15 @@
  *     of tail padding) so PCMWAVEFORMAT::wBitsPerSample lands at offset 16,
  *     while WAVEFORMATEX::wBitsPerSample is at offset 14.
  *   - Play() feeds the stored PCM data into the stream and binds it to the
- *     shared device.
- *   - Stop() clears the stream and unbinds it from the device.
- *   - GetStatus() returns DSBSTATUS_PLAYING when the stream has queued data.
+ *     shared device. Loops are refilled on demand by the SDL stream callback.
+ *   - Stop() disables loop refilling and clears the stream.
+ *   - GetStatus() reports queued playback and active DSBSTATUS_LOOPING.
  *   - SetVolume() converts DirectSound centibel attenuation to a linear SDL
  *     gain (approximate dB conversion).
  *   - SetPan() is stored; stereo panning via per-channel output map is applied
  *     when the buffer has exactly 1 input channel (mono source → stereo device).
  *
  * Limitations:
- *   - Looping (DSBPLAY_LOOPING) is not implemented; the flag is accepted but
- *     ignored (TODO).
  *   - Capture / 3D audio are not implemented.
  *   - SetPan() on an already-stereo source has no effect (stored only).
  *   - Volume accuracy: uses a linear approximation of the centibel dB range.
@@ -235,9 +233,9 @@ private:
  * Supported features:
  *   - PCM 8-bit unsigned and 16-bit signed, mono or stereo.
  *   - Lock/Unlock: writable static buffer filled by the game.
- *   - Play: feeds stored PCM into the SDL stream; one-shot by default.
- *   - Stop: clears the SDL stream.
- *   - GetStatus: checks queued bytes in the SDL stream.
+ *   - Play: feeds stored PCM into the SDL stream; DSBPLAY_LOOPING repeats it.
+ *   - Stop: disables loop refilling and clears the SDL stream.
+ *   - GetStatus: reports queued playback and the loop flag.
  *   - SetVolume: dB centibel to linear gain via SDL_SetAudioStreamGain.
  *   - SetPan: approximate constant-power pan for mono sources.
  *   - SetCurrentPosition: resets internal play cursor (stream is not seekable).
@@ -333,7 +331,8 @@ public:
     /**
      * @brief Returns the current playback status.
      *
-     * Sets DSBSTATUS_PLAYING if the SDL stream still has queued audio data.
+     * Sets DSBSTATUS_PLAYING for queued audio or an active loop, and
+     * DSBSTATUS_LOOPING while repeated playback is enabled.
      * @note Status: IMPLEMENTED
      */
     HRESULT WINAPI GetStatus(LPDWORD pdwStatus) override
@@ -341,8 +340,14 @@ public:
         if (!pdwStatus) return DSERR_INVALIDPARAM;
 
         DWORD status = 0;
-        if (stream_ && SDL_GetAudioStreamQueued(stream_) > 0) {
-            status |= DSBSTATUS_PLAYING;
+        if (stream_) {
+            if (!SDL_LockAudioStream(stream_)) return DSERR_GENERIC;
+            // The queue can momentarily be empty before the next loop refill.
+            if (looping_ || SDL_GetAudioStreamQueued(stream_) > 0) {
+                status |= DSBSTATUS_PLAYING;
+                if (looping_) status |= DSBSTATUS_LOOPING;
+            }
+            SDL_UnlockAudioStream(stream_);
         }
         *pdwStatus = status;
 
@@ -356,8 +361,8 @@ public:
      * On each Play() call the stored PCM data is fed into the SDL stream.
      * The buffer is reset to position 0 first (one-shot static buffer pattern).
      *
-     * Looping (DSBPLAY_LOOPING = 0x1) is accepted but not yet implemented.
-     * @note Status: PARTIAL – no looping
+     * DSBPLAY_LOOPING repeats the entire static buffer until Stop().
+     * @note Status: IMPLEMENTED (static buffers)
      */
     HRESULT WINAPI Play(DWORD dwReserved1, DWORD dwPriority, DWORD dwFlags) override
     {
@@ -382,18 +387,36 @@ public:
             return DSERR_GENERIC;
         }
 
-        // Clear any leftover data so Play() always starts fresh.
-        SDL_ClearAudioStream(stream_);
-
-        // Feed PCM data.
-        if (!SDL_PutAudioStreamData(stream_,
-                                    data_.data() + playCursor_,
-                                    static_cast<int>(bufferBytes_ - playCursor_))) {
-            SDL_Log("[dsound] SDL_PutAudioStreamData failed: %s", SDL_GetError());
-            return DSERR_GENERIC;
+        const bool repeat = (dwFlags & DSBPLAY_LOOPING) != 0;
+        // Snapshot static PCM just as SDL_PutAudioStreamData does for a one-shot.
+        // The callback never reads data_ while the caller writes through Lock().
+        std::vector<uint8_t> loopData;
+        if (repeat) {
+            try {
+                loopData = data_;
+            } catch (const std::bad_alloc&) {
+                return DSERR_OUTOFMEMORY;
+            }
         }
 
+        if (!SDL_LockAudioStream(stream_)) return DSERR_GENERIC;
+        looping_ = false;
+        loopData_.swap(loopData);
+        // Serialize replacement with the callback so old audio cannot be
+        // requeued between clearing the stream and starting the new playback.
+        SDL_ClearAudioStream(stream_);
+        bool queued = SDL_PutAudioStreamData(stream_, data_.data() + playCursor_,
+                                            static_cast<int>(bufferBytes_ - playCursor_));
+        // A finite source needs flushing to release the resampler's final
+        // frames. Do not flush at loop boundaries: they form one continuous stream.
+        if (queued && !repeat) queued = SDL_FlushAudioStream(stream_);
+        looping_ = queued && repeat;
         playCursor_ = 0;
+        SDL_UnlockAudioStream(stream_);
+        if (!queued) {
+            SDL_Log("[dsound] Queuing PCM data failed: %s", SDL_GetError());
+            return DSERR_GENERIC;
+        }
 
         applyGain();
 
@@ -408,7 +431,11 @@ public:
     {
         DS_LOG("Stop");
         if (stream_) {
+            if (!SDL_LockAudioStream(stream_)) return DSERR_GENERIC;
+            looping_ = false;
             SDL_ClearAudioStream(stream_);
+            loopData_.clear();
+            SDL_UnlockAudioStream(stream_);
         }
         return DS_OK;
     }
@@ -544,6 +571,24 @@ public:
 private:
     // ---- helpers -----------------------------------------------------------
 
+    // SDL holds the stream lock during this callback. Play/Stop/GetStatus use
+    // that same lock; no game-loop polling, timer thread or callback allocation
+    // of our own is needed. Queue complete copies to preserve PCM frame alignment.
+    static void SDLCALL RefillLoop(void* userdata, SDL_AudioStream* stream,
+                                   int additional, int /*total*/)
+    {
+        auto* self = static_cast<DirectSoundBufferImpl*>(userdata);
+        if (!self->looping_ || self->loopData_.empty()) return;
+        const int bytes = static_cast<int>(self->loopData_.size());
+        while (additional > 0) {
+            if (!SDL_PutAudioStreamData(stream, self->loopData_.data(), bytes)) {
+                self->looping_ = false;
+                return;
+            }
+            additional -= bytes;
+        }
+    }
+
     /**
      * @brief Create (or return existing) the SDL audio stream for this buffer.
      */
@@ -588,8 +633,9 @@ private:
         FREE_DIRECT_DIAG_INC(sdlAudioStreams);
         FREE_DIRECT_DIAG_INC_EVER(sdlAudioStreamsEver, "astream");
 
-        if (!SDL_BindAudioStream(dev, stream_)) {
-            SDL_Log("[dsound] SDL_BindAudioStream failed: %s", SDL_GetError());
+        if (!SDL_SetAudioStreamGetCallback(stream_, RefillLoop, this) ||
+            !SDL_BindAudioStream(dev, stream_)) {
+            SDL_Log("[dsound] Configuring SDL_AudioStream failed: %s", SDL_GetError());
             SDL_DestroyAudioStream(stream_);
             stream_ = nullptr;
             FREE_DIRECT_DIAG_DEC(sdlAudioStreams);
@@ -609,6 +655,10 @@ private:
     void destroyStream()
     {
         if (stream_) {
+            // Removing the callback waits for any in-flight refill before this
+            // object's PCM/state can be destroyed. Do not hold the stream lock
+            // while unbinding (SDL takes the device lock before the stream lock).
+            SDL_SetAudioStreamGetCallback(stream_, nullptr, nullptr);
             SDL_UnbindAudioStream(stream_);
             SDL_DestroyAudioStream(stream_);
             stream_ = nullptr;
@@ -656,6 +706,9 @@ private:
 
     SDL_AudioSpec       srcSpec_      = {};
     SDL_AudioStream*    stream_       = nullptr;
+    // Accessed by the audio callback only while SDL holds the stream lock.
+    std::vector<uint8_t> loopData_;
+    bool                looping_     = false;
 
     DWORD               playCursor_   = 0;
     LONG                volume_       = DSBVOLUME_MAX;

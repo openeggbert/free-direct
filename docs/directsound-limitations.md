@@ -66,14 +66,38 @@ bug (no dangling pointer, no use-after-free is created by this), just a real sem
 relative to the documented DirectSound contract - no known call site in either target game relies
 on writes after `Unlock()` being rejected.
 
-## No looping
+## Static-buffer looping
 
-`DSBPLAY_LOOPING` is accepted as a bit position in `Play()`'s `dwFlags` parameter but is not
-implemented - looping never occurs. This audit re-confirmed (via a fresh case-sensitive and
-case-insensitive grep) that neither `../free-eggbert` nor `../planetblupi` references
-`DSBPLAY_LOOPING`, or the substring "LOOPING", anywhere in their source. Per `CLAUDE.md`'s
-DirectSound Policy, real looping must not be implemented speculatively without a confirmed call
-site or an explicit user request naming it as an exception.
+[EVIDENCE] (2026-11-08) `blupi_recon`'s Speedy Eggbert 2 hovercraft is a confirmed
+looping caller: `CSound::PlaySoundDS` calls `Play(0, 0, 1)` for vehicle engines.
+Static disassembly of the original Eggbert2.exe confirms flag 1 at VA 0x42a892;
+its SHA-256 is `e6b2ac0ca8624d2b2fb483c8d96c9aadfa4ab5ccea4d39aa8f75ef7f465d7d8d`.
+The 0.3965 s / 0.5501 s engine samples stopped after one pass because Free Direct
+ignored that flag. The older audits below covered only free-eggbert and planetblupi;
+their no-caller finding does not extend to blupi_recon.
+
+`DSBPLAY_LOOPING` is now implemented for static buffers. SDL's get callback queues
+whole copies of a PCM snapshot on demand, preserving the format and sample continuity
+without game-loop polling. `Play`, `Stop`, and status access serialize loop state with
+the SDL stream lock. The callback never reads the writable `Lock()` storage; changes
+become effective at the next `Play()`, as for a one-shot. Removing the callback waits
+for in-flight work before buffer destruction. `GetStatus()` includes `DSBSTATUS_LOOPING`;
+`Play(..., 0)` cancels looping. Finite playback flushes the resampler tail, but loop
+boundaries are never flushed.
+
+Regression coverage in `tests/directsound_tests.cpp` checks an ordinary one-shot
+against a loop over several buffer durations, 8/16-bit PCM and mono/stereo at
+11025/22050/44100 Hz, volume changes, Stop without refilling, changing back to a
+one-shot, and destroying an active loop. These tests failed before the fix.
+
+[EVIDENCE] The consumer's Chrome 155 WebAudio regression also passed after the fix.
+With MIDI muted through the game's settings, 3 seconds of low motor, 2 seconds of
+high motor and another 2 seconds of low motor had RMS above 0.033 in every sample;
+the quiet and stopped controls were exactly zero. The same test on the previous
+web build measured zero throughout the low/high windows and failed. It uses the
+original IOVERCRAFT/FUNSKATE keyboard codes and Up, without game-state patches.
+Evidence: `../blupi_recon/build/freeapi-web/engine-browser-{before,after}.log`,
+`engine-browser-before.json`, and `bundled-smoke/sb2-eggbert-engine.json`.
 
 ## One stream per buffer; Play() always restarts
 
@@ -149,8 +173,8 @@ free-direct concern (dead code cannot execute, so it places no requirements on t
 - `CSound::PlaySoundDS(dwSound, dwFlags)` - the one function in either game whose `Play()` call
   would forward a non-zero, caller-supplied flags word (as opposed to a literal `0`) - is declared
   and defined in both games but never called anywhere. Every reachable `Play()` call site in both
-  games passes a literal `0`, which further de-risks the "no looping" limitation above: no live
-  code path could pass `DSBPLAY_LOOPING` even if a caller wanted to.
+  games passes a literal `0`. This historical observation covers those two source trees only;
+  blupi_recon has a reachable numeric `1` call and now exercises supported static looping.
 
 ## Out of scope (confirmed by audit, not implemented)
 
