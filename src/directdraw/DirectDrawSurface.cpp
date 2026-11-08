@@ -394,28 +394,25 @@ namespace free_direct_directdraw {
                     static_cast<long>(lpSrcRect->bottom));
         }
 
-        // In windowed mode the game converts client coords to screen coords
-        // before blitting to the primary surface.  On real DirectDraw the
-        // primary surface represents the whole desktop, but here it is only
-        // window-sized.  Translate the dest rect back to client-local coords
-        // by subtracting the window position so the pixels land inside the
-        // surface buffer.
+        // A clipped windowed primary uses screen coordinates in the API, but
+        // its CPU buffer is in the game's logical client coordinates. Undo
+        // ClientToScreen completely, including scale and letterbox offsets.
+        // Subtracting only the window position leaves partial cursor updates
+        // at a different location/size from the full back-buffer copy.
         RECT adjustedDestRect{};
         LPRECT effectiveDestRect = lpDestRect;
         if (lpDestRect && type_ == SurfaceType::Primary && clipper_ && owner_ && owner_->sdlWindow_) {
-            int winX = 0, winY = 0;
-            SDL_GetWindowPosition(owner_->sdlWindow_, &winX, &winY);
-            adjustedDestRect.left   = lpDestRect->left   - static_cast<LONG>(winX);
-            adjustedDestRect.top    = lpDestRect->top    - static_cast<LONG>(winY);
-            adjustedDestRect.right  = lpDestRect->right  - static_cast<LONG>(winX);
-            adjustedDestRect.bottom = lpDestRect->bottom - static_cast<LONG>(winY);
+            POINT topLeft{lpDestRect->left, lpDestRect->top};
+            POINT bottomRight{lpDestRect->right, lpDestRect->bottom};
+            HWND window = reinterpret_cast<HWND>(owner_->sdlWindow_);
+            if (!ScreenToClient(window, &topLeft) || !ScreenToClient(window, &bottomRight)) return DDERR_GENERIC;
+            adjustedDestRect = {topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
             effectiveDestRect = &adjustedDestRect;
-            DirectDrawLog("free-direct Blt: adjusted dstRect from screen [%ld,%ld,%ld,%ld] to client [%ld,%ld,%ld,%ld] (winPos=%d,%d)",
+            DirectDrawLog("free-direct Blt: adjusted dstRect from screen [%ld,%ld,%ld,%ld] to logical client [%ld,%ld,%ld,%ld]",
                     static_cast<long>(lpDestRect->left), static_cast<long>(lpDestRect->top),
                     static_cast<long>(lpDestRect->right), static_cast<long>(lpDestRect->bottom),
                     static_cast<long>(adjustedDestRect.left), static_cast<long>(adjustedDestRect.top),
-                    static_cast<long>(adjustedDestRect.right), static_cast<long>(adjustedDestRect.bottom),
-                    winX, winY);
+                    static_cast<long>(adjustedDestRect.right), static_cast<long>(adjustedDestRect.bottom));
         }
 
         // All blits go through CPU pixel buffer. When the destination is the
