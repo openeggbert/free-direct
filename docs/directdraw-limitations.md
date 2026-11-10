@@ -263,3 +263,34 @@ With `k > 1` and no higher-resolution images every frame is the `k`-times neares
 enlargement of the unscaled one, except where the game itself stretches (blupi_recon's minimap,
 sampled at the physical resolution). Tests: `tests/directdraw_tests.cpp` group 11.
 
+## Alpha planes for images with an alpha channel (2026-11-10)
+
+DirectDraw 3 has no per-pixel alpha; transparency is the source colour key. For higher-resolution
+images with an alpha channel (Free API's image overlay, `../free-api/docs/image-overlay.md`) a
+surface may carry an alpha plane, one byte per physical pixel:
+
+* **Where it comes from.** `ReleaseDC` asks `FreeApiGetSurfaceDCAlpha`:
+  * an image with alpha was drawn into the DC: its alpha becomes the plane (none if it is fully
+    opaque);
+  * an opaque image: any earlier plane is dropped;
+  * no image (`DDColorMatch`'s `SetPixel`): the plane stays.
+
+  A surface that received an image this way is an *image surface* (sprite sheets, scratch images);
+  the back buffer, the primary and the mouse buffer never are.
+* **Keyed blits onto other surfaces** (`DDBLTFAST_SRCCOLORKEY`/`DDBLT_KEYSRC`, the back buffer):
+  * the colour key is tested first, as before;
+  * then alpha 0 is skipped and 255 is copied;
+  * anything else is blended in 8-bit-per-channel space (16-bit: unpack, blend, truncate to 565);
+  * 8-bit surfaces cannot blend, so they draw pixels with alpha >= 128.
+* **Blits into an image surface**, keyed or not, copy the pixels and their alpha, transparent ones
+  included. blupi_recon's "hide" effect composes Blupi and two masks in the scratch image `CHTEMP`
+  and then draws `CHTEMP` keyed. With this rule the effect gives the same frames whether the
+  sprites use the blue key or alpha.
+* **Unkeyed blits onto other surfaces** copy the pixels and ignore alpha, as before.
+* **Colour fills** make the filled pixels opaque.
+* **Unchanged paths.** Without a plane on either side, every blit takes the unchanged paths.
+
+Tests: `tests/directdraw_tests.cpp` group 12. In blupi_recon, a pack in which every blue-keyed pixel
+of the sprite sheets is replaced by transparent black gives the same frames as the colour-keyed
+pack (both games, `freeapi/README.md`).
+

@@ -38,6 +38,8 @@
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <string>
 
 namespace {
 
@@ -1807,6 +1809,203 @@ void Test_BackingScale_PrimaryUsesLogicalPresentation() {
     DestroyWindow(hwnd);
 }
 
+// ===== Group 12: alpha channels (Free API image overlay with alpha) =====
+//
+// An overlay image with an alpha channel becomes the surface's alpha plane at ReleaseDC. Keyed
+// blits onto other surfaces blend with it; blits into an image surface (a scratch image such as
+// blupi_recon's CHTEMP) keep the source's alpha, so composing with alpha art gives the same
+// result as with colour-keyed art.
+
+// Writes `pixels` (RGBA, width x height) as a 32-bit BMP with alpha, or 24-bit when !alpha.
+void SaveTestBmp(const char* path, int width, int height, const uint8_t* rgba, bool alpha) {
+    SDL_Surface* surface = SDL_CreateSurface(width, height, alpha ? SDL_PIXELFORMAT_RGBA32 : SDL_PIXELFORMAT_RGB24);
+    CHECK(surface != nullptr);
+    if (!surface) return;
+    for (int y = 0; y < height; ++y) {
+        auto* row = static_cast<uint8_t*>(surface->pixels) + y * surface->pitch;
+        for (int x = 0; x < width; ++x) {
+            const uint8_t* p = rgba + (y * width + x) * 4;
+            if (alpha) std::memcpy(row + x * 4, p, 4);
+            else std::memcpy(row + x * 3, p, 3);
+        }
+    }
+    CHECK(SDL_SaveBMP(surface, path));
+    SDL_DestroySurface(surface);
+}
+
+// DDLoadBitmap's sequence: LoadImageA, a surface of GetObject's size, GetDC + StretchBlt.
+LPDIRECTDRAWSURFACE LoadImageSurface(LPDIRECTDRAW dd, const char* path) {
+    HBITMAP bitmap = static_cast<HBITMAP>(LoadImageA(nullptr, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE | LR_CREATEDIBSECTION));
+    CHECK(bitmap != nullptr);
+    if (!bitmap) return nullptr;
+    BITMAP info{};
+    GetObject(bitmap, sizeof(info), &info);
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, info.bmWidth, info.bmHeight, 16);
+    HDC memory = CreateCompatibleDC(nullptr);
+    SelectObject(memory, bitmap);
+    HDC hdc = nullptr;
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    CHECK(StretchBlt(hdc, 0, 0, info.bmWidth, info.bmHeight, memory, 0, 0, info.bmWidth, info.bmHeight, SRCCOPY));
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+    DeleteDC(memory);
+    DeleteObject(bitmap);
+    return surface;
+}
+
+void SetBlueKey(LPDIRECTDRAWSURFACE surface) {
+    DDCOLORKEY key{0x001F, 0x001F};
+    CHECK(surface->SetColorKey(DDCKEY_SRCBLT, &key) == DD_OK);
+}
+
+// Writes original (1x, 24-bit) and overlay (2x) versions of a 2x1 sprite: logical pixel 0 is
+// the background, logical pixel 1 the figure. Key art: blue background; alpha art: transparent
+// black background and `figureAlpha` on the figure.
+void WriteSprite(const char* name, uint8_t figureR, uint8_t figureG, uint8_t figureB, bool alphaArt, uint8_t figureAlpha) {
+    const uint8_t original[] = {0, 0, 255, 255, figureR, figureG, figureB, 255};
+    SaveTestBmp(name, 2, 1, original, false);
+    uint8_t overlay[4 * 2 * 4];
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            uint8_t* p = overlay + (y * 4 + x) * 4;
+            const bool figure = x >= 2;
+            if (figure) { p[0] = figureR; p[1] = figureG; p[2] = figureB; p[3] = alphaArt ? figureAlpha : 255; }
+            else if (alphaArt) { p[0] = 0; p[1] = 0; p[2] = 0; p[3] = 0; }
+            else { p[0] = 0; p[1] = 0; p[2] = 255; p[3] = 255; }
+        }
+    }
+    std::filesystem::create_directories("fd_alpha_pack");
+    SaveTestBmp((std::string("fd_alpha_pack/") + name).c_str(), 4, 2, overlay, alphaArt);
+}
+
+void UseOverlay(bool on) {
+    SDL_Environment* env = SDL_GetEnvironment();
+    if (on) {
+        SDL_SetEnvironmentVariable(env, "FREE_API_IMAGE_OVERLAY", "fd_alpha_pack", 1);
+        SDL_SetEnvironmentVariable(env, "FREE_API_IMAGE_SCALE", "2", 1);
+    } else {
+        SDL_UnsetEnvironmentVariable(env, "FREE_API_IMAGE_OVERLAY");
+        SDL_UnsetEnvironmentVariable(env, "FREE_API_IMAGE_SCALE");
+    }
+}
+
+void Test_Alpha_KeyedBlitBlendsOntoBackBuffer() {
+    WriteSprite("fd_alpha_blend.blp", 255, 0, 0, true, 128);
+    UseOverlay(true);
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE sprite = LoadImageSurface(dd, "fd_alpha_blend.blp");
+    LPDIRECTDRAWSURFACE back = CreateOffscreenSurface(dd, 2, 1, 16);
+    SetBlueKey(sprite);
+    Fill16(back, nullptr, 0x07E0);
+    CHECK(back->BltFast(0, 0, sprite, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+    DDSURFACEDESC desc = LockDesc(back);
+    for (int y = 0; y < 2; ++y) {
+        CHECK(Physical16(desc, 0, y) == 0x07E0);   // transparent background: untouched
+        CHECK(Physical16(desc, 1, y) == 0x07E0);
+        CHECK(Physical16(desc, 2, y) == 0x83E0);   // red at 128/255 over green
+        CHECK(Physical16(desc, 3, y) == 0x83E0);
+    }
+    // An opaque (unkeyed) blit onto the back buffer ignores the alpha, as before.
+    CHECK(back->BltFast(0, 0, sprite, nullptr, DDBLTFAST_NOCOLORKEY) == DD_OK);
+    desc = LockDesc(back);
+    CHECK(Physical16(desc, 0, 0) == 0x0000);
+    CHECK(Physical16(desc, 2, 0) == 0xF800);
+
+    // DDColorMatch's GetDC/SetPixel/ReleaseDC keeps the alpha plane.
+    HDC hdc = nullptr;
+    CHECK(sprite->GetDC(&hdc) == DD_OK);
+    const COLORREF saved = GetPixel(hdc, 0, 0);
+    SetPixel(hdc, 0, 0, RGB(0, 0, 255));
+    SetPixel(hdc, 0, 0, saved);
+    CHECK(sprite->ReleaseDC(hdc) == DD_OK);
+    Fill16(back, nullptr, 0x07E0);
+    CHECK(back->BltFast(0, 0, sprite, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+    desc = LockDesc(back);
+    CHECK(Physical16(desc, 0, 0) == 0x07E0 && Physical16(desc, 2, 0) == 0x83E0);
+
+    sprite->Release();
+    back->Release();
+    dd->Release();
+    UseOverlay(false);
+}
+
+// blupi_recon's "hide" effect: mask (red key) into the scratch image, the figure opaque into it,
+// the second mask, then the scratch image keyed blue onto the back buffer. Key art and alpha
+// art must give the same frames.
+void ComposeHide(bool alphaArt, uint16_t out[2][4]) {
+    WriteSprite(alphaArt ? "fd_alpha_hide_a.blp" : "fd_alpha_hide_k.blp", 255, 255, 0, alphaArt, 255);
+    const uint8_t maskOriginal[] = {255, 0, 0, 255, 0, 0, 255, 255};  // red (kept), blue (blanks)
+    SaveTestBmp("fd_alpha_mask.blp", 2, 1, maskOriginal, false);
+    const uint8_t scratchOriginal[] = {0, 0, 255, 255, 0, 0, 255, 255};
+    SaveTestBmp("fd_alpha_scratch.blp", 2, 1, scratchOriginal, false);
+    UseOverlay(true);
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE figure = LoadImageSurface(dd, alphaArt ? "fd_alpha_hide_a.blp" : "fd_alpha_hide_k.blp");
+    LPDIRECTDRAWSURFACE mask = LoadImageSurface(dd, "fd_alpha_mask.blp");
+    LPDIRECTDRAWSURFACE scratch = LoadImageSurface(dd, "fd_alpha_scratch.blp");
+    LPDIRECTDRAWSURFACE back = CreateOffscreenSurface(dd, 2, 1, 16);
+    {
+        // The alpha art really comes from the overlay: its background is black (transparent).
+        LPDIRECTDRAWSURFACE probe = CreateOffscreenSurface(dd, 2, 1, 16);
+        CHECK(probe->BltFast(0, 0, figure, nullptr, DDBLTFAST_NOCOLORKEY) == DD_OK);
+        CHECK(Physical16(LockDesc(probe), 0, 0) == (alphaArt ? 0x0000 : 0x001F));
+        probe->Release();
+    }
+    SetBlueKey(figure);
+    SetBlueKey(scratch);
+    DDCOLORKEY red{0xF800, 0xF800};
+    CHECK(mask->SetColorKey(DDCKEY_SRCBLT, &red) == DD_OK);
+    for (int frame = 0; frame < 2; ++frame) {
+        Fill16(back, nullptr, 0x07E0);
+        CHECK(scratch->BltFast(0, 0, mask, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+        CHECK(scratch->BltFast(0, 0, figure, nullptr, DDBLTFAST_NOCOLORKEY) == DD_OK);
+        if (frame == 1) CHECK(scratch->BltFast(0, 0, mask, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+        CHECK(back->BltFast(0, 0, scratch, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+        const DDSURFACEDESC desc = LockDesc(back);
+        for (int x = 0; x < 4; ++x) out[frame][x] = Physical16(desc, x, 1);
+    }
+    figure->Release(); mask->Release(); scratch->Release(); back->Release();
+    dd->Release();
+    UseOverlay(false);
+}
+
+void Test_Alpha_ComposedScratchImageMatchesKeyArt() {
+    uint16_t keyed[2][4], alpha[2][4];
+    ComposeHide(false, keyed);
+    ComposeHide(true, alpha);
+    CHECK(std::memcmp(keyed, alpha, sizeof(keyed)) == 0);
+    // Frame 0: the figure (yellow) over green; frame 1: the second mask blanks the figure.
+    CHECK(keyed[0][0] == 0x07E0 && keyed[0][2] == 0xFFE0);
+    CHECK(keyed[1][0] == 0x07E0 && keyed[1][2] == 0x07E0);
+}
+
+// Loading an opaque image into a surface that had an alpha plane drops it.
+void Test_Alpha_OpaqueReloadDropsPlane() {
+    WriteSprite("fd_alpha_reload.blp", 255, 0, 0, true, 128);
+    UseOverlay(true);
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE sprite = LoadImageSurface(dd, "fd_alpha_reload.blp");
+    UseOverlay(false);
+    HBITMAP plain = static_cast<HBITMAP>(LoadImageA(nullptr, "fd_alpha_reload.blp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE));
+    HDC memory = CreateCompatibleDC(nullptr);
+    SelectObject(memory, plain);
+    HDC hdc = nullptr;
+    CHECK(sprite->GetDC(&hdc) == DD_OK);
+    CHECK(StretchBlt(hdc, 0, 0, 2, 1, memory, 0, 0, 2, 1, SRCCOPY));
+    CHECK(sprite->ReleaseDC(hdc) == DD_OK);
+    DeleteDC(memory);
+    DeleteObject(plain);
+    LPDIRECTDRAWSURFACE back = CreateOffscreenSurface(dd, 2, 1, 16);
+    SetBlueKey(sprite);
+    Fill16(back, nullptr, 0x07E0);
+    CHECK(back->BltFast(0, 0, sprite, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+    const DDSURFACEDESC desc = LockDesc(back);
+    CHECK(Physical16(desc, 0, 0) == 0x07E0);   // the original's blue background: keyed
+    CHECK(Physical16(desc, 2, 0) == 0xF800);   // opaque red, no blending
+    sprite->Release();
+    back->Release();
+    dd->Release();
+}
+
 int main() {
     // Group 2: creation/lifecycle
     Test_DirectDrawCreate_ReturnsOk();
@@ -1904,6 +2103,16 @@ int main() {
     Test_BackingScale_StretchBltIntoDcUpscalesUnscaledBitmap();
     Test_BackingScale_DcPixelRoundTripTouchesOnePhysicalPixel();
     Test_BackingScale_PrimaryUsesLogicalPresentation();
+
+    // Group 12: alpha channels
+    Test_Alpha_KeyedBlitBlendsOntoBackBuffer();
+    Test_Alpha_ComposedScratchImageMatchesKeyArt();
+    Test_Alpha_OpaqueReloadDropsPlane();
+    std::filesystem::remove_all("fd_alpha_pack");
+    for (const char* name : {"fd_alpha_blend.blp", "fd_alpha_hide_a.blp", "fd_alpha_hide_k.blp", "fd_alpha_mask.blp",
+                             "fd_alpha_scratch.blp", "fd_alpha_reload.blp"}) {
+        std::remove(name);
+    }
 
     if (g_failures == 0) {
         std::printf("OK: all DirectDraw tests passed.\n");

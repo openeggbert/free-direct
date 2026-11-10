@@ -182,10 +182,116 @@ namespace free_direct_directdraw {
             }
         }
 
+        if (!alpha_.empty()) {
+            for (int y = fillRect.top; y < fillRect.bottom; ++y) {
+                std::fill_n(alpha_.begin() + static_cast<ptrdiff_t>(static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(fillRect.left)),
+                            fillRect.right - fillRect.left, static_cast<uint8_t>(255));
+            }
+        }
+
         if (type_ == SurfaceType::Primary) {
             MarkDirty();
         }
         return DD_OK;
+    }
+
+    /**
+     * @brief Blit for surfaces with alpha planes (higher-resolution images with an alpha channel).
+     *
+     * Same pixel mapping and colour-key test as BlitFrom. Then:
+     * - an unkeyed (opaque) blit copies the pixels and, into an image surface, their alpha;
+     * - a keyed blit into an image surface (a scratch image the game composes, like
+     *   blupi_recon's CHTEMP) copies the pixels and their alpha, transparent ones included, so
+     *   a later keyed blit of that image shows exactly what was composed;
+     * - a keyed blit into any other surface (the back buffer) skips transparent pixels, copies
+     *   opaque ones and blends the rest (16/32-bit; 8-bit palette indices use alpha >= 128).
+     *
+     * @note Status: IMPLEMENTED
+     */
+    void DirectDrawSurfaceImpl::BlitWithAlpha(const DirectDrawSurfaceImpl& source,
+                                              const RECT& sourceRect,
+                                              const RECT& destRect,
+                                              const bool useSrcColorKey,
+                                              uint64_t& copied,
+                                              uint64_t& skipped)
+    {
+        const int srcWidth = RectWidth(sourceRect);
+        const int srcHeight = RectHeight(sourceRect);
+        const int dstWidth = RectWidth(destRect);
+        const int dstHeight = RectHeight(destRect);
+        const bool keyActive = useSrcColorKey && source.hasSrcColorKey_;
+        const uint32_t keyMask = bpp_ == 8 ? 0xFFu : (bpp_ == 16 ? 0xFFFFu : 0xFFFFFFFFu);
+        const uint32_t keyLow = source.colorKey_.dwColorSpaceLowValue & keyMask;
+        const uint32_t keyHigh = source.colorKey_.dwColorSpaceHighValue & keyMask;
+        const bool compose = imageSurface_;
+        if (compose && source.HasAlpha() && alpha_.empty()) {
+            alpha_.assign(static_cast<size_t>(width_) * static_cast<size_t>(height_), 255);
+        }
+        const uint8_t* srcAlpha = source.HasAlpha() ? source.alpha_.data() : nullptr;
+        uint8_t* dstAlpha = alpha_.empty() ? nullptr : alpha_.data();
+        const size_t bytes = static_cast<size_t>(bpp_ / 8);
+        const uint8_t* srcPixels = source.GetPixels().data();
+
+        for (int y = 0; y < dstHeight; ++y) {
+            const int srcY = sourceRect.top + (y * srcHeight) / dstHeight;
+            const int dstY = destRect.top + y;
+            for (int x = 0; x < dstWidth; ++x) {
+                const int srcX = sourceRect.left + (x * srcWidth) / dstWidth;
+                const size_t srcIndex = static_cast<size_t>(srcY) * static_cast<size_t>(source.GetWidth()) + static_cast<size_t>(srcX);
+                const size_t dstIndex = static_cast<size_t>(dstY) * static_cast<size_t>(width_) + static_cast<size_t>(destRect.left + x);
+                const uint8_t* src = srcPixels + srcIndex * bytes;
+                uint8_t* dst = pixels_.data() + dstIndex * bytes;
+
+                uint32_t raw = src[0];
+                if (bytes >= 2) raw |= static_cast<uint32_t>(src[1]) << 8;
+                if (bytes == 4) raw |= (static_cast<uint32_t>(src[2]) << 16) | (static_cast<uint32_t>(src[3]) << 24);
+                if (keyActive) {
+                    // As BlitFrom: 32-bit keys match the raw value or its RGB part.
+                    const bool match = (raw >= keyLow && raw <= keyHigh) ||
+                        (bytes == 4 && (raw & 0x00FFFFFFu) >= (keyLow & 0x00FFFFFFu) && (raw & 0x00FFFFFFu) <= (keyHigh & 0x00FFFFFFu));
+                    if (match) {
+                        ++skipped;
+                        continue;
+                    }
+                }
+                const uint8_t alpha = srcAlpha ? srcAlpha[srcIndex] : 255;
+
+                if (!useSrcColorKey || compose) {
+                    std::memcpy(dst, src, bytes);
+                    if (bytes == 4) dst[3] = 255;
+                    if (dstAlpha) dstAlpha[dstIndex] = alpha;
+                    ++copied;
+                    continue;
+                }
+                if (alpha == 0 || (bpp_ == 8 && alpha < 128)) {
+                    ++skipped;
+                    continue;
+                }
+                if (alpha == 255 || bpp_ == 8) {
+                    std::memcpy(dst, src, bytes);
+                    if (bytes == 4) dst[3] = 255;
+                } else {
+                    const auto blend = [alpha](const unsigned s, const unsigned d) {
+                        return static_cast<uint8_t>((s * alpha + d * (255u - alpha) + 127u) / 255u);
+                    };
+                    if (bpp_ == 16) {
+                        uint8_t sr, sg, sb, dr, dg, db;
+                        UnpackRgb565(static_cast<uint16_t>(raw), sr, sg, sb);
+                        UnpackRgb565(static_cast<uint16_t>(dst[0] | (dst[1] << 8)), dr, dg, db);
+                        const uint16_t mixed = PackRgb565(blend(sr, dr), blend(sg, dg), blend(sb, db));
+                        dst[0] = static_cast<uint8_t>(mixed & 0xFFu);
+                        dst[1] = static_cast<uint8_t>(mixed >> 8);
+                    } else {
+                        dst[0] = blend(src[0], dst[0]);
+                        dst[1] = blend(src[1], dst[1]);
+                        dst[2] = blend(src[2], dst[2]);
+                        dst[3] = 255;
+                    }
+                }
+                if (dstAlpha) dstAlpha[dstIndex] = 255;
+                ++copied;
+            }
+        }
     }
 
     /**
@@ -227,6 +333,22 @@ namespace free_direct_directdraw {
 
         uint64_t copied = 0;
         uint64_t skipped = 0;
+
+        // Alpha planes exist only for higher-resolution images with an alpha channel (Free API's
+        // image overlay); without them every blit takes the paths below, unchanged.
+        if ((source.HasAlpha() || !alpha_.empty()) && bpp_ == source.GetBPP() && (bpp_ == 8 || bpp_ == 16 || bpp_ == 32)) {
+            BlitWithAlpha(source, sourceClamped, destClamped, useSrcColorKey, copied, skipped);
+            if (copiedPixelCount) {
+                *copiedPixelCount = copied;
+            }
+            if (skippedPixelCount) {
+                *skippedPixelCount = skipped;
+            }
+            if (type_ == SurfaceType::Primary) {
+                MarkDirty();
+            }
+            return DD_OK;
+        }
 
         // Fast path: an unscaled (1:1) copy with no active source color key is done as a
         // straight per-row memcpy instead of the general per-pixel loop below - measured ~29x
@@ -775,6 +897,30 @@ namespace free_direct_directdraw {
                     static_cast<unsigned long long>(debugId_),
                     reinterpret_cast<void*>(attachedDc_));
             return DDERR_INVALIDPARAMS;
+        }
+
+        // An image drawn through this DC (DDLoadBitmap's DDCopyBitmap) makes this an image
+        // surface. An image with an alpha channel (Free API's image overlay) leaves its alpha in
+        // the 4th byte of the DC's pixels: keep it as the alpha plane; an opaque image replaces
+        // any earlier one. A DC that drew no image (DDColorMatch's SetPixel) changes nothing.
+        const int imageAlpha = FreeApiGetSurfaceDCAlpha(attachedDc_);
+        if (imageAlpha >= 1) {
+            imageSurface_ = true;
+            alpha_.clear();
+        }
+        if (imageAlpha == 2) {
+            const uint8_t* rgba = bpp_ == 32 ? pixels_.data() : dcTempBuffer_.data();
+            const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
+            bool translucent = false;
+            for (size_t i = 0; i < pixelCount && !translucent; ++i) {
+                translucent = rgba[i * 4u + 3u] != 255;
+            }
+            if (translucent) {
+                alpha_.resize(pixelCount);
+                for (size_t i = 0; i < pixelCount; ++i) {
+                    alpha_[i] = rgba[i * 4u + 3u];
+                }
+            }
         }
 
         // For 8-bit surfaces, convert the temp 32-bit buffer back to palette indices.

@@ -234,6 +234,9 @@ class DirectDrawSurfaceImpl;
         [[nodiscard]] int GetLogicalHeight() const { return logicalHeight_; }
         /// Backing scale: physical pixels per logical pixel on each axis (1 = unscaled).
         [[nodiscard]] int GetScale() const { return scale_; }
+        /// True when the surface has an alpha plane (an image with an alpha channel was loaded
+        /// into it, or it is an image surface that received such pixels).
+        [[nodiscard]] bool HasAlpha() const { return !alpha_.empty(); }
         [[nodiscard]] int GetBPP() const { return bpp_; }
         [[nodiscard]] LONG GetPitch() const { return static_cast<LONG>(width_ * (bpp_ / 8)); }
         [[nodiscard]] const std::vector<uint8_t>& GetPixels() const { return pixels_; }
@@ -245,6 +248,14 @@ class DirectDrawSurfaceImpl;
         void GetGdiPalette(PALETTEENTRY entries[256]) const;
 
         HRESULT FillColor(const RECT* destRect, DWORD fillColor);
+        /// BlitFrom for a source or destination with an alpha plane; rectangles are physical
+        /// and already clamped, formats equal.
+        void BlitWithAlpha(const DirectDrawSurfaceImpl& source,
+                           const RECT& sourceRect,
+                           const RECT& destRect,
+                           bool useSrcColorKey,
+                           uint64_t& copied,
+                           uint64_t& skipped);
         HRESULT BlitFrom(const DirectDrawSurfaceImpl& source,
                         const RECT* destRect,
                         const RECT* srcRect,
@@ -280,6 +291,15 @@ class DirectDrawSurfaceImpl;
         int logicalWidth_;
         int logicalHeight_;
         int scale_ = 1;
+        /// Alpha plane, one byte per physical pixel (0 transparent .. 255 opaque); empty when
+        /// the surface is opaque, which is always the case without Free API's image overlay.
+        /// Set at ReleaseDC from an image with an alpha channel (FreeApiGetSurfaceDCAlpha).
+        std::vector<uint8_t> alpha_;
+        /// True once an image was drawn into the surface through GetDC (DDLoadBitmap): the games'
+        /// sprite sheets and scratch images, as opposed to the back buffer, the primary and the
+        /// mouse buffer. Blits into an image surface keep the source's alpha (composition, e.g.
+        /// blupi_recon's "hide" effect in CHTEMP) instead of blending.
+        bool imageSurface_ = false;
         std::vector<uint8_t> pixels_;
         SDL_Texture* texture_;
         LPDIRECTDRAWPALETTE palette_ = nullptr;

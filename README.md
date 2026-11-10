@@ -262,6 +262,7 @@ Current known limitations:
 * 16-bit (RGB565) surfaces are supported. With `FREE_DIRECT_HONOR_DISPLAY_BPP` (CMake option or environment variable, off by default) surfaces created without `DDSD_PIXELFORMAT` take the display depth (`SetDisplayMode`'s 8 or 16, 16 in windowed mode) instead of 32 bits; blupi_recon needs it (see `docs/directdraw-limitations.md`).
 * Source color-key range handling is implemented for the used subset; broader legacy edge cases are still partial.
 * Backing scale (`FREE_DIRECT_BACKING_SCALE=1..4`, default 1): every surface keeps a pixel buffer that many times larger on each axis while the API stays logical (surface sizes, blit rectangles, `GetDC` coordinates, the logical presentation). Together with Free API's image overlay it lets blupi_recon show higher-resolution images without any change to the game (see `docs/directdraw-limitations.md`).
+* Alpha planes: a surface loaded (through `GetDC`) with an image that has an alpha channel keeps it; keyed blits blend with it, and blits into such image surfaces keep the source's alpha. Without images with alpha nothing changes (`docs/directdraw-limitations.md`).
 * `FREE_DIRECT_CAPTURE_PRIMARY=<dir>` (diagnostics) writes every presented primary frame whose content changed as a 24-bit BMP named `frame-<n>-<hash>.bmp` (at most `FREE_DIRECT_CAPTURE_LIMIT`, default 1000).
 
 Debug logging and performance options:
