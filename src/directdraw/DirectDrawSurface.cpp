@@ -28,13 +28,16 @@ namespace free_direct_directdraw {
 
     static std::atomic<uint64_t> g_nextSurfaceId{1};
 
-    DirectDrawSurfaceImpl::DirectDrawSurfaceImpl(DirectDrawImpl* owner, const SurfaceType type, const int width, const int height, const int bpp)
+    DirectDrawSurfaceImpl::DirectDrawSurfaceImpl(DirectDrawImpl* owner, const SurfaceType type, const int width, const int height, const int bpp, const int scale)
         : refCount_(1),
           owner_(owner),
           type_(type),
-          width_(width),
-          height_(height),
+          width_(width * scale),
+          height_(height * scale),
           bpp_(bpp),
+          logicalWidth_(width),
+          logicalHeight_(height),
+          scale_(scale),
           texture_(nullptr),
           debugId_(g_nextSurfaceId.fetch_add(1))
     {
@@ -55,11 +58,12 @@ namespace free_direct_directdraw {
         // registered with no matching destructor call to unregister it.
         if (owner_) owner_->liveSurfaces_.push_back(this);
 
-        DirectDrawLog("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d bpp=%d pitch=%ld palette=%s",
+        DirectDrawLog("free-direct CreateSurface/new surface: id=%llu type=%s size=%dx%d scale=%d bpp=%d pitch=%ld palette=%s",
                 static_cast<unsigned long long>(debugId_),
                 (type_ == SurfaceType::Primary) ? "primary" : "offscreen",
-                width_,
-                height_,
+                logicalWidth_,
+                logicalHeight_,
+                scale_,
                 bpp_,
                 static_cast<long>(GetPitch()),
                 BoolToText(HasPalette()));
@@ -137,8 +141,10 @@ namespace free_direct_directdraw {
      */
     HRESULT DirectDrawSurfaceImpl::FillColor(const RECT* destRect, const DWORD fillColor)
     {
-
-        const RECT fillRect = ClampRect(destRect ? *destRect : GetFullRect(width_, height_), width_, height_);
+        // destRect is logical: clamp it to the logical surface, then cover its physical pixels.
+        const RECT fillRect = ScaleRect(
+                ClampRect(destRect ? *destRect : GetFullRect(logicalWidth_, logicalHeight_), logicalWidth_, logicalHeight_),
+                scale_);
 
         // Both branches fall through to the shared MarkDirty() tail below (docs/audit_ddraw.md
         // §5.1, F7, TASK-24H-0157) - the 8-bit branch used to return early here, skipping it, so
@@ -200,8 +206,16 @@ namespace free_direct_directdraw {
                                             uint64_t* skippedPixelCount)
     {
 
-        const RECT sourceClamped = ClampRect(srcRect ? *srcRect : GetFullRect(source.GetWidth(), source.GetHeight()), source.GetWidth(), source.GetHeight());
-        const RECT destClamped = ClampRect(destRect ? *destRect : GetFullRect(width_, height_), width_, height_);
+        // Both rectangles are logical (the game's coordinates). Clamp them in logical space, as
+        // before backing scales existed, then address each surface's physical pixels: with the
+        // same scale on both sides a logical 1:1 blit stays a physical 1:1 blit.
+        const RECT sourceClamped = ScaleRect(
+                ClampRect(srcRect ? *srcRect : GetFullRect(source.GetLogicalWidth(), source.GetLogicalHeight()),
+                          source.GetLogicalWidth(), source.GetLogicalHeight()),
+                source.GetScale());
+        const RECT destClamped = ScaleRect(
+                ClampRect(destRect ? *destRect : GetFullRect(logicalWidth_, logicalHeight_), logicalWidth_, logicalHeight_),
+                scale_);
 
         const int srcWidth = RectWidth(sourceClamped);
         const int srcHeight = RectHeight(sourceClamped);
@@ -242,6 +256,59 @@ namespace free_direct_directdraw {
             }
             copied = static_cast<uint64_t>(dstWidth) * static_cast<uint64_t>(dstHeight);
 
+            if (copiedPixelCount) {
+                *copiedPixelCount = copied;
+            }
+            if (skippedPixelCount) {
+                *skippedPixelCount = skipped;
+            }
+            if (type_ == SurfaceType::Primary) {
+                MarkDirty();
+            }
+            return DD_OK;
+        }
+
+        // Keyed 1:1 copies (every sprite the games draw) of the 8-bit and 16-bit formats: the
+        // same per-pixel key test as the general loop below, without its per-pixel division.
+        // Matters most with a backing scale, which multiplies the pixels of every blit.
+        if (isUnscaled && colorKeyActive && bpp_ == source.GetBPP() && (bpp_ == 8 || bpp_ == 16)) {
+            const uint8_t* srcPixels = source.GetPixels().data();
+            const size_t srcStride = static_cast<size_t>(source.GetWidth());
+            const size_t dstStride = static_cast<size_t>(width_);
+            if (bpp_ == 8) {
+                const auto keyLow = static_cast<uint8_t>(source.colorKey_.dwColorSpaceLowValue & 0xFFu);
+                const auto keyHigh = static_cast<uint8_t>(source.colorKey_.dwColorSpaceHighValue & 0xFFu);
+                for (int y = 0; y < dstHeight; ++y) {
+                    const uint8_t* src = srcPixels + static_cast<size_t>(sourceClamped.top + y) * srcStride + static_cast<size_t>(sourceClamped.left);
+                    uint8_t* dst = pixels_.data() + static_cast<size_t>(destClamped.top + y) * dstStride + static_cast<size_t>(destClamped.left);
+                    for (int x = 0; x < dstWidth; ++x) {
+                        const uint8_t index = src[x];
+                        if (index >= keyLow && index <= keyHigh) {
+                            ++skipped;
+                        } else {
+                            dst[x] = index;
+                            ++copied;
+                        }
+                    }
+                }
+            } else {
+                const uint32_t keyLow = source.colorKey_.dwColorSpaceLowValue & 0xFFFFu;
+                const uint32_t keyHigh = source.colorKey_.dwColorSpaceHighValue & 0xFFFFu;
+                for (int y = 0; y < dstHeight; ++y) {
+                    const uint8_t* src = srcPixels + (static_cast<size_t>(sourceClamped.top + y) * srcStride + static_cast<size_t>(sourceClamped.left)) * 2u;
+                    uint8_t* dst = pixels_.data() + (static_cast<size_t>(destClamped.top + y) * dstStride + static_cast<size_t>(destClamped.left)) * 2u;
+                    for (int x = 0; x < dstWidth; ++x) {
+                        const uint32_t value = static_cast<uint32_t>(src[x * 2]) | (static_cast<uint32_t>(src[x * 2 + 1]) << 8u);
+                        if (value >= keyLow && value <= keyHigh) {
+                            ++skipped;
+                        } else {
+                            dst[x * 2] = src[x * 2];
+                            dst[x * 2 + 1] = src[x * 2 + 1];
+                            ++copied;
+                        }
+                    }
+                }
+            }
             if (copiedPixelCount) {
                 *copiedPixelCount = copied;
             }
@@ -495,8 +562,8 @@ namespace free_direct_directdraw {
             destRect.right = destRect.left + RectWidth(*lpSrcRect);
             destRect.bottom = destRect.top + RectHeight(*lpSrcRect);
         } else {
-            destRect.right = destRect.left + sourceSurface->GetWidth();
-            destRect.bottom = destRect.top + sourceSurface->GetHeight();
+            destRect.right = destRect.left + sourceSurface->GetLogicalWidth();
+            destRect.bottom = destRect.top + sourceSurface->GetLogicalHeight();
         }
 
         const bool useKey = (dwTrans & DDBLTFAST_SRCCOLORKEY) != 0;
@@ -619,6 +686,15 @@ namespace free_direct_directdraw {
             return DDERR_DCALREADYCREATED;
         }
 
+        // The DC spans the physical pixels; with a backing scale it also carries the scale, so
+        // GDI calls (DDCopyBitmap's StretchBlt, DDColorMatch's SetPixel) take logical
+        // coordinates like everything else the game passes.
+        const auto CreateDcOver = [this](void* pixels, const int pitch, const int bitsPerPixel) -> HDC {
+            if (scale_ == 1) {
+                return FreeApiCreateSurfaceDC(pixels, width_, height_, pitch, bitsPerPixel);
+            }
+            return FreeApiCreateScaledSurfaceDC(pixels, width_, height_, pitch, bitsPerPixel, scale_);
+        };
         {
             if (bpp_ == 8) {
                 // Expand 8-bit palette indices to a temporary 32-bit RGBA buffer.
@@ -641,7 +717,7 @@ namespace free_direct_directdraw {
                     dcTempBuffer_[i * 4u + 2u] = entries[idx].peBlue;
                     dcTempBuffer_[i * 4u + 3u] = 255;
                 }
-                attachedDc_ = FreeApiCreateSurfaceDC(dcTempBuffer_.data(), width_, height_, width_ * 4, 32);
+                attachedDc_ = CreateDcOver(dcTempBuffer_.data(), width_ * 4, 32);
             } else if (bpp_ == 16) {
                 // GDI draws into a temporary 32-bit copy; ReleaseDC packs it back to RGB565.
                 const size_t pixelCount = static_cast<size_t>(width_) * static_cast<size_t>(height_);
@@ -659,9 +735,9 @@ namespace free_direct_directdraw {
                     UnpackRgb565(v, dcTempBuffer_[i * 4u + 0u], dcTempBuffer_[i * 4u + 1u], dcTempBuffer_[i * 4u + 2u]);
                     dcTempBuffer_[i * 4u + 3u] = 255;
                 }
-                attachedDc_ = FreeApiCreateSurfaceDC(dcTempBuffer_.data(), width_, height_, width_ * 4, 32);
+                attachedDc_ = CreateDcOver(dcTempBuffer_.data(), width_ * 4, 32);
             } else {
-                attachedDc_ = FreeApiCreateSurfaceDC(pixels_.data(), width_, height_, static_cast<int>(GetPitch()), bpp_);
+                attachedDc_ = CreateDcOver(pixels_.data(), static_cast<int>(GetPitch()), bpp_);
             }
             if (!attachedDc_) {
                 *lphDC = nullptr;
@@ -752,6 +828,17 @@ namespace free_direct_directdraw {
         FreeApiDestroySurfaceDC(attachedDc_);
         attachedDc_ = nullptr;
 
+        // With a backing scale the temporary RGBA copy is scale^2 times larger (21 MB for a
+        // 1024x1327 image at 2x) and a surface typically needs a DC only while it is loaded:
+        // give the memory back instead of keeping it for the surface's lifetime.
+        if (scale_ > 1 && dcTempBuffer_.capacity() != 0) {
+            FREE_DIRECT_DIAG_ADD_BYTES(ddSurfaceDcTempCapacityBytes,
+                                       ddSurfaceDcTempCapacityHighWaterBytes,
+                                       -static_cast<int64_t>(dcTempBuffer_.capacity()));
+            std::vector<uint8_t>().swap(dcTempBuffer_);
+            diagDcTempCapacityBytes_ = 0;
+        }
+
         DirectDrawLog("free-direct ReleaseDC: surfaceId=%llu dc=%p bpp=%d", 
                 static_cast<unsigned long long>(debugId_),
                 reinterpret_cast<void*>(hDC),
@@ -765,8 +852,11 @@ namespace free_direct_directdraw {
         if (lpDDSurfaceDesc->dwSize != sizeof(DDSURFACEDESC)) return DDERR_INVALIDPARAMS;
 
         lpDDSurfaceDesc->dwFlags = DDSD_WIDTH | DDSD_HEIGHT | DDSD_CAPS | DDSD_PIXELFORMAT;
-        lpDDSurfaceDesc->dwWidth = static_cast<DWORD>(width_);
-        lpDDSurfaceDesc->dwHeight = static_cast<DWORD>(height_);
+        // Logical size: the game sizes its blits and StretchBlt targets from it. With a backing
+        // scale, lPitch and lpSurface below describe the larger physical buffer (the target games
+        // read only its first pixel, in DDColorMatch).
+        lpDDSurfaceDesc->dwWidth = static_cast<DWORD>(logicalWidth_);
+        lpDDSurfaceDesc->dwHeight = static_cast<DWORD>(logicalHeight_);
         lpDDSurfaceDesc->ddsCaps.dwCaps = (type_ == SurfaceType::Primary) ? DDSCAPS_PRIMARYSURFACE : DDSCAPS_OFFSCREENPLAIN;
         
         lpDDSurfaceDesc->ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);

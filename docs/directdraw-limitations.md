@@ -235,3 +235,31 @@ at all — so there is no way to change the primary's content without also marki
 as an observable black-box scenario. `Test_Presentation_RepeatedFlipWithNoChange_IsSafeAndStable`
 covers the weaker, genuinely provable safety property (repeated presents with no content change is
 safe and stable) instead.
+
+## Backing scale for higher-resolution images (2026-11-10)
+
+`FREE_DIRECT_BACKING_SCALE=k` (1..4, read when the `IDirectDraw` object is created; other values
+are ignored with a log line) gives every surface that object creates a pixel buffer `k` times
+larger on each axis than the size the caller requested. The API stays logical:
+
+* `GetSurfaceDesc`/`Lock` report the requested `dwWidth`/`dwHeight`; `lPitch` and `lpSurface`
+  describe the physical buffer. blupi_recon reads only the first pixel through `Lock`
+  (`DDColorMatch`).
+* `Blt`/`BltFast`/colour fills take logical rectangles. They are clamped in logical space exactly
+  as before and then cover `k`x`k` physical pixels each, so a logical 1:1 blit stays a physical 1:1
+  blit and colour keys work unchanged.
+* `GetDC` creates its DC with Free API's `FreeApiCreateScaledSurfaceDC`: GDI coordinates are
+  logical. `StretchBlt` from an ordinary bitmap enlarges it (nearest neighbour); a bitmap Free API
+  loaded from its image overlay at the same scale copies 1:1; `SetPixel`/`GetPixel` address the
+  top-left physical pixel of a logical one. The temporary RGBA copy a DC needs is released at
+  `ReleaseDC` when `k > 1`.
+* `PresentPrimary` uploads the physical primary, but sets the logical presentation to the
+  primary's logical size, so Free API's mouse messages and `ClientToScreen`/`ScreenToClient` stay
+  in the game's coordinates. SDL3 scales the larger texture straight to the output, keeping its
+  detail on a large enough window.
+* The logical 4096-pixel limit is unchanged; physical buffers may reach 8192 per side.
+
+With `k > 1` and no higher-resolution images every frame is the `k`-times nearest-neighbour
+enlargement of the unscaled one, except where the game itself stretches (blupi_recon's minimap,
+sampled at the physical resolution). Tests: `tests/directdraw_tests.cpp` group 11.
+

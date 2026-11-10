@@ -55,9 +55,29 @@ namespace free_direct_directdraw {
         if (honorCStr && honorCStr[0] != '\0') {
             honorDisplayBpp_ = honorCStr[0] != '0';
         }
+        // FREE_DIRECT_BACKING_SCALE=1..kMaxBackingScale: pixel buffers this many times larger
+        // than the logical surfaces, for higher-resolution images (see backingScale_).
+        const char* scaleCStr = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_BACKING_SCALE");
+        if (scaleCStr && scaleCStr[0] != '\0') {
+            const long scale = SDL_strtol(scaleCStr, nullptr, 10);
+            if (scale >= 1 && scale <= kMaxBackingScale) {
+                backingScale_ = static_cast<int>(scale);
+            } else {
+                SDL_Log("free-direct: ignoring FREE_DIRECT_BACKING_SCALE=%s (supported: 1..%d)", scaleCStr, kMaxBackingScale);  // failure: always visible
+            }
+        }
+        const char* captureCStr = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_CAPTURE_PRIMARY");
+        if (captureCStr && captureCStr[0] != '\0') {
+            captureDir_ = captureCStr;
+            const char* limitCStr = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_CAPTURE_LIMIT");
+            if (limitCStr && limitCStr[0] != '\0') {
+                const long limit = SDL_strtol(limitCStr, nullptr, 10);
+                if (limit > 0) captureLimit_ = static_cast<int>(limit);
+            }
+        }
         perfWindowStart_ = SDL_GetTicksNS();
-        DirectDrawLog("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s honorDisplayBpp=%s",
-                BoolToText(debugPrimaryClearEnabled_), BoolToText(honorDisplayBpp_));
+        DirectDrawLog("free-direct DirectDrawImpl ctor: debugPrimaryClearEnabled=%s honorDisplayBpp=%s backingScale=%d",
+                BoolToText(debugPrimaryClearEnabled_), BoolToText(honorDisplayBpp_), backingScale_);
     }
 
     DirectDrawImpl::~DirectDrawImpl()
@@ -319,13 +339,23 @@ namespace free_direct_directdraw {
                     kMaxSurfaceDimension, kMaxSurfaceDimension);
             return DDERR_INVALIDPARAMS;
         }
+        // The same request with a backing scale: the logical limit above is unchanged, and the
+        // physical buffer may reach twice it per side (blupi_recon's largest image, Speedy
+        // Eggbert 2's 1024x1327 object sheet, is 4096x5308 at the maximum scale of 4).
+        constexpr int kMaxPhysicalDimension = 2 * kMaxSurfaceDimension;
+        if (width * backingScale_ > kMaxPhysicalDimension || height * backingScale_ > kMaxPhysicalDimension) {
+            SDL_Log("free-direct CreateSurface: %dx%d at backing scale %d exceeds %d pixels per side",  // failure: always visible
+                    width, height, backingScale_, kMaxPhysicalDimension);
+            return DDERR_INVALIDPARAMS;
+        }
 
         auto* surface = new (std::nothrow) DirectDrawSurfaceImpl(this,
                                                                   primary ? DirectDrawSurfaceImpl::SurfaceType::Primary
                                                                           : DirectDrawSurfaceImpl::SurfaceType::Offscreen,
                                                                   width,
                                                                   height,
-                                                                  bpp);
+                                                                  bpp,
+                                                                  backingScale_);
         if (!surface) {
             DirectDrawLog("free-direct CreateSurface: out of memory for %dx%d bpp=%d", width, height, bpp);
             return DDERR_OUTOFMEMORY;
@@ -571,10 +601,13 @@ namespace free_direct_directdraw {
         SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
         SDL_RenderClear(renderer_);
 
-        // 4. Set SDL3 logical presentation (once) and render texture.
+        // 4. Set SDL3 logical presentation (once) and render texture. The logical size is the
+        // primary's logical size, also with a backing scale: Free API maps mouse events and
+        // ClientToScreen/ScreenToClient through it, so they stay in the game's coordinates while
+        // the larger texture fills the same area at its full resolution.
         if (!logicalPresentationSet_) {
-            const int srcW = primary.GetWidth();
-            const int srcH = primary.GetHeight();
+            const int srcW = primary.GetLogicalWidth();
+            const int srcH = primary.GetLogicalHeight();
             if (srcW > 0 && srcH > 0) {
                 SDL_SetRenderLogicalPresentation(renderer_, srcW, srcH, SDL_LOGICAL_PRESENTATION_LETTERBOX);
                 logicalPresentationSet_ = true;
@@ -582,6 +615,9 @@ namespace free_direct_directdraw {
             }
         }
         SDL_RenderTexture(renderer_, primary.texture_, NULL, NULL);
+        if (!captureDir_.empty()) {
+            CapturePresentedFrame(primary);
+        }
 
         // 5. Present exactly once.
         SDL_RenderPresent(renderer_);
@@ -653,6 +689,75 @@ namespace free_direct_directdraw {
         }
 
         return DD_OK;
+    }
+
+    void DirectDrawImpl::CapturePresentedFrame(const DirectDrawSurfaceImpl& primary)
+    {
+        if (captureCount_ >= captureLimit_) {
+            return;
+        }
+        const int width = primary.GetWidth();
+        const int height = primary.GetHeight();
+        const int bpp = primary.GetBPP();
+        const std::vector<uint8_t>& pixels = primary.GetPixels();
+
+        // FNV-1a over the raw pixels and, for 8-bit, the palette in use: skip unchanged frames.
+        PALETTEENTRY entries[256];
+        if (bpp == 8) {
+            if (primary.palette_) {
+                primary.palette_->GetEntries(0, 0, 256, entries);
+            } else {
+                GetDefault332Palette(entries);
+            }
+        }
+        uint64_t hash = 1469598103934665603ULL;
+        const auto mix = [&hash](const uint8_t* data, const size_t size) {
+            for (size_t i = 0; i < size; ++i) {
+                hash = (hash ^ data[i]) * 1099511628211ULL;
+            }
+        };
+        mix(pixels.data(), pixels.size());
+        if (bpp == 8) {
+            mix(reinterpret_cast<const uint8_t*>(entries), sizeof(entries));
+        }
+        if (captureCount_ > 0 && hash == captureLastHash_) {
+            return;
+        }
+
+        SDL_Surface* frame = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGB24);
+        if (!frame) {
+            SDL_Log("free-direct capture: SDL_CreateSurface failed: %s", SDL_GetError());  // failure: always visible
+            captureDir_.clear();
+            return;
+        }
+        for (int y = 0; y < height; ++y) {
+            auto* out = static_cast<uint8_t*>(frame->pixels) + static_cast<size_t>(y) * static_cast<size_t>(frame->pitch);
+            for (int x = 0; x < width; ++x) {
+                const size_t index = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
+                uint8_t r = 0, g = 0, b = 0;
+                if (bpp == 8) {
+                    const PALETTEENTRY& entry = entries[pixels[index]];
+                    r = entry.peRed; g = entry.peGreen; b = entry.peBlue;
+                } else if (bpp == 16) {
+                    UnpackRgb565(static_cast<uint16_t>(pixels[index * 2u] | (pixels[index * 2u + 1u] << 8)), r, g, b);
+                } else {
+                    r = pixels[index * 4u + 0u]; g = pixels[index * 4u + 1u]; b = pixels[index * 4u + 2u];
+                }
+                out[x * 3 + 0] = r;
+                out[x * 3 + 1] = g;
+                out[x * 3 + 2] = b;
+            }
+        }
+        char path[1024];
+        SDL_snprintf(path, sizeof(path), "%s/frame-%05d-%016llx.bmp", captureDir_.c_str(),
+                     captureCount_, static_cast<unsigned long long>(hash));
+        if (!SDL_SaveBMP(frame, path)) {
+            SDL_Log("free-direct capture: cannot write %s: %s", path, SDL_GetError());  // failure: always visible
+            captureDir_.clear();
+        }
+        SDL_DestroySurface(frame);
+        captureLastHash_ = hash;
+        ++captureCount_;
     }
 
 } // namespace free_direct_directdraw

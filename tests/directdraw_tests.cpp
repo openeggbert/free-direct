@@ -1596,6 +1596,217 @@ void Test_CreateSurface_WithoutPixelFormat_TakesDisplayDepth() {
     plain->Release();
 }
 
+// ===== Group 11: backing scale (FREE_DIRECT_BACKING_SCALE) =====
+//
+// With a backing scale every surface keeps a pixel buffer `scale` times larger on each axis while
+// the API stays logical: GetSurfaceDesc reports the requested size, blit rectangles are the
+// caller's, and Lock exposes the physical buffer (lPitch). blupi_recon uses it for
+// higher-resolution images (free-api's image overlay).
+
+LPDIRECTDRAW CreateDirectDrawWithBackingScale(const char* scale) {
+    SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_BACKING_SCALE", scale, 1);
+    LPDIRECTDRAW dd = nullptr;
+    CHECK(DirectDrawCreate(nullptr, &dd, nullptr) == DD_OK);
+    SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_BACKING_SCALE");
+    return dd;
+}
+
+DDSURFACEDESC LockDesc(LPDIRECTDRAWSURFACE surface) {
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(surface->Lock(nullptr, &desc, 0, nullptr) == DD_OK);
+    surface->Unlock(desc.lpSurface);
+    return desc;
+}
+
+uint16_t Physical16(const DDSURFACEDESC& desc, int x, int y) {
+    const auto* row = static_cast<const uint8_t*>(desc.lpSurface) + static_cast<size_t>(y) * static_cast<size_t>(desc.lPitch);
+    return static_cast<uint16_t>(row[x * 2] | (row[x * 2 + 1] << 8));
+}
+
+void Fill16(LPDIRECTDRAWSURFACE surface, RECT* rect, DWORD value) {
+    DDBLTFX fx{};
+    std::memset(&fx, 0, sizeof(fx));
+    fx.dwSize = sizeof(DDBLTFX);
+    fx.dwFillColor = value;
+    CHECK(surface->Blt(rect, nullptr, nullptr, DDBLT_COLORFILL, &fx) == DD_OK);
+}
+
+void Test_BackingScale_SurfaceDescIsLogicalPitchIsPhysical() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 8, 4, 16);
+    const DDSURFACEDESC desc = LockDesc(surface);
+    CHECK(desc.dwWidth == 8);
+    CHECK(desc.dwHeight == 4);
+    CHECK(desc.lPitch == 8 * 2 * 2);
+    surface->Release();
+    dd->Release();
+}
+
+void Test_BackingScale_OutOfRangeValueIsIgnored() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("9");
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 8, 4, 16);
+    CHECK(LockDesc(surface).lPitch == 8 * 2);
+    surface->Release();
+    dd->Release();
+}
+
+void Test_BackingScale_ColorFillCoversScaledPixels() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 4, 4, 16);
+    RECT rect{1, 2, 3, 3};
+    Fill16(surface, &rect, 0x1234);
+    const DDSURFACEDESC desc = LockDesc(surface);
+    int inside = 0, outside = 0;
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const bool expected = x >= 2 && x < 6 && y >= 4 && y < 6;
+            const uint16_t value = Physical16(desc, x, y);
+            if (expected) inside += value == 0x1234; else outside += value == 0;
+        }
+    }
+    CHECK(inside == 8);
+    CHECK(outside == 56);
+    surface->Release();
+    dd->Release();
+}
+
+void Test_BackingScale_BltFastCopiesLogicalRect() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE source = CreateOffscreenSurface(dd, 4, 4, 16);
+    LPDIRECTDRAWSURFACE dest = CreateOffscreenSurface(dd, 6, 4, 16);
+    RECT square{1, 1, 3, 3};
+    Fill16(source, &square, 0x07E0);
+    RECT pixel{1, 1, 2, 2};
+    Fill16(source, &pixel, 0xF800);
+    CHECK(dest->BltFast(3, 0, source, &square, DDBLTFAST_NOCOLORKEY) == DD_OK);
+    const DDSURFACEDESC desc = LockDesc(dest);
+    // Logical (3,0)..(5,2) holds the square; its top-left logical pixel is red.
+    CHECK(Physical16(desc, 6, 0) == 0xF800);
+    CHECK(Physical16(desc, 7, 1) == 0xF800);
+    CHECK(Physical16(desc, 8, 0) == 0x07E0);
+    CHECK(Physical16(desc, 9, 3) == 0x07E0);
+    CHECK(Physical16(desc, 5, 0) == 0);
+    CHECK(Physical16(desc, 6, 4) == 0);
+    // Without a source rectangle the destination takes the source's logical size.
+    CHECK(dest->BltFast(0, 0, source, nullptr, DDBLTFAST_NOCOLORKEY) == DD_OK);
+    const DDSURFACEDESC full = LockDesc(dest);
+    CHECK(Physical16(full, 2, 2) == 0xF800);
+    CHECK(Physical16(full, 7, 7) == 0);
+    source->Release();
+    dest->Release();
+    dd->Release();
+}
+
+void Test_BackingScale_SrcColorKeySkipsKeyedPixels() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE source = CreateOffscreenSurface(dd, 2, 1, 16);
+    LPDIRECTDRAWSURFACE dest = CreateOffscreenSurface(dd, 2, 1, 16);
+    RECT left{0, 0, 1, 1}, right{1, 0, 2, 1};
+    Fill16(source, &left, 0x001F);
+    Fill16(source, &right, 0xFFE0);
+    Fill16(dest, nullptr, 0x0841);
+    DDCOLORKEY key{0x001F, 0x001F};
+    CHECK(source->SetColorKey(DDCKEY_SRCBLT, &key) == DD_OK);
+    CHECK(dest->BltFast(0, 0, source, nullptr, DDBLTFAST_SRCCOLORKEY) == DD_OK);
+    const DDSURFACEDESC desc = LockDesc(dest);
+    for (int y = 0; y < 2; ++y) {
+        CHECK(Physical16(desc, 0, y) == 0x0841);
+        CHECK(Physical16(desc, 1, y) == 0x0841);
+        CHECK(Physical16(desc, 2, y) == 0xFFE0);
+        CHECK(Physical16(desc, 3, y) == 0xFFE0);
+    }
+    source->Release();
+    dest->Release();
+    dd->Release();
+}
+
+void Test_BackingScale_StretchBltIntoDcUpscalesUnscaledBitmap() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 2, 1, 16);
+    const uint8_t bits[] = {255, 0, 0, 255, 0, 0, 255, 255};  // RGBA: red, blue
+    HBITMAP bitmap = CreateBitmap(2, 1, 1, 32, bits);
+    CHECK(bitmap != nullptr);
+    BITMAP info{};
+    CHECK(GetObject(bitmap, sizeof(info), &info) != 0);
+    CHECK(info.bmWidth == 2 && info.bmHeight == 1);
+    HDC memory = CreateCompatibleDC(nullptr);
+    SelectObject(memory, bitmap);
+    HDC hdc = nullptr;
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    // DDCopyBitmap's call: the logical surface size from GetSurfaceDesc, the bitmap's size.
+    CHECK(StretchBlt(hdc, 0, 0, 2, 1, memory, 0, 0, 2, 1, SRCCOPY));
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+    const DDSURFACEDESC desc = LockDesc(surface);
+    for (int y = 0; y < 2; ++y) {
+        CHECK(Physical16(desc, 0, y) == 0xF800);
+        CHECK(Physical16(desc, 1, y) == 0xF800);
+        CHECK(Physical16(desc, 2, y) == 0x001F);
+        CHECK(Physical16(desc, 3, y) == 0x001F);
+    }
+    DeleteDC(memory);
+    DeleteObject(bitmap);
+    surface->Release();
+    dd->Release();
+}
+
+// DDColorMatch: GetPixel(0,0) saves, SetPixel writes the key colour, Lock reads the first
+// physical pixel, SetPixel restores. Only that one pixel may change, and the restore is exact.
+void Test_BackingScale_DcPixelRoundTripTouchesOnePhysicalPixel() {
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    LPDIRECTDRAWSURFACE surface = CreateOffscreenSurface(dd, 2, 2, 16);
+    Fill16(surface, nullptr, 0x07E0);
+    HDC hdc = nullptr;
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    const COLORREF saved = GetPixel(hdc, 0, 0);
+    CHECK(SetPixel(hdc, 0, 0, RGB(0, 0, 255)) != CLR_INVALID);
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+    DDSURFACEDESC desc = LockDesc(surface);
+    CHECK(Physical16(desc, 0, 0) == 0x001F);
+    CHECK(Physical16(desc, 1, 0) == 0x07E0);
+    CHECK(Physical16(desc, 0, 1) == 0x07E0);
+    CHECK(surface->GetDC(&hdc) == DD_OK);
+    CHECK(SetPixel(hdc, 1, 1, RGB(255, 0, 0)) != CLR_INVALID);
+    CHECK(GetPixel(hdc, 1, 1) == RGB(255, 0, 0));
+    CHECK(SetPixel(hdc, 0, 0, saved) != CLR_INVALID);
+    CHECK(surface->ReleaseDC(hdc) == DD_OK);
+    desc = LockDesc(surface);
+    CHECK(Physical16(desc, 0, 0) == 0x07E0);
+    CHECK(Physical16(desc, 2, 2) == 0xF800);
+    CHECK(Physical16(desc, 3, 3) == 0x07E0);
+    surface->Release();
+    dd->Release();
+}
+
+// The primary presents its physical pixels under a logical presentation of its logical size, so
+// mouse and coordinate conversions (Free API) stay in the game's 640x480.
+void Test_BackingScale_PrimaryUsesLogicalPresentation() {
+    HWND hwnd = CreateTestWindow();
+    SDL_SetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_TARGET_FPS", "1000", 1);
+    LPDIRECTDRAW dd = CreateDirectDrawWithBackingScale("2");
+    SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_TARGET_FPS");
+    CHECK(dd->SetCooperativeLevel(hwnd, DDSCL_NORMAL) == DD_OK);
+    LPDIRECTDRAWSURFACE primary = CreatePrimarySurface(dd);
+    DDSURFACEDESC desc{};
+    std::memset(&desc, 0, sizeof(desc));
+    desc.dwSize = sizeof(DDSURFACEDESC);
+    CHECK(primary->GetSurfaceDesc(&desc) == DD_OK);
+    CHECK(desc.dwWidth == 640 && desc.dwHeight == 480);
+    FillPrimaryWithColor(primary, 0x0000FF00);
+    CHECK(primary->Flip(nullptr, 0) == DD_OK);
+    int w = 0, h = 0;
+    SDL_RendererLogicalPresentation mode = SDL_LOGICAL_PRESENTATION_DISABLED;
+    CHECK(SDL_GetRenderLogicalPresentation(SDL_GetRenderer(reinterpret_cast<SDL_Window*>(hwnd)), &w, &h, &mode));
+    CHECK(w == 640 && h == 480);
+    CHECK(mode == SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    const uint32_t pixel = ReadPresentedPixel(hwnd, 10, 10);
+    CHECK(((pixel >> 8) & 0xFFu) == 255);
+    primary->Release();
+    dd->Release();
+    DestroyWindow(hwnd);
+}
+
 int main() {
     // Group 2: creation/lifecycle
     Test_DirectDrawCreate_ReturnsOk();
@@ -1683,6 +1894,16 @@ int main() {
     Test_Flip_16BitPrimary_PresentsExpandedColor();
     Test_GetDC_8BitOffscreenWithoutPalette_UsesPrimaryPalette();
     Test_CreateSurface_WithoutPixelFormat_TakesDisplayDepth();
+
+    // Group 11: backing scale
+    Test_BackingScale_SurfaceDescIsLogicalPitchIsPhysical();
+    Test_BackingScale_OutOfRangeValueIsIgnored();
+    Test_BackingScale_ColorFillCoversScaledPixels();
+    Test_BackingScale_BltFastCopiesLogicalRect();
+    Test_BackingScale_SrcColorKeySkipsKeyedPixels();
+    Test_BackingScale_StretchBltIntoDcUpscalesUnscaledBitmap();
+    Test_BackingScale_DcPixelRoundTripTouchesOnePhysicalPixel();
+    Test_BackingScale_PrimaryUsesLogicalPresentation();
 
     if (g_failures == 0) {
         std::printf("OK: all DirectDraw tests passed.\n");

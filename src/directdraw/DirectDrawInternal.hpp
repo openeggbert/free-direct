@@ -27,9 +27,13 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace free_direct_directdraw {
+
+    /// Upper bound of FREE_DIRECT_BACKING_SCALE.
+    constexpr int kMaxBackingScale = 4;
 
     inline bool IsEnvFlagEnabled(const char* envName)
     {
@@ -194,7 +198,10 @@ class DirectDrawSurfaceImpl;
             Offscreen
         };
 
-        DirectDrawSurfaceImpl(DirectDrawImpl* owner, SurfaceType type, int width, int height, int bpp);
+        /// width/height are the logical size the caller sees through the DirectDraw API; the
+        /// pixel buffer is (width * scale) x (height * scale) (backing scale, see
+        /// DirectDrawImpl::backingScale_).
+        DirectDrawSurfaceImpl(DirectDrawImpl* owner, SurfaceType type, int width, int height, int bpp, int scale = 1);
         ~DirectDrawSurfaceImpl() override;
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override;
@@ -219,8 +226,14 @@ class DirectDrawSurfaceImpl;
         HRESULT WINAPI SetColorKey(DWORD dwFlags, LPDDCOLORKEY lpDDColorKey) override;
 
         [[nodiscard]] SurfaceType GetType() const { return type_; }
+        /// Physical size of the pixel buffer (logical size * scale).
         [[nodiscard]] int GetWidth() const { return width_; }
         [[nodiscard]] int GetHeight() const { return height_; }
+        /// Size the game sees: GetSurfaceDesc, blit rectangles and clipping are all logical.
+        [[nodiscard]] int GetLogicalWidth() const { return logicalWidth_; }
+        [[nodiscard]] int GetLogicalHeight() const { return logicalHeight_; }
+        /// Backing scale: physical pixels per logical pixel on each axis (1 = unscaled).
+        [[nodiscard]] int GetScale() const { return scale_; }
         [[nodiscard]] int GetBPP() const { return bpp_; }
         [[nodiscard]] LONG GetPitch() const { return static_cast<LONG>(width_ * (bpp_ / 8)); }
         [[nodiscard]] const std::vector<uint8_t>& GetPixels() const { return pixels_; }
@@ -259,9 +272,14 @@ class DirectDrawSurfaceImpl;
         /// ever replaces owner_'s renderer_.
         DirectDrawImpl* owner_;
         SurfaceType type_;
+        /// Physical pixel-buffer size; every pixel-level loop uses these.
         int width_;
         int height_;
         int bpp_;
+        /// Logical size (the API's view) and backing scale; width_ == logicalWidth_ * scale_.
+        int logicalWidth_;
+        int logicalHeight_;
+        int scale_ = 1;
         std::vector<uint8_t> pixels_;
         SDL_Texture* texture_;
         LPDIRECTDRAWPALETTE palette_ = nullptr;
@@ -311,6 +329,10 @@ class DirectDrawSurfaceImpl;
         HRESULT PresentPrimary(DirectDrawSurfaceImpl& primary);
 
     private:
+        /// FREE_DIRECT_CAPTURE_PRIMARY: writes the presented primary as a 24-bit BMP when its
+        /// content changed since the last capture (diagnostics for scaling comparisons).
+        void CapturePresentedFrame(const DirectDrawSurfaceImpl& primary);
+
         friend class DirectDrawSurfaceImpl;
         std::atomic<ULONG> refCount_;
         HWND hwnd_;
@@ -350,6 +372,18 @@ class DirectDrawSurfaceImpl;
 #else
         bool honorDisplayBpp_ = false;
 #endif
+        /// FREE_DIRECT_BACKING_SCALE (1..kMaxBackingScale, default 1), read once in the
+        /// constructor. Every surface this object creates keeps a pixel buffer this many times
+        /// larger on each axis than its logical size, while the API stays logical: higher
+        /// resolution images (loaded by Free API through its image overlay) keep their detail,
+        /// and the game's own coordinates, rectangles and surface sizes do not change.
+        int backingScale_ = 1;
+        /// FREE_DIRECT_CAPTURE_PRIMARY (test diagnostics): directory that receives a BMP of every
+        /// presented primary frame whose content differs from the previously captured one.
+        std::string captureDir_;
+        uint64_t captureLastHash_ = 0;
+        int captureCount_ = 0;
+        int captureLimit_ = 1000;
         /// Perf counters (per-second summary when FREE_DIRECT_DEBUG_PERF=1).
         uint64_t perfWindowStart_ = 0;
         uint64_t perfBltCalls_ = 0;
@@ -376,6 +410,20 @@ class DirectDrawSurfaceImpl;
         rect.right = std::clamp(input.right, rect.left, static_cast<LONG>(width));
         rect.bottom = std::clamp(input.bottom, rect.top, static_cast<LONG>(height));
         return rect;
+    }
+
+    /// Logical rectangle to the physical pixels of a surface with the given backing scale.
+    inline RECT ScaleRect(const RECT& rect, const int scale)
+    {
+        if (scale == 1) {
+            return rect;
+        }
+        RECT scaled{};
+        scaled.left = rect.left * scale;
+        scaled.top = rect.top * scale;
+        scaled.right = rect.right * scale;
+        scaled.bottom = rect.bottom * scale;
+        return scaled;
     }
 
     inline int RectWidth(const RECT& rect)
