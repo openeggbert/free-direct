@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +47,13 @@
 #include <random>
 #include <unordered_map>
 #include <vector>
+
+#include "DirectPlayWait.hpp"
+#ifdef FREE_DIRECT_ENABLE_RELAY
+#include "DirectPlayRelay.hpp"
+#include "RelayClient.hpp"
+#include "RelayDirectPlayTransport.hpp"
+#endif
 
 namespace free_direct_directplay {
 
@@ -165,6 +173,34 @@ namespace free_direct_directplay {
         outPort = static_cast<std::uint16_t>(parsedPort);
         return true;
     }
+
+    // The hosts LAN discovery found, by session instance GUID (docs/directplay-design.md
+    // Decision 31): EnumSessions() records where each reported session replied from, and a
+    // later Open(DPOPEN_JOIN) for that session connects there, as a real DirectPlay provider
+    // remembers the address behind each enumerated session. Process-wide, because the games
+    // enumerate and join through the same object, but nothing requires it.
+    inline std::unordered_map<std::string, std::string>& DiscoveredEnetHosts() {
+        static std::unordered_map<std::string, std::string> hosts;
+        return hosts;
+    }
+
+    inline std::string EnetSessionKey(const GUID& instance) {
+        std::uint8_t bytes[kDirectPlayWireGuidSize];
+        std::uint8_t* p = bytes;
+        PutWireGuid(p, instance);
+        return std::string(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+    }
+
+    // EnumSessions()'s collection time for dwTimeout == 0 (Decision 31).
+    inline std::uint32_t EnetDiscoveryDefaultTimeoutMs() {
+        const char* raw = std::getenv("FREE_DIRECT_ENET_DISCOVERY_MS");
+        if (raw && *raw) {
+            char* end = nullptr;
+            const long value = std::strtol(raw, &end, 10);
+            if (end && *end == '\0' && value > 0 && value <= 60000) return static_cast<std::uint32_t>(value);
+        }
+        return kDefaultDirectPlayDiscoveryTimeoutMs;
+    }
 #endif
 
     // Process-wide static registry (docs/directplay-design.md Decision 18), keyed by the fixed
@@ -194,7 +230,10 @@ namespace free_direct_directplay {
     }
     class DirectPlay2AImpl final : public IDirectPlay2A {
     public:
-        DirectPlay2AImpl() : refCount_(1) { DirectPlayLog("free-direct DirectPlay2AImpl: created"); }
+        /// `relay`: this object belongs to the "FreeDirect server" provider (Decision 30).
+        explicit DirectPlay2AImpl(bool relay = false) : refCount_(1), relay_(relay) {
+            DirectPlayLog("free-direct DirectPlay2AImpl: created (%s provider)", relay ? "server" : "local");
+        }
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
             if (!ppvObject) return DPERR_INVALIDPARAMS;
@@ -220,6 +259,7 @@ namespace free_direct_directplay {
                 // shuts it down and clears session_.transport itself, so this is a no-op then.
                 // Same defensive reasoning for the EnumSessions() registry (Decision 18).
                 UnregisterHostedSession(&session_);
+                UnregisterInProcessHost(this);
                 if (session_.transport) session_.transport->Shutdown();
                 delete this;
             }
@@ -238,6 +278,10 @@ namespace free_direct_directplay {
             // DPENUMSESSIONS_ALL/ASYNC/STOPASYNC/PASSWORDREQUIRED/RETURNSTATUS; none are declared
             // in include/dplay.h since no call site needs them.)
             if (dwFlags & ~static_cast<DWORD>(DPENUMSESSIONS_AVAILABLE)) return DPERR_INVALIDFLAGS;
+#ifdef FREE_DIRECT_ENABLE_RELAY
+            if (relay_) return RelayEnumSessions(lpEnumSessionsDesc, dwTimeout, lpEnumSessionsCallback,
+                                                  lpContext, dwFlags);
+#endif
 
             // Explicit-host-only discovery (docs/directplay-design.md Decision 18), asked of and
             // confirmed by the user - a synchronous, DirectPlay-level registry lookup, not a
@@ -275,7 +319,11 @@ namespace free_direct_directplay {
                 // password is only required at Open(DPOPEN_JOIN)/OPENSESSION) time.
                 desc.lpszPasswordA = nullptr;
 
-                if (!lpEnumSessionsCallback(&desc, &dwTimeout, dwFlags, lpContext)) return DP_OK;
+                // The callback's dwFlags are DPESC_* output flags, a different namespace from
+                // EnumSessions()'s DPENUMSESSIONS_* input flags: DPENUMSESSIONS_AVAILABLE and
+                // DPESC_TIMEDOUT are both 0x1, so passing the caller's dwFlags through made every
+                // found session look like a timeout to the games' callbacks (Decision 28).
+                if (!lpEnumSessionsCallback(&desc, &dwTimeout, 0, lpContext)) return DP_OK;
             }
 #ifdef FREE_DIRECT_ENABLE_ENET
             // Real LAN discovery (docs/directplay-design.md Decision 23, TASK-24H-0150) -
@@ -287,9 +335,16 @@ namespace free_direct_directplay {
             free_direct_directplay::EnetDirectPlayTransport ensureEnetInit;
             if (ensureEnetInit.IsEnetReady()) {
                 const GUID filterGuid = hasGuidFilter ? lpEnumSessionsDesc->guidApplication : zeroGuid;
+                // dwTimeout == 0 means the provider's default, not "do not wait" (Decision 31):
+                // the games pass 0, and a reply cannot arrive within no time at all.
                 const auto discovered =
                     free_direct_directplay::DirectPlayDiscoveryService::BroadcastAndCollect(
-                        filterGuid, dwTimeout);
+                        filterGuid, dwTimeout != 0 ? dwTimeout : EnetDiscoveryDefaultTimeoutMs());
+                for (const auto& info : discovered) {
+                    if (!info.hostAddress.empty()) {
+                        DiscoveredEnetHosts()[EnetSessionKey(info.sessionInstanceGuid)] = info.hostAddress;
+                    }
+                }
 
                 std::vector<GUID> seenInstanceGuids;
                 for (const auto& info : discovered) {
@@ -320,7 +375,7 @@ namespace free_direct_directplay {
                                                  ? nullptr
                                                  : const_cast<char*>(info.sessionName.c_str());
                     desc.lpszPasswordA = nullptr;
-                    if (!lpEnumSessionsCallback(&desc, &dwTimeout, dwFlags, lpContext)) break;
+                    if (!lpEnumSessionsCallback(&desc, &dwTimeout, 0, lpContext)) break;
                 }
             }
 #endif
@@ -355,6 +410,15 @@ namespace free_direct_directplay {
             if (lpSessionDesc->lpszSessionNameA) session_.sessionName = lpSessionDesc->lpszSessionNameA;
             session_.password.clear();
             if (lpSessionDesc->lpszPasswordA) session_.password = lpSessionDesc->lpszPasswordA;
+#ifdef FREE_DIRECT_ENABLE_RELAY
+            // The "FreeDirect server" provider (Decision 30) is chosen by the provider GUID the
+            // game passed to DirectPlayCreate, so it lives beside the build-time backend below.
+            if (relay_) {
+                const HRESULT relayResult = OpenRelay();
+                if (relayResult != DP_OK) return relayResult;
+            } else
+#endif
+            {
             // Backend selection is build-time-only (docs/directplay-design.md Decision 4), driven
             // directly by FREE_DIRECT_ENABLE_ENET - no run-time switch, no new API parameter.
 #ifdef FREE_DIRECT_ENABLE_ENET
@@ -373,17 +437,24 @@ namespace free_direct_directplay {
                 // via FREE_DIRECT_ENET_HOST_ADDRESS (Decision 22), it just is not LAN-discoverable.
                 discoveryService_.StartListening();
             } else {
-                // DPOPEN_JOIN/DPOPEN_OPENSESSION over ENet (docs/directplay-design.md Decision
-                // 22): the host address is read from FREE_DIRECT_ENET_HOST_ADDRESS
-                // ("<host>" or "<host>:<port>") since DPSESSIONDESC2 has no address-like field
-                // (the same gap Decision 5 already found for the hosting port). A missing or
-                // malformed env var, or a failed Connect(), both map to DPERR_NOSESSIONS - the
-                // existing "could not find/reach a session" code the loopback path already uses
-                // for the equivalent case (Decision 11), not a new error condition.
+                // DPOPEN_JOIN/DPOPEN_OPENSESSION over ENet: the host LAN discovery found for this
+                // session instance (Decision 31), on the fixed hosting port (Decision 5); or,
+                // overriding it, FREE_DIRECT_ENET_HOST_ADDRESS ("<host>" or "<host>:<port>",
+                // Decision 22), e.g. for a host discovery cannot reach. No address, or a failed
+                // Connect(), maps to DPERR_NOSESSIONS - the existing "could not find/reach a
+                // session" code the loopback path already uses (Decision 11).
                 std::string host;
                 std::uint16_t port = 0;
-                if (!ParseEnetHostAddressEnvVar(host, port) ||
-                    !session_.transport->Connect(host.c_str(), port)) {
+                if (!ParseEnetHostAddressEnvVar(host, port)) {
+                    const auto found = DiscoveredEnetHosts().find(EnetSessionKey(session_.sessionInstanceGuid));
+                    if (found != DiscoveredEnetHosts().end()) {
+                        host = found->second;
+                        port = free_direct_directplay::kDefaultDirectPlayEnetPort;
+                    }
+                }
+                DirectPlayLog("free-direct Open: ENet join to %s:%u", host.empty() ? "(no address)" : host.c_str(),
+                              static_cast<unsigned>(port));
+                if (host.empty() || !session_.transport->Connect(host.c_str(), port)) {
                     session_.transport.reset();
                     return DPERR_NOSESSIONS;
                 }
@@ -439,6 +510,27 @@ namespace free_direct_directplay {
                 session_.transport->Send(0, joinBytes.data(), joinBytes.size(), true);
             }
 #endif
+            }
+            if (session_.isHost) {
+                RegisterInProcessHost(this);
+            } else {
+                // Real DirectPlay's Open() returns once the host has admitted or refused the
+                // joiner, and the games call CreatePlayer() right after it and keep the DPID it
+                // returns for every later Send(). So the join completes here (Decision 29): a
+                // bounded wait for the host's JoinAccept (or for its refusal, which closes the
+                // connection), never a DP_OK for a join that is still pending.
+                const HRESULT joinResult = WaitForJoinAcceptance();
+                if (joinResult != DP_OK) {
+                    session_.transport->Shutdown();
+                    session_.transport.reset();
+                    session_.messageQueue.Clear();
+                    session_.localPlayerIds.clear();
+                    session_.isHost = false;
+                    DirectPlayLog("free-direct Open: join failed hr=0x%08lx",
+                                  static_cast<unsigned long>(joinResult));
+                    return joinResult;
+                }
+            }
             session_.state = free_direct_directplay::DirectPlayObjectState::Open;
             DirectPlayLog("free-direct Open: success, role=%s", session_.isHost ? "host" : "join");
             return DP_OK;
@@ -465,6 +557,19 @@ namespace free_direct_directplay {
                               static_cast<unsigned long>(session_.currentPlayers),
                               static_cast<unsigned long>(session_.maxPlayers));
                 return DPERR_CANTCREATEPLAYER;
+            }
+
+            // A joining session has exactly one player, the identity the host assigned while
+            // Open() waited for its JoinAccept (Decision 29). Returning it here keeps the DPID
+            // the game stores (CNetwork::m_dpid) equal to the one the host routes by.
+            if (!session_.isHost) {
+                if (!joinAccepted_ || joinedPlayerCreated_) return DPERR_CANTCREATEPLAYER;
+                joinedPlayerCreated_ = true;
+                session_.currentPlayers++;
+                if (lpidPlayer) *lpidPlayer = assignedId_;
+                DirectPlayLog("free-direct CreatePlayer: joining player DPID=%lu",
+                              static_cast<unsigned long>(assignedId_));
+                return DP_OK;
             }
 
             // Sequential allocator starting at 0 (docs/directplay-design.md Decision 3) -
@@ -526,6 +631,72 @@ namespace free_direct_directplay {
             // Receive() path already goes through. LoopbackDirectPlayTransport's
             // Service() is a no-op; EnetDirectPlayTransport's drains pending ENet events
             // (peer connect/disconnect bookkeeping) non-blockingly.
+            if (session_.isHost) {
+                ServiceHost();
+            } else if (session_.transport) {
+                session_.transport->Service();
+            }
+            DrainWirePackets();
+            // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
+            // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
+            // be exercised directly by tests/directplay_tests.cpp without needing a way to
+            // inject a message into a live IDirectPlay2A object.
+            const HRESULT hr = session_.messageQueue.TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize);
+            // Client-side rejection/disconnection observability (docs/directplay-design.md
+            // Decision 13): a joining session whose host connection is gone (rejected over
+            // dwMaxPlayers, or the host shut down) reports DPERR_NOCONNECTION - but only once
+            // there is truly nothing left to deliver. A locally-queued message (e.g. an earlier
+            // self-send, Decision 12) is still handed back first: losing the host connection
+            // must not erase messages that never depended on it.
+            if (session_.transport && !session_.isHost && hr == DPERR_NOMESSAGES &&
+                !session_.transport->IsConnectedToHost()) {
+                return DPERR_NOCONNECTION;
+            }
+            return hr;
+        }
+
+        HRESULT WINAPI Close() override {
+            DirectPlayLog("free-direct Close: role=%s currentPlayers=%lu",
+                          session_.isHost ? "host" : "join",
+                          static_cast<unsigned long>(session_.currentPlayers));
+            // Makes this session stop being discoverable via EnumSessions() (docs/
+            // directplay-design.md Decision 18) - a no-op if it was never registered (joining
+            // role, or hosting under FREE_DIRECT_ENABLE_ENET).
+            UnregisterHostedSession(&session_);
+            UnregisterInProcessHost(this);
+            if (session_.transport) {
+                session_.transport->Shutdown();
+                session_.transport.reset();
+            }
+            joinAccepted_ = false;
+            joinedPlayerCreated_ = false;
+            assignedId_ = 0;
+#ifdef FREE_DIRECT_ENABLE_ENET
+            // A no-op if StartListening() was never called (joining role) or failed
+            // (Open()'s best-effort handling, Decision 23).
+            discoveryService_.StopListening();
+#endif
+            session_.messageQueue.Clear();
+            session_.localPlayerIds.clear();
+            session_.remotePlayerIds.clear();
+            session_.nextPlayerId = 0;
+            session_.sessionName.clear();
+            session_.password.clear();
+            session_.applicationGuid = GUID{};
+            session_.sessionInstanceGuid = GUID{};
+            session_.maxPlayers = 0;
+            session_.currentPlayers = 0;
+            session_.isHost = false;
+            session_.state = free_direct_directplay::DirectPlayObjectState::Closed;
+            return DP_OK;
+        }
+
+    private:
+        // Host-side servicing, extracted from Receive() (Decision 29) so that a joiner's
+        // bounded wait in Open() can also run the admission of a host living in the same
+        // process (the loopback backend, and same-process ENet tests): transport events, LAN
+        // discovery replies, departures, DPID assignment and refusal over dwMaxPlayers.
+        void ServiceHost() {
             if (session_.transport) session_.transport->Service();
 #ifdef FREE_DIRECT_ENABLE_ENET
             // LAN discovery request/response servicing (docs/directplay-design.md Decision 23,
@@ -577,6 +748,8 @@ namespace free_direct_directplay {
                     if (!session_.transport->AssignPendingConnection(newId)) break;
                     session_.remotePlayerIds.push_back(newId);
                     session_.currentPlayers++;
+                    DirectPlayLog("free-direct Receive: admitted a joining player as DPID=%lu",
+                                  static_cast<unsigned long>(newId));
 
                     // Send a join-accepted packet to the newly-assigned peer
                     // (docs/directplay-design.md Decision 16), addressed by the DPID it was
@@ -603,58 +776,150 @@ namespace free_direct_directplay {
                     }
                 }
             }
-            DrainWirePackets();
-            // The buffer-size-query/DPERR_NOMESSAGES/too-small/successful-copy logic lives on
-            // DirectPlayMessageQueue itself (DirectPlayMessageQueue.hpp's TryReceive), so it can
-            // be exercised directly by tests/directplay_tests.cpp without needing a way to
-            // inject a message into a live IDirectPlay2A object.
-            const HRESULT hr = session_.messageQueue.TryReceive(lpidFrom, lpidTo, lpData, lpdwDataSize);
-            // Client-side rejection/disconnection observability (docs/directplay-design.md
-            // Decision 13): a joining session whose host connection is gone (rejected over
-            // dwMaxPlayers, or the host shut down) reports DPERR_NOCONNECTION - but only once
-            // there is truly nothing left to deliver. A locally-queued message (e.g. an earlier
-            // self-send, Decision 12) is still handed back first: losing the host connection
-            // must not erase messages that never depended on it.
-            if (session_.transport && !session_.isHost && hr == DPERR_NOMESSAGES &&
-                !session_.transport->IsConnectedToHost()) {
-                return DPERR_NOCONNECTION;
-            }
-            return hr;
         }
 
-        HRESULT WINAPI Close() override {
-            DirectPlayLog("free-direct Close: role=%s currentPlayers=%lu",
-                          session_.isHost ? "host" : "join",
-                          static_cast<unsigned long>(session_.currentPlayers));
-            // Makes this session stop being discoverable via EnumSessions() (docs/
-            // directplay-design.md Decision 18) - a no-op if it was never registered (joining
-            // role, or hosting under FREE_DIRECT_ENABLE_ENET).
-            UnregisterHostedSession(&session_);
-            if (session_.transport) {
-                session_.transport->Shutdown();
-                session_.transport.reset();
+
+#ifdef FREE_DIRECT_ENABLE_RELAY
+        // ===== The "FreeDirect server" provider (docs/directplay-design.md Decision 30) =====
+
+        // Lists the sessions of the room this process is in. The first enumeration on this
+        // object asks the player to confirm the connection (server, password, room); later
+        // ones (the game's Refresh button, the return after a failed join) do not.
+        HRESULT RelayEnumSessions(LPDPSESSIONDESC2 filterDesc, DWORD dwTimeout,
+                                  LPDPENUMSESSIONS_CALLBACK2 callback, LPVOID context, DWORD dwFlags) {
+            HRESULT hr = EnsureRelayRoom(!relayConfirmed_);
+            if (hr != DP_OK) return hr;
+            relayConfirmed_ = true;
+
+            RelayClient& client = RelayClient::Instance();
+            std::vector<free_direct_relay::SessionInfo> sessions;
+            std::string error;
+            if (!client.ListSessions(sessions, error)) {
+                DirectPlayLog("free-direct EnumSessions: relay list failed: %s", error.c_str());
+                // A lost connection: reconnect (or ask the player) once, then list again.
+                hr = EnsureRelayRoom(false);
+                if (hr != DP_OK) return hr;
+                if (!client.ListSessions(sessions, error)) return DPERR_NOCONNECTION;
             }
-#ifdef FREE_DIRECT_ENABLE_ENET
-            // A no-op if StartListening() was never called (joining role) or failed
-            // (Open()'s best-effort handling, Decision 23).
-            discoveryService_.StopListening();
-#endif
-            session_.messageQueue.Clear();
-            session_.localPlayerIds.clear();
-            session_.remotePlayerIds.clear();
-            session_.nextPlayerId = 0;
-            session_.sessionName.clear();
-            session_.password.clear();
-            session_.applicationGuid = GUID{};
-            session_.sessionInstanceGuid = GUID{};
-            session_.maxPlayers = 0;
-            session_.currentPlayers = 0;
-            session_.isHost = false;
-            session_.state = free_direct_directplay::DirectPlayObjectState::Closed;
+
+            const GUID zeroGuid{};
+            const bool hasGuidFilter = filterDesc && !IsEqualGuid(filterDesc->guidApplication, zeroGuid);
+            const bool availableOnly = (dwFlags & DPENUMSESSIONS_AVAILABLE) != 0;
+            for (const auto& info : sessions) {
+                const GUID application = FromRelayGuid(info.application);
+                if (hasGuidFilter && !IsEqualGuid(application, filterDesc->guidApplication)) continue;
+                if (availableOnly && info.maxPlayers != 0 && info.currentPlayers >= info.maxPlayers) continue;
+                DPSESSIONDESC2 desc{};
+                desc.dwSize = sizeof(DPSESSIONDESC2);
+                desc.guidApplication = application;
+                desc.guidInstance = FromRelayGuid(info.instance);
+                desc.dwMaxPlayers = info.maxPlayers;
+                desc.dwCurrentPlayers = info.currentPlayers;
+                // Never null: the games strcpy() it.
+                desc.lpszSessionNameA = const_cast<char*>(info.name.c_str());
+                desc.lpszPasswordA = nullptr;
+                if (!callback(&desc, &dwTimeout, 0, context)) break;
+            }
             return DP_OK;
         }
 
-    private:
+        // Open() for the server provider: hosts the session in the room, or joins the chosen
+        // one and sends the session layer's Join packet; Open()'s common tail then waits for the
+        // JoinAccept (Decision 29).
+        HRESULT OpenRelay() {
+            RelayClient& client = RelayClient::Instance();
+            client.Pump();
+            if (!client.InRoom()) {
+                const HRESULT hr = EnsureRelayRoom(false);
+                if (hr != DP_OK) return DPERR_NOCONNECTION;
+            }
+            auto transport = std::make_unique<free_direct_directplay::RelayDirectPlayTransport>();
+            std::string error;
+            if (session_.isHost) {
+                free_direct_relay::SessionInfo info;
+                info.instance = ToRelayGuid(session_.sessionInstanceGuid);
+                info.application = ToRelayGuid(session_.applicationGuid);
+                info.maxPlayers = session_.maxPlayers;
+                info.name = session_.sessionName;
+                if (!transport->Host(info, error)) {
+                    DirectPlayLog("free-direct Open: relay host failed: %s", error.c_str());
+                    return DPERR_CANTCREATESESSION;
+                }
+                session_.transport = std::move(transport);
+                return DP_OK;
+            }
+            if (!transport->Join(ToRelayGuid(session_.sessionInstanceGuid), error)) {
+                DirectPlayLog("free-direct Open: relay join failed: %s", error.c_str());
+                return DPERR_NOSESSIONS;
+            }
+            session_.transport = std::move(transport);
+            free_direct_directplay::DirectPlayWirePacketHeader joinHeader;
+            joinHeader.type = free_direct_directplay::DirectPlayWirePacketType::Join;
+            joinHeader.applicationGuid = session_.applicationGuid;
+            joinHeader.sessionGuid = session_.sessionInstanceGuid;
+            std::vector<std::uint8_t> joinBytes;
+            free_direct_directplay::SerializeDirectPlayWireHeader(joinHeader, joinBytes);
+            session_.transport->Send(0, joinBytes.data(), joinBytes.size(), true);
+            return DP_OK;
+        }
+#endif
+
+        // Every hosting DirectPlay2AImpl of this process, in Open() order.
+        static std::vector<DirectPlay2AImpl*>& InProcessHosts() {
+            static std::vector<DirectPlay2AImpl*> hosts;
+            return hosts;
+        }
+
+        static void RegisterInProcessHost(DirectPlay2AImpl* host) {
+            auto& hosts = InProcessHosts();
+            if (std::find(hosts.begin(), hosts.end(), host) == hosts.end()) hosts.push_back(host);
+        }
+
+        static void UnregisterInProcessHost(DirectPlay2AImpl* host) {
+            auto& hosts = InProcessHosts();
+            hosts.erase(std::remove(hosts.begin(), hosts.end(), host), hosts.end());
+        }
+
+        // Bounded wait for the host's JoinAccept (Decision 29). Returns DP_OK once it has been
+        // processed, DPERR_CANTADDPLAYER when the host refused the join (it closes the
+        // connection, e.g. over dwMaxPlayers) or the connection failed, and DPERR_TIMEOUT when
+        // neither happened within FREE_DIRECT_JOIN_TIMEOUT_MS (default 5000 ms). A host in the
+        // same process is serviced on every iteration, so a loopback join completes at once.
+        HRESULT WaitForJoinAcceptance() {
+            const auto start = std::chrono::steady_clock::now();
+            long timeoutMs = JoinTimeoutMs();
+#ifdef FREE_DIRECT_ENABLE_RELAY
+            // Over the Internet the host's answer takes two server round trips.
+            if (relay_ && !std::getenv("FREE_DIRECT_JOIN_TIMEOUT_MS")) timeoutMs = 10000;
+#endif
+            for (;;) {
+                // Copy: servicing a host never registers or unregisters one, but stay safe.
+                const std::vector<DirectPlay2AImpl*> hosts = InProcessHosts();
+                for (DirectPlay2AImpl* host : hosts) {
+                    if (host != this) host->ServiceHost();
+                }
+                if (!session_.transport) return DPERR_CANTADDPLAYER;
+                session_.transport->Service();
+                DrainWirePackets();
+                if (joinAccepted_) return DP_OK;
+                if (!session_.transport->IsConnectedToHost()) return DPERR_CANTADDPLAYER;
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - start).count();
+                if (elapsed >= timeoutMs) return DPERR_TIMEOUT;
+                DirectPlaySleepMs(2);
+            }
+        }
+
+        static long JoinTimeoutMs() {
+            const char* raw = std::getenv("FREE_DIRECT_JOIN_TIMEOUT_MS");
+            if (raw && *raw) {
+                char* end = nullptr;
+                const long value = std::strtol(raw, &end, 10);
+                if (end && *end == '\0' && value > 0) return value;
+            }
+            return 5000;
+        }
+
         // ===== Send() delivery paths, extracted from Send() itself (TASK-24H-0184
         // extract-method refactor - a behavior-preserving restructure, user-approved via
         // AskUserQuestion as a scoped exception to this project's standing "no broad refactor"
@@ -686,6 +951,13 @@ namespace free_direct_directplay {
             wireBytes.insert(wireBytes.end(), payloadBytes, payloadBytes + dwDataSize);
             const bool reliable = (dwFlags & DPSEND_GUARANTEED) != 0;
 
+            // The relay server delivers one message to every other member (Decision 30).
+            if (session_.transport->FansOutBroadcasts()) {
+                if (session_.isHost && session_.remotePlayerIds.empty()) return DP_OK;
+                return session_.transport->SendToAll(wireBytes.data(), wireBytes.size(), reliable)
+                           ? DP_OK : DPERR_GENERIC;
+            }
+
             if (session_.isHost) {
                 // Deliver directly to every remote player already known (Decision 14's
                 // existing per-DPID addressing) - never looped back to the host's own
@@ -702,7 +974,7 @@ namespace free_direct_directplay {
             // DPID_ALLPLAYERS (not resolved to any specific address) is what tells the
             // host's own Receive() drain loop this packet needs relaying to every other
             // connected peer (Decision 21), not just local delivery.
-            if (!session_.transport->Send(DPID_ALLPLAYERS, wireBytes.data(), wireBytes.size(), reliable)) {
+            if (!session_.transport->SendToAll(wireBytes.data(), wireBytes.size(), reliable)) {
                 return DPERR_GENERIC;
             }
             return DP_OK;
@@ -833,7 +1105,8 @@ namespace free_direct_directplay {
             // never reaches this branch's effects (session_.isHost is false
             // there), so it just enqueues like any other Data packet, unchanged
             // from before this decision.
-            if (session_.isHost && header.idTo == DPID_ALLPLAYERS) {
+            if (session_.isHost && header.idTo == DPID_ALLPLAYERS &&
+                !session_.transport->FansOutBroadcasts()) {
                 for (const DPID remoteId : session_.remotePlayerIds) {
                     if (remoteId == header.idFrom) continue;
                     session_.transport->Send(remoteId, wireBuf.data(), receivedSize,
@@ -861,6 +1134,10 @@ namespace free_direct_directplay {
                 }
                 if (session_.nextPlayerId <= assignedId) {
                     session_.nextPlayerId = assignedId + 1;
+                }
+                if (!joinAccepted_) {
+                    joinAccepted_ = true;
+                    assignedId_ = assignedId;
                 }
             }
         }
@@ -914,6 +1191,15 @@ namespace free_direct_directplay {
 
         std::atomic<ULONG> refCount_;
         free_direct_directplay::DirectPlaySession session_;
+        // Joining role (Decision 29): set when the host's JoinAccept has been processed, with
+        // the DPID it assigned; CreatePlayer() hands that DPID out exactly once.
+        bool joinAccepted_ = false;
+        bool joinedPlayerCreated_ = false;
+        DPID assignedId_ = 0;
+        // Decision 30: the "FreeDirect server" provider, and whether the player has confirmed
+        // its connection dialog for this object yet.
+        bool relay_ = false;
+        bool relayConfirmed_ = false;
         // Persistent scratch buffer for Receive()'s drain loop, reused across calls instead of
         // allocating a fresh ~4.1KB vector every call (docs/audit_dplay.md §5.2, D10,
         // TASK-24H-0179) - measured negligible (228.7ns/call) even before this change, proposed

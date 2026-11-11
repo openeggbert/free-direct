@@ -218,6 +218,10 @@ std::vector<DiscoveredSessionInfo> DirectPlayDiscoveryService::BroadcastAndColle
                 info.maxPlayers, info.currentPlayers, info.sessionName)) {
             continue;
         }
+        // The replying host's address, for Open(DPOPEN_JOIN) (Decision 31): the reply is a
+        // unicast from the hosting machine's discovery socket.
+        char ip[64] = {};
+        if (enet_address_get_host_ip(&fromAddress, ip, sizeof(ip)) == 0) info.hostAddress = ip;
         results.push_back(std::move(info));
     }
 

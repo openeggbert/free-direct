@@ -2113,3 +2113,170 @@ of this change); ENet-enabled unfiltered `ctest` still shows only the exact same
 already-documented `directplay_tests` incompatibility (confirmed the failing assertions are all
 `Open(..., DPOPEN_JOIN)`-rooted connection failures, not magic/version-related - not a new
 regression from this change).
+
+---
+
+## Decision 28: a fixed-width wire header, and callback flags that are callback flags
+
+**Status:** Implemented 2026-11-11, part of the Free Direct server work the user asked for
+(Decision 30); both were prerequisites recorded in `docs/directplay-public-relay-task.md` §3.
+
+### Findings
+
+- `SerializeDirectPlayWireHeader` copied `sizeof(GUID)` and `sizeof(DPID)` bytes as they were in
+  memory. Free API's `GUID::Data1` is an `unsigned long`: 8 bytes on 64-bit Linux, 4 on Windows and
+  WebAssembly, so `GUID` was 24 bytes on one and 16 on the other. A 64-bit Linux build and a
+  browser build could not read each other's packets, which Internet play between them needs.
+- `EnumSessions()` passed the caller's `dwFlags` to its callback. Those are `DPENUMSESSIONS_*`
+  input flags; the callback's are `DPESC_*` output flags. `DPENUMSESSIONS_AVAILABLE` and
+  `DPESC_TIMEDOUT` are both `0x1`, the games enumerate with the former and stop at the latter,
+  so every game's session list stayed empty (blupi_recon `src/network.cpp`, free-eggbert
+  `src/network.cpp`).
+
+### Decision
+
+- Wire protocol version 2: every field little-endian and fixed-width, a GUID always 16 bytes
+  (`Data1` as 32 bits, the only bits a GUID has), a DPID 32 bits; 56 bytes in all
+  (`PutWireGuid`/`GetWireGuid`, `docs/directplay-protocol.md`). Version 1 packets are refused by
+  the existing magic/version check (Decision 27).
+- The callback receives `0` for every reported session. No final `DPESC_TIMEDOUT` call is made:
+  every known callback dereferences the descriptor unless that flag is set, and `EnumSessions()`
+  already ends with `DP_OK`.
+
+Tests: `Test_WireHeader_FixedLittleEndianLayout`,
+`Test_EnumSessions_GameShapedCallbackSeesSessionNotTimeout` (`tests/directplay_tests.cpp`).
+
+---
+
+## Decision 29: `Open(DPOPEN_JOIN)` completes the join; `CreatePlayer()` returns the host's DPID
+
+**Status:** Implemented 2026-11-11. Supersedes Decision 16's fire-and-forget join (the join
+request is still sent as there; what changed is that `Open()` waits for the answer).
+
+### Finding
+
+The games call `CreatePlayer()` immediately after `Open()` and keep the DPID it returns
+(`CNetwork::m_dpid`) as `idFrom` of every `Send(m_dpid, 0, ...)` and in their lobby messages.
+A joining object's allocator started at 0 and `CreatePlayer()` allocated locally, while the
+host-assigned DPID arrived later through `Receive()`. The joiner therefore claimed DPID 0, the
+host's own, and the host attributed its messages to itself. A refused join also returned `DP_OK`.
+
+### Decision
+
+- `Open(DPOPEN_JOIN/OPENSESSION)` waits until the host's `JoinAccept` has been processed (DP_OK),
+  the host has closed the connection (`DPERR_CANTADDPLAYER`, e.g. over `dwMaxPlayers`), or
+  `FREE_DIRECT_JOIN_TIMEOUT_MS` (default 5000 ms, 10000 ms for the server provider) has passed
+  (`DPERR_TIMEOUT`). Real DirectPlay's `Open()` is synchronous too.
+- While waiting, the joiner services every host living in the same process (`ServiceHost()`,
+  extracted from `Receive()`): loopback joins, and same-process ENet tests, complete at once.
+- A joining object's `CreatePlayer()` returns the assigned DPID, once; a second call returns
+  `DPERR_CANTCREATEPLAYER` (the host knows one identity per connection).
+- Waits sleep with `DirectPlaySleepMs` (`emscripten_sleep` in WebAssembly builds, which yields to
+  the browser's event loop, where WebSocket messages arrive).
+
+Tests: `Test_GameShapedJoin_CreatePlayerReturnsHostAssignedDpid`,
+`Test_OpenAsJoinOverMaxPlayers_ThirdClientIsRefused`; the ENet join test now completes inside
+`Open()`.
+
+---
+
+## Decision 30: the "FreeDirect server" provider - Internet play through `free-direct-server`
+
+**Status:** Implemented 2026-11-11 at the user's request ("DirectX 3 multiplayer must work over
+the Internet, not only locally"). The user decided:
+
+1. **A server** (`free-direct-server`) listening on a port, as an alternative to the local network;
+   the player enters its IP address or URL and its port.
+2. **An optional server password**.
+3. **Mandatory rooms with a unique secret ID**, needed to enter a room. Rooms are created by a
+   player: the server generates the ID and the creator passes it on. Rooms are never listed.
+4. **A room is a private virtual LAN**: inside it the game's own session list, create and join
+   work as on a LAN; several games may run in one room.
+5. **WebSockets**, so browsers can play, natively and on the web alike.
+6. **C++ with IXWebSocket** for the server and the native client (the browser's WebSocket API in
+   WebAssembly builds).
+7. **A connection dialog**, prefilled (environment variables, URL parameters, the last
+   connection), shown when the player chooses the provider - like the original DirectPlay TCP/IP
+   provider's address dialog.
+
+### Design
+
+- **Provider.** In builds with `FREE_DIRECT_ENABLE_RELAY`, `DirectPlayEnumerate` lists
+  "FreeDirect server" (GUID `{3}`) after "FreeDirect" (native) or alone (WebAssembly, where the
+  local provider connects nothing). `DirectPlayCreate` with that GUID creates objects whose
+  `EnumSessions`/`Open` use the server; the games' source is unchanged.
+- **Connection.** One WebSocket per process (`RelayClient`): hello (protocol version, password,
+  compatibility identity `FREE_DIRECT_RELAY_COMPAT` naming game, edition and string table), then
+  create or join a room. It stays open while the game creates, joins and closes sessions.
+- **Dialog.** The first `EnumSessions` on an object calls Free API's
+  `FreeApiPromptServerConnection` (native: drawn into the game's window; web: an HTML form), then
+  `FreeApiShowRoomCreated` after creating a room. Cancel returns `DPERR_USERCANCEL`, and the games
+  return to their provider list. With `FREE_DIRECT_SERVER` and `FREE_DIRECT_ROOM` set, no dialog
+  is shown (`src/directplay/DirectPlayRelay.hpp`).
+- **Transport.** `RelayDirectPlayTransport` keeps the session layer's roles: the hosting game
+  assigns DPIDs and admits or refuses joiners exactly as over loopback and ENet. The server only
+  relays, addressing peers by its connection ids.
+- **Broadcast.** The server delivers a broadcast to the host and every admitted member except the
+  sender (`IDirectPlayTransport::SendToAll`, `FansOutBroadcasts()`), so the host does not relay a
+  joiner's broadcast a second time (Decision 21 stays as it was for loopback and ENet).
+- **Protocol.** `docs/directplay-relay-protocol.md`. Operation: `docs/free-direct-server.md`.
+
+### Deliberate limits of this version
+
+- Everything travels reliably and in order (WebSocket over TCP), also messages sent without
+  `DPSEND_GUARANTEED`; a lost packet delays the ones behind it.
+- The host stays the session's authority; when it leaves, the session ends for everyone
+  (`DPSESSION_MIGRATEHOST` remains unimplemented).
+- The server checks that data stays inside its session and room, but does not check a member's
+  DPID inside the DirectPlay header: a modified client already admitted to a private room could
+  claim another member's DPID.
+
+### Evidence (2026-11-11)
+
+- `tests/relay_hub_tests.cpp`: rooms, password, rate limits, routing, refusals, idle deletion.
+- `tests/relay_directplay_tests.cpp`: a real server and separate game-shaped processes (host, two
+  clients, wrong password, wrong room, other game, another room).
+- blupi_recon `freeapi/tools/net_web.mjs`: two independent browsers play Speedy Blupi 1 and
+  Speedy Blupi 2 through a local server (provider list, dialog, room, session, lobby, ready, start,
+  play), and a native Free Direct process joins the browser host's session.
+
+---
+
+## Decision 31: LAN play from the games' own screens - a default discovery time, and joining the discovered host
+
+**Status:** Implemented 2026-11-11, after the user asked whether local-network multiplayer works
+at all, and to fix what the test found.
+
+### Findings (two native Speedy Blupi 1 instances, ENet backend, driven through the game's screens)
+
+1. The host listened on UDP 51321 and 51323, yet the other game's session list stayed empty: the
+   games call `EnumSessions()` with `dwTimeout == 0`, which `BroadcastAndCollect()` took as "do not
+   wait", so no reply could ever arrive. With 1000 ms the same probe found the session.
+2. Even a listed session could not be joined: `Open(DPOPEN_JOIN)` over ENet only knew the address in
+   `FREE_DIRECT_ENET_HOST_ADDRESS` (Decision 22), not where the session was found.
+3. blupi_recon's native build had no ENet at all, so its "FreeDirect" provider reached only its own
+   process. (free-eggbert cannot play either way: its game code leaves the network screens'
+   actions empty, `src/event.cpp:4301-4315`, and is outside what may be changed here.)
+
+### Decision
+
+- `dwTimeout == 0` means the provider's default, as in real DirectPlay: discovery collects for
+  `kDefaultDirectPlayDiscoveryTimeoutMs` (1000 ms; `FREE_DIRECT_ENET_DISCOVERY_MS` overrides). The
+  game's screen pauses that long when the session list opens or is refreshed.
+- `BroadcastAndCollect()` records each reply's source address; `EnumSessions()` remembers it per
+  session instance GUID (`DiscoveredEnetHosts()`), and `Open(DPOPEN_JOIN)` connects there on the
+  fixed hosting port 51321 (Decision 5). `FREE_DIRECT_ENET_HOST_ADDRESS` still overrides.
+- blupi_recon's native build enables ENet by default (`BLUPI_NET_LAN`), warning when no ENet source
+  or system libenet is found.
+
+Tests: `Test_EnumSessionsOverEnet_GameShapedZeroTimeout_FindsSession`,
+`Test_OpenAsJoinOverEnet_UsesDiscoveredHostAddress` (`tests/enet_directplay_tests.cpp`). Evidence:
+two native Speedy Blupi 1 instances, and then two Speedy Blupi 2 instances, on one machine through
+the games' screens - the client lists the host's game, joins it at the host's network address,
+both get ready, the host starts, and both exchange game data while playing.
+
+### Limits
+
+Discovery broadcasts to `255.255.255.255` on UDP 51323 and joins on UDP 51321: both must pass the
+machines' firewalls, and the players must share a network segment. Across routers, or from the
+web, use a Free Direct server (Decision 30).

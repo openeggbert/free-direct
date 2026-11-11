@@ -19,7 +19,7 @@ using namespace free_direct_directplay;
 namespace {
     class DirectPlayImpl final : public IDirectPlay {
     public:
-        DirectPlayImpl() : refCount_(1) {}
+        explicit DirectPlayImpl(bool relay) : refCount_(1), relay_(relay) {}
 
         HRESULT WINAPI QueryInterface(const GUID& riid, void** ppvObject) override {
             if (!ppvObject) return DPERR_INVALIDPARAMS;
@@ -33,7 +33,7 @@ namespace {
             if (IsEqualGuid(riid, IID_IDirectPlay2A)) {
                 // A distinct interface: hand back a freshly constructed implementation.
                 // Its constructor already starts refCount_ at 1, so no extra AddRef() here.
-                *ppvObject = new (std::nothrow) DirectPlay2AImpl();
+                *ppvObject = new (std::nothrow) DirectPlay2AImpl(relay_);
                 return (*ppvObject) ? DP_OK : DPERR_OUTOFMEMORY;
             }
 
@@ -51,6 +51,7 @@ namespace {
 
     private:
         std::atomic<ULONG> refCount_;
+        bool relay_;  ///< created for the "FreeDirect server" provider
     };
 
     // FreeDirect-internal placeholder service provider (docs/directplay-design.md Decision 1,
@@ -72,34 +73,67 @@ namespace {
     const WCHAR kFreeDirectServiceProviderNameW[] = {
         'F', 'r', 'e', 'e', 'D', 'i', 'r', 'e', 'c', 't', 0
     };
+
+    // The "FreeDirect server" provider (docs/directplay-design.md Decision 30): Internet play
+    // through a Free Direct server, in builds with FREE_DIRECT_ENABLE_RELAY. Listed after the
+    // local provider in native builds; the only provider of a web build, where the local one
+    // cannot connect anything.
+    const GUID kFreeDirectRelayProviderGuid = {3};
+    const char kFreeDirectRelayProviderNameA[] = "FreeDirect server";
+    const WCHAR kFreeDirectRelayProviderNameW[] = {
+        'F', 'r', 'e', 'e', 'D', 'i', 'r', 'e', 'c', 't', ' ', 's', 'e', 'r', 'v', 'e', 'r', 0
+    };
+
+#if defined(FREE_DIRECT_ENABLE_RELAY) && defined(__EMSCRIPTEN__)
+    constexpr bool kListLocalProvider = false;
+#else
+    constexpr bool kListLocalProvider = true;
+#endif
+#ifdef FREE_DIRECT_ENABLE_RELAY
+    constexpr bool kListRelayProvider = true;
+#else
+    constexpr bool kListRelayProvider = false;
+#endif
 }
 
 HRESULT WINAPI DirectPlayEnumerateA(LPDPENUMDPCALLBACKA lpEnumCallback, LPVOID lpContext) {
     if (!lpEnumCallback) return DPERR_INVALIDPARAMS;
-    // Exactly one invocation, describing the single FreeDirect-internal placeholder provider
-    // (Decision 1) - enough to satisfy free-eggbert's CNetwork::CreateProvider(0), the only index
-    // its reconstructed source ever constructs. The callback's own return value is intentionally
-    // not consulted: with only one provider to report, "stop enumerating" and "finished
-    // enumerating" are the same outcome either way.
-    lpEnumCallback(const_cast<LPGUID>(&kFreeDirectServiceProviderGuid),
-                   const_cast<LPSTR>(kFreeDirectServiceProviderNameA),
-                   1, 0, lpContext);
+    // The FreeDirect-internal placeholder provider (Decision 1) - enough to satisfy
+    // free-eggbert's CNetwork::CreateProvider(0), the only index its reconstructed source ever
+    // constructs - and, in relay builds, the "FreeDirect server" provider after it (Decision 30;
+    // a web relay build lists only that one). Returning FALSE from the callback stops the list.
+    if (kListLocalProvider &&
+        !lpEnumCallback(const_cast<LPGUID>(&kFreeDirectServiceProviderGuid),
+                        const_cast<LPSTR>(kFreeDirectServiceProviderNameA), 1, 0, lpContext)) {
+        return DP_OK;
+    }
+    if (kListRelayProvider) {
+        lpEnumCallback(const_cast<LPGUID>(&kFreeDirectRelayProviderGuid),
+                       const_cast<LPSTR>(kFreeDirectRelayProviderNameA), 1, 0, lpContext);
+    }
     return DP_OK;
 }
 
 HRESULT WINAPI DirectPlayEnumerateW(LPDPENUMDPCALLBACKW lpEnumCallback, LPVOID lpContext) {
     if (!lpEnumCallback) return DPERR_INVALIDPARAMS;
-    lpEnumCallback(const_cast<LPGUID>(&kFreeDirectServiceProviderGuid),
-                   const_cast<LPWSTR>(kFreeDirectServiceProviderNameW),
-                   1, 0, lpContext);
+    if (kListLocalProvider &&
+        !lpEnumCallback(const_cast<LPGUID>(&kFreeDirectServiceProviderGuid),
+                        const_cast<LPWSTR>(kFreeDirectServiceProviderNameW), 1, 0, lpContext)) {
+        return DP_OK;
+    }
+    if (kListRelayProvider) {
+        lpEnumCallback(const_cast<LPGUID>(&kFreeDirectRelayProviderGuid),
+                       const_cast<LPWSTR>(kFreeDirectRelayProviderNameW), 1, 0, lpContext);
+    }
     return DP_OK;
 }
 
 HRESULT WINAPI DirectPlayCreate(LPGUID lpGUID, LPDIRECTPLAY* lplpDP, IUnknown* pUnkOuter) {
-    (void)lpGUID;
     if (!lplpDP) return DPERR_INVALIDPARAMS;
     *lplpDP = nullptr;
     if (pUnkOuter) return DPERR_NOAGGREGATION;
-    *lplpDP = new (std::nothrow) DirectPlayImpl();
+    // Any other GUID (including null, which the tests pass) is the local provider, as before.
+    const bool relay = kListRelayProvider && lpGUID && IsEqualGuid(*lpGUID, kFreeDirectRelayProviderGuid);
+    *lplpDP = new (std::nothrow) DirectPlayImpl(relay);
     return (*lplpDP) ? DP_OK : DPERR_OUTOFMEMORY;
 }

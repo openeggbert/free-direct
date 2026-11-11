@@ -24,7 +24,7 @@ DirectX 3 (subset)
 * **Free Direct** → reimplements selected DirectX 3 APIs (2D only)
 * **DirectDraw** → Current real implementation focus, constrained to methods and flags used by the game and demo.
 * **DirectSound** → Partially implemented: SDL3-backed audio playback for static PCM buffers.
-* **DirectPlay** → Real session/player/message-queue state: hosting, joining, unicast send/receive, session enumeration, real broadcast (`idTo == 0`, delivered to every other player with host-side relay so non-host peers can reach each other), and `DirectPlayEnumerateA`/`W`'s placeholder-provider enumeration all work between two FreeDirect processes, over both the default loopback transport and an optional ENet backend (`FREE_DIRECT_ENABLE_ENET`) with real UDP networking, real host discovery (`FREE_DIRECT_ENET_HOST_ADDRESS`), and real LAN broadcast discovery. **FreeDirect-to-FreeDirect only — never compatible with real Microsoft DirectPlay at the wire/packet level.** See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation list.
+* **DirectPlay** → Real session/player/message-queue state: hosting, joining, unicast send/receive, session enumeration, real broadcast (`idTo == 0`, delivered to every other player with host-side relay so non-host peers can reach each other), and `DirectPlayEnumerateA`/`W`'s provider enumeration all work between two FreeDirect processes, over the default loopback transport, an optional ENet backend (`FREE_DIRECT_ENABLE_ENET`) with real UDP networking, real host discovery (`FREE_DIRECT_ENET_HOST_ADDRESS`) and real LAN broadcast discovery, and an optional **"FreeDirect server" provider** (`FREE_DIRECT_ENABLE_RELAY`) for Internet play through `free-direct-server`, natively and in the browser. **FreeDirect-to-FreeDirect only — never compatible with real Microsoft DirectPlay at the wire/packet level.** See [docs/directplay-limitations.md](docs/directplay-limitations.md) for the full deviation list.
 * **Direct3D** → Not implemented (not used by target code).
 * **SDL 3** → Internal implementation detail used only inside `.cpp` files.
 
@@ -115,10 +115,10 @@ behind these tags.
 | Method | Status |
 |---|---|
 | `DirectPlayCreate` | IMPLEMENTED |
-| `DirectPlayEnumerateA` / `W` | IMPLEMENTED (invokes the callback once with a FreeDirect-internal placeholder provider) |
-| `EnumSessions` | PARTIAL (loopback registry always; real UDP broadcast LAN discovery too, ENet-enabled builds only) |
-| `Open` | PARTIAL (loopback and ENet both work for hosting and joining; ENet host address via `FREE_DIRECT_ENET_HOST_ADDRESS`; no GUID-mismatch validation on join) |
-| `CreatePlayer` | IMPLEMENTED (name/data/event-handle fields accepted but not stored - deliberate, see below) |
+| `DirectPlayEnumerateA` / `W` | IMPLEMENTED (the FreeDirect-internal placeholder provider, plus "FreeDirect server" in relay builds) |
+| `EnumSessions` | PARTIAL (loopback registry always; real UDP broadcast LAN discovery too, ENet-enabled builds only; the room's sessions with the "FreeDirect server" provider) |
+| `Open` | PARTIAL (loopback, ENet and the Free Direct server all work for hosting and joining; joining waits for the host's answer; over ENet it connects to the host LAN discovery found, or to `FREE_DIRECT_ENET_HOST_ADDRESS`; no GUID-mismatch validation on join) |
+| `CreatePlayer` | IMPLEMENTED (a joiner's player gets the host-assigned DPID; name/data/event-handle fields accepted but not stored - deliberate, see below) |
 | `Send` | PARTIAL (self-send, host-to-one-assigned-remote-player unicast, and broadcast with host-side relay all work; direct non-broadcast unicast between two non-host peers has no path) |
 | `Receive` | IMPLEMENTED |
 | `Close` | IMPLEMENTED |
@@ -130,7 +130,13 @@ implemented by design - see [docs/directplay-limitations.md](docs/directplay-lim
 the full deviation table and each resolution, and
 [docs/directplay-design.md](docs/directplay-design.md) Decisions 20-26 for the full rationale.
 
-Future work: [Public relay server for Free Direct multiplayer](docs/directplay-public-relay-task.md) describes the proposed Internet room service, browser/native WSS transport, prerequisite API fixes, deployment and acceptance tests. **This server is not implemented yet.**
+**Internet multiplayer**: [Free Direct server](docs/free-direct-server.md) (`free-direct-server`,
+in `server/`) is a WebSocket relay with an optional password and private rooms entered with a
+secret ID. Games built with `FREE_DIRECT_ENABLE_RELAY` list the provider "FreeDirect server" and
+ask for the server, port, password and room in a dialog. Native and browser builds play together.
+Protocol: [docs/directplay-relay-protocol.md](docs/directplay-relay-protocol.md); design and
+limits: [docs/directplay-design.md](docs/directplay-design.md) Decision 30. The original task
+description is [docs/directplay-public-relay-task.md](docs/directplay-public-relay-task.md).
 
 ---
 

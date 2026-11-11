@@ -17,10 +17,12 @@
  * `docs/audit_dplay.md` §6.4/§9 (D6, TASK-24H-0176) for the fresh 2026-07-09 decision to add it
  * now that this precondition has been met.
  *
- * The `idFrom`/`idTo` fields are serialized using the local `sizeof(DPID)` as-is
- * (whatever `include/dplay.h` currently typedefs `DPID` to). This is tied to the open
- * DPID-size question tracked in NEXT.md Section 4 / plan.md Phase 9; if that question
- * changes DPID's width, this wire format's DPID fields change with it.
+ * The layout is fixed-width and little-endian on every platform (version 2, 2026-11-11):
+ * a `GUID` is always 16 bytes (`Data1` as 32 bits, although `GUID::Data1` is an
+ * `unsigned long` - 8 bytes on 64-bit Linux, 4 on Windows and WebAssembly) and a `DPID`
+ * always 32 bits. Version 1 copied `sizeof(GUID)` and `sizeof(DPID)` bytes as they were in
+ * memory, so a 64-bit Linux build and a WebAssembly build could not read each other's
+ * packets (`docs/directplay-design.md` Decision 28).
  * @note Status: PARTIAL
  */
 #pragma once
@@ -52,7 +54,7 @@ enum class DirectPlayWirePacketType : std::uint32_t {
 inline constexpr std::uint32_t kDirectPlayWireMagic = 0x46524450;
 
 /// Bumped whenever the wire layout below changes incompatibly.
-inline constexpr std::uint32_t kDirectPlayWireProtocolVersion = 1;
+inline constexpr std::uint32_t kDirectPlayWireProtocolVersion = 2;
 
 /**
  * @brief Fixed-layout header prefixing every FreeDirect-to-FreeDirect DirectPlay wire
@@ -71,18 +73,73 @@ struct DirectPlayWirePacketHeader {
     std::uint32_t payloadLength = 0;
 };
 
+/// Bytes of a `GUID` on the wire (`Data1` 32 bits, `Data2`, `Data3` 16 bits, `Data4` 8 bytes),
+/// independent of `sizeof(GUID)`.
+inline constexpr std::size_t kDirectPlayWireGuidSize = 16;
+
 /// Byte size of a serialized `DirectPlayWirePacketHeader`. Deliberately not
 /// `sizeof(DirectPlayWirePacketHeader)`: `Serialize`/`Deserialize` below use a flat,
-/// padding-free layout (per-field `memcpy`), not the struct's in-memory layout.
+/// padding-free, fixed-width little-endian layout, not the struct's in-memory layout.
 inline constexpr std::size_t kDirectPlayWireHeaderSize =
-    sizeof(std::uint32_t) +  // magic
-    sizeof(std::uint32_t) +  // version
-    sizeof(std::uint32_t) +  // type
-    sizeof(GUID) +           // applicationGuid
-    sizeof(GUID) +           // sessionGuid
-    sizeof(DPID) +           // idFrom
-    sizeof(DPID) +           // idTo
-    sizeof(std::uint32_t);   // payloadLength
+    4 +                        // magic
+    4 +                        // version
+    4 +                        // type
+    kDirectPlayWireGuidSize +  // applicationGuid
+    kDirectPlayWireGuidSize +  // sessionGuid
+    4 +                        // idFrom
+    4 +                        // idTo
+    4;                         // payloadLength
+
+inline void PutWireU16(std::uint8_t*& p, std::uint16_t v) {
+    p[0] = static_cast<std::uint8_t>(v);
+    p[1] = static_cast<std::uint8_t>(v >> 8);
+    p += 2;
+}
+
+inline void PutWireU32(std::uint8_t*& p, std::uint32_t v) {
+    p[0] = static_cast<std::uint8_t>(v);
+    p[1] = static_cast<std::uint8_t>(v >> 8);
+    p[2] = static_cast<std::uint8_t>(v >> 16);
+    p[3] = static_cast<std::uint8_t>(v >> 24);
+    p += 4;
+}
+
+inline std::uint16_t GetWireU16(const std::uint8_t*& p) {
+    const std::uint16_t v = static_cast<std::uint16_t>(p[0] | (p[1] << 8));
+    p += 2;
+    return v;
+}
+
+inline std::uint32_t GetWireU32(const std::uint8_t*& p) {
+    const std::uint32_t v = static_cast<std::uint32_t>(p[0]) |
+                            (static_cast<std::uint32_t>(p[1]) << 8) |
+                            (static_cast<std::uint32_t>(p[2]) << 16) |
+                            (static_cast<std::uint32_t>(p[3]) << 24);
+    p += 4;
+    return v;
+}
+
+/// Writes `guid` as `kDirectPlayWireGuidSize` bytes. `Data1` keeps its low 32 bits, the
+/// only bits a GUID has.
+inline void PutWireGuid(std::uint8_t*& p, const GUID& guid) {
+    PutWireU32(p, static_cast<std::uint32_t>(guid.Data1));
+    PutWireU16(p, guid.Data2);
+    PutWireU16(p, guid.Data3);
+    std::memcpy(p, guid.Data4, 8);
+    p += 8;
+}
+
+/// Reads a GUID written by `PutWireGuid`. The result is value-initialized first, so its
+/// padding bytes (if the platform's `GUID` has any) are zero and `memcmp` comparisons work.
+inline GUID GetWireGuid(const std::uint8_t*& p) {
+    GUID guid{};
+    guid.Data1 = GetWireU32(p);
+    guid.Data2 = GetWireU16(p);
+    guid.Data3 = GetWireU16(p);
+    std::memcpy(guid.Data4, p, 8);
+    p += 8;
+    return guid;
+}
 
 /// Appends `header`'s flat wire representation to `out`, in field-declaration order.
 /// Payload bytes (if any) are the caller's responsibility to append separately.
@@ -92,22 +149,14 @@ inline void SerializeDirectPlayWireHeader(const DirectPlayWirePacketHeader& head
     out.resize(base + kDirectPlayWireHeaderSize);
     std::uint8_t* p = out.data() + base;
 
-    const std::uint32_t type = static_cast<std::uint32_t>(header.type);
-    std::memcpy(p, &header.magic, sizeof(header.magic));
-    p += sizeof(header.magic);
-    std::memcpy(p, &header.version, sizeof(header.version));
-    p += sizeof(header.version);
-    std::memcpy(p, &type, sizeof(type));
-    p += sizeof(type);
-    std::memcpy(p, &header.applicationGuid, sizeof(GUID));
-    p += sizeof(GUID);
-    std::memcpy(p, &header.sessionGuid, sizeof(GUID));
-    p += sizeof(GUID);
-    std::memcpy(p, &header.idFrom, sizeof(DPID));
-    p += sizeof(DPID);
-    std::memcpy(p, &header.idTo, sizeof(DPID));
-    p += sizeof(DPID);
-    std::memcpy(p, &header.payloadLength, sizeof(header.payloadLength));
+    PutWireU32(p, header.magic);
+    PutWireU32(p, header.version);
+    PutWireU32(p, static_cast<std::uint32_t>(header.type));
+    PutWireGuid(p, header.applicationGuid);
+    PutWireGuid(p, header.sessionGuid);
+    PutWireU32(p, static_cast<std::uint32_t>(header.idFrom));
+    PutWireU32(p, static_cast<std::uint32_t>(header.idTo));
+    PutWireU32(p, header.payloadLength);
 }
 
 /// Parses a flat wire header out of `data`. Precondition: `data` points at at least
@@ -116,25 +165,16 @@ inline void SerializeDirectPlayWireHeader(const DirectPlayWirePacketHeader& head
 /// `TryDeserializeDirectPlayWireHeader` below instead.
 inline DirectPlayWirePacketHeader DeserializeDirectPlayWireHeader(const std::uint8_t* data) {
     DirectPlayWirePacketHeader header;
-    std::uint32_t type = 0;
     const std::uint8_t* p = data;
 
-    std::memcpy(&header.magic, p, sizeof(header.magic));
-    p += sizeof(header.magic);
-    std::memcpy(&header.version, p, sizeof(header.version));
-    p += sizeof(header.version);
-    std::memcpy(&type, p, sizeof(type));
-    p += sizeof(type);
-    header.type = static_cast<DirectPlayWirePacketType>(type);
-    std::memcpy(&header.applicationGuid, p, sizeof(GUID));
-    p += sizeof(GUID);
-    std::memcpy(&header.sessionGuid, p, sizeof(GUID));
-    p += sizeof(GUID);
-    std::memcpy(&header.idFrom, p, sizeof(DPID));
-    p += sizeof(DPID);
-    std::memcpy(&header.idTo, p, sizeof(DPID));
-    p += sizeof(DPID);
-    std::memcpy(&header.payloadLength, p, sizeof(header.payloadLength));
+    header.magic = GetWireU32(p);
+    header.version = GetWireU32(p);
+    header.type = static_cast<DirectPlayWirePacketType>(GetWireU32(p));
+    header.applicationGuid = GetWireGuid(p);
+    header.sessionGuid = GetWireGuid(p);
+    header.idFrom = GetWireU32(p);
+    header.idTo = GetWireU32(p);
+    header.payloadLength = GetWireU32(p);
     return header;
 }
 

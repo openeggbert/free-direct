@@ -155,3 +155,36 @@ if(FREE_DIRECT_SANITIZER_FLAGS)
         target_link_options(${sanitized_target} PRIVATE ${FREE_DIRECT_SANITIZER_FLAGS})
     endforeach()
 endif()
+
+# Free Direct server: the room logic and the relay protocol, without any network (pure C++,
+# built whenever the tests are).
+add_executable(relay_hub_tests relay_hub_tests.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../server/RelayHub.cpp)
+target_include_directories(relay_hub_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../server
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/relay)
+add_test(NAME relay_hub_tests COMMAND relay_hub_tests)
+set_tests_properties(relay_hub_tests PROPERTIES LABELS "relay")
+
+# The "FreeDirect server" provider end to end: a real free-direct-server on a local port and
+# separate game-shaped processes. Needs FREE_DIRECT_ENABLE_RELAY and FREE_DIRECT_BUILD_SERVER.
+if(FREE_DIRECT_ENABLE_RELAY AND NOT EMSCRIPTEN AND TARGET free-direct-relay-server)
+    add_executable(relay_directplay_tests relay_directplay_tests.cpp)
+    target_link_libraries(relay_directplay_tests
+            PRIVATE
+            free-direct
+            free-direct-relay-server
+            SDL3::SDL3
+            SDL3_image::SDL3_image
+            SDL3_mixer::SDL3_mixer
+    )
+    add_test(NAME relay_directplay_tests COMMAND relay_directplay_tests)
+    set_tests_properties(relay_directplay_tests PROPERTIES
+            LABELS "relay"
+            TIMEOUT 120
+            ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy"
+    )
+endif()
+if(FREE_DIRECT_ENABLE_RELAY)
+    # Two providers are listed then (Test_DirectPlayEnumerate*).
+    target_compile_definitions(directplay_tests PRIVATE FREE_DIRECT_ENABLE_RELAY=1)
+endif()

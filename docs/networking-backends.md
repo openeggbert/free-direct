@@ -78,7 +78,29 @@ never validated against the host's on join.
 Uses a single ENet channel (channel `0`) for all traffic (Decision 2) - `IDirectPlay2A`'s
 `Send`/`Receive` have no channel-selection concept for any real call site to need more than one.
 
-## Backend 3: `SdlNetDirectPlayTransport` - optional, future, not implemented
+### LAN play from the games' screens (Decision 31)
+
+`EnumSessions()` broadcasts a discovery request on UDP 51323 and collects replies for `dwTimeout`,
+or 1000 ms when the game passes 0 (`FREE_DIRECT_ENET_DISCOVERY_MS`); `Open(DPOPEN_JOIN)` then
+connects to the host the chosen session replied from, on UDP 51321. Both ports must pass the
+firewalls of the machines involved.
+
+## Backend 3: `RelayDirectPlayTransport` - the "FreeDirect server" provider, opt-in
+
+Internet play through `free-direct-server` (`docs/directplay-design.md` Decision 30,
+`docs/free-direct-server.md`). Unlike loopback and ENet, which the build selects, it is chosen at
+run time by the provider GUID the game passes to `DirectPlayCreate`; builds with
+`FREE_DIRECT_ENABLE_RELAY` list it as "FreeDirect server" next to the build's local backend.
+
+- **Native**: IXWebSocket (`FREE_DIRECT_IXWEBSOCKET_SOURCE_DIR`), `ws://` and `wss://` (OpenSSL).
+- **WebAssembly**: the browser's WebSocket (`emscripten/websocket.h`, linked with
+  `-lwebsocket.js`); its waits yield with `emscripten_sleep`, so the build needs Asyncify.
+- Every player connects out to the server, so nobody needs an open port; the server relays
+  between the members of a room's sessions and fans broadcasts out itself (`SendToAll`,
+  `FansOutBroadcasts`).
+- Reliable, ordered delivery only (TCP).
+
+## Backend 4: `SdlNetDirectPlayTransport` - optional, future, not implemented
 
 Documented here, per policy, but **not implemented** - and per `CLAUDE.md`, should not be started
 until the ENet backend is stable. Two possible SDL3_net-based paths exist, each with a real

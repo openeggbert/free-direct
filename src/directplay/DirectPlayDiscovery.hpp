@@ -43,6 +43,12 @@ namespace free_direct_directplay {
 /// `51322`, Decisions 11/12) - all three are separate, independently-bound sockets/mechanisms.
 inline constexpr std::uint16_t kDefaultDirectPlayDiscoveryPort = 51323;
 
+/// How long `EnumSessions()` collects replies when the caller passes `dwTimeout == 0`, which
+/// real DirectPlay reads as "the service provider's default" - and which is exactly what the
+/// games pass (blupi_recon and free-eggbert `src/network.cpp`). Overridable with
+/// `FREE_DIRECT_ENET_DISCOVERY_MS` (docs/directplay-design.md Decision 31).
+inline constexpr std::uint32_t kDefaultDirectPlayDiscoveryTimeoutMs = 1000;
+
 /**
  * @brief One discovered session's real fields, as reported by a `DiscoveryResponse` reply.
  *
@@ -56,6 +62,10 @@ struct DiscoveredSessionInfo {
     DWORD maxPlayers = 0;
     DWORD currentPlayers = 0;
     std::string sessionName;
+    /// Enumerating side only: the IP address the reply came from, i.e. the hosting machine,
+    /// which `Open(DPOPEN_JOIN)` connects to (Decision 31). Empty in what a host reports about
+    /// itself.
+    std::string hostAddress;
 };
 
 /**

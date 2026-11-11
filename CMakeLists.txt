@@ -66,6 +66,9 @@ endif()
 # header regardless of this option's state (CLAUDE.md's Internal Backend Policy).
 option(FREE_DIRECT_ENABLE_ENET "Enable the ENet-backed DirectPlay transport (EnetDirectPlayTransport)" OFF)
 option(FREE_DIRECT_USE_SYSTEM_ENET "Find a system-installed ENet instead of a vendored copy under third_party/enet" OFF)
+# An ENet source checkout other than the (submodule) third_party/enet, e.g. a shared ~/deps/enet.
+set(FREE_DIRECT_ENET_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet" CACHE PATH
+    "ENet source checkout used when FREE_DIRECT_USE_SYSTEM_ENET is OFF")
 
 if(FREE_DIRECT_ENABLE_ENET)
     if(FREE_DIRECT_USE_SYSTEM_ENET)
@@ -75,15 +78,15 @@ if(FREE_DIRECT_ENABLE_ENET)
         pkg_check_modules(FREE_DIRECT_ENET REQUIRED IMPORTED_TARGET libenet)
         add_library(FreeDirect::ENet ALIAS PkgConfig::FREE_DIRECT_ENET)
     else()
-        if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet/CMakeLists.txt")
+        if(NOT EXISTS "${FREE_DIRECT_ENET_SOURCE_DIR}/CMakeLists.txt")
             message(FATAL_ERROR
                 "FREE_DIRECT_ENABLE_ENET is ON but no vendored ENet was found at "
-                "${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet/CMakeLists.txt. Either vendor "
+                "${FREE_DIRECT_ENET_SOURCE_DIR}/CMakeLists.txt. Either vendor "
                 "ENet there (e.g. as a git submodule pointing at "
-                "https://github.com/lsalzman/enet), or configure with "
+                "https://github.com/lsalzman/enet), point FREE_DIRECT_ENET_SOURCE_DIR at a checkout, or configure with "
                 "-DFREE_DIRECT_USE_SYSTEM_ENET=ON to use a system-installed libenet instead.")
         endif()
-        add_subdirectory(third_party/enet EXCLUDE_FROM_ALL)
+        add_subdirectory("${FREE_DIRECT_ENET_SOURCE_DIR}" third_party/enet EXCLUDE_FROM_ALL)
         if(NOT TARGET enet)
             message(FATAL_ERROR
                 "third_party/enet was found but did not define the expected 'enet' CMake "
@@ -94,7 +97,7 @@ if(FREE_DIRECT_ENABLE_ENET)
         # directory-scoped include_directories(), not target_include_directories(), so it is
         # not carried as a usage requirement of the "enet" target - callers outside ENet's own
         # directory scope (i.e. us) would not see enet/enet.h without this.
-        target_include_directories(enet PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/enet/include)
+        target_include_directories(enet PUBLIC ${FREE_DIRECT_ENET_SOURCE_DIR}/include)
         add_library(FreeDirect::ENet ALIAS enet)
     endif()
 endif()
@@ -210,6 +213,38 @@ if(FREE_DIRECT_ENABLE_ENET)
     # backend selection, driven by this exact option, no run-time switch). PRIVATE: this is an
     # implementation detail of free-direct itself, not something consumers should see or set.
     target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_ENET=1)
+endif()
+
+# The "FreeDirect server" DirectPlay provider: Internet multiplayer through free-direct-server
+# (docs/directplay-design.md Decision 29, docs/free-direct-server.md). Off by default; a game
+# that wants it turns it on and names its game and edition in FREE_DIRECT_RELAY_COMPAT, which
+# the server compares so a room never mixes incompatible games.
+option(FREE_DIRECT_ENABLE_RELAY "Add the \"FreeDirect server\" DirectPlay provider (Internet play through free-direct-server)" OFF)
+set(FREE_DIRECT_RELAY_COMPAT "" CACHE STRING "Identity of the game and edition for Free Direct server rooms")
+if(FREE_DIRECT_ENABLE_RELAY)
+    target_sources(free-direct PRIVATE
+            src/directplay/RelayClient.cpp
+            src/directplay/RelayDirectPlayTransport.cpp
+            src/directplay/DirectPlayRelay.cpp)
+    target_include_directories(free-direct PRIVATE src/relay)
+    target_compile_definitions(free-direct PRIVATE FREE_DIRECT_ENABLE_RELAY=1)
+    if(FREE_DIRECT_RELAY_COMPAT)
+        target_compile_definitions(free-direct PRIVATE FREE_DIRECT_RELAY_COMPAT="${FREE_DIRECT_RELAY_COMPAT}")
+    endif()
+    if(EMSCRIPTEN)
+        target_sources(free-direct PRIVATE src/directplay/RelaySocketWeb.cpp)
+        # The browser WebSocket API; INTERFACE, so the game's final link gets it.
+        target_link_options(free-direct INTERFACE "-lwebsocket.js")
+    else()
+        include(cmake/FreeDirectIXWebSocket.cmake)
+        target_sources(free-direct PRIVATE src/directplay/RelaySocketIx.cpp)
+        target_link_libraries(free-direct PRIVATE FreeDirect::IXWebSocket)
+    endif()
+endif()
+
+option(FREE_DIRECT_BUILD_SERVER "Build free-direct-server, the relay server for Internet multiplayer" OFF)
+if(FREE_DIRECT_BUILD_SERVER)
+    add_subdirectory(server)
 endif()
 
 add_executable(FREE_DIRECT src/Main.cpp)

@@ -1,6 +1,7 @@
 # Future task: public relay server for Free Direct multiplayer
 
-Status: **proposed; not implemented**. Recorded on 2026-11-08 at the user's request.
+Status: **implemented on 2026-11-11**, with the user's decisions of that day replacing parts of
+this proposal; see "Outcome" below. Recorded on 2026-11-08 at the user's request.
 The source review below used Free Direct `5430a3d22b4f185a5e92b18fce8504ee8b79755a`
 and blupi_recon `d2e2680edbce7c1dd184e61e521ddec5a4b0bfbe`.
 
@@ -8,6 +9,27 @@ Labels distinguish **[EVIDENCE]** (source or existing documented results),
 **[DESIGN]** (proposed behavior), **[HYPOTHESIS]** (an implication to reproduce),
 and **[OPEN]** (a decision or verification still needed). This document does not
 claim that Free Direct currently supports public relay multiplayer.
+
+## Outcome (2026-11-11)
+
+Implemented as `docs/directplay-design.md` Decisions 28-30; operation in
+`docs/free-direct-server.md`, protocol in `docs/directplay-relay-protocol.md`.
+
+The user changed the model this proposal assumed: there is no public room directory on one fixed
+server. A player enters any server's address or URL and port; the server may have a password;
+rooms are mandatory, created by a player, never listed, and entered with their secret ID; a room
+is a private virtual LAN in which the game's own session list works. Server and native client are
+C++ with IXWebSocket; the connection dialog lives in Free API.
+
+Done: the §3 prerequisites (callback flags, joining identity, waits that yield in the browser),
+the fixed-width wire header, the server, native and WebAssembly clients, game-shaped
+multi-process tests, and browser-to-browser play of Speedy Blupi 1 and 2 through a local server
+with a native process joining the browser host's session (blupi_recon `freeapi/tools/net_web.mjs`).
+
+Still open from §8-§9: a deployed public server and tests between different Internet
+connections; latency, loss and slow-peer measurements; four players; the Eggbert editions in the
+browser; a native game instance playing with a browser one (only the protocol-level join is
+tested); host migration.
 
 ## 1. Goal and scope
 

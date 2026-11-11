@@ -70,6 +70,22 @@ public:
      */
     virtual bool Send(DPID targetId, const void* data, std::size_t size, bool reliable) = 0;
 
+    /**
+     * @brief Sends a payload to every other member of the session: for a joining-role instance,
+     * the host (which relays it on, Decision 21) unless `FansOutBroadcasts()`. The default is
+     * `Send(DPID_ALLPLAYERS, ...)`, the existing behavior of every backend but the relay.
+     */
+    virtual bool SendToAll(const void* data, std::size_t size, bool reliable) {
+        return Send(DPID_ALLPLAYERS, data, size, reliable);
+    }
+
+    /**
+     * @brief True if `SendToAll()` reaches every other member by itself (the Free Direct
+     * server delivers it to all of them, docs/directplay-design.md Decision 30), so the host
+     * must not relay a joiner's broadcast a second time.
+     */
+    virtual bool FansOutBroadcasts() const { return false; }
+
     /** @brief Retrieves the next received payload, if any, without blocking. */
     virtual bool Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) = 0;
 

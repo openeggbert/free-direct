@@ -44,6 +44,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -500,6 +501,138 @@ void Test_EnumSessionsOverEnet_FiltersByApplicationGuid() {
     hostDp->Release();
 }
 
+namespace {
+// The EnumSessionsCallback of Speedy Blupi 1/2 and free-eggbert (src/network.cpp): stops at
+// DPESC_TIMEDOUT, otherwise keeps the instance GUID and the name.
+BOOL GameShapedEnumSessionsCallback(LPDPSESSIONDESC2 lpThisSD, LPDWORD, DWORD dwFlags, LPVOID lpContext) {
+    if (dwFlags & DPESC_TIMEDOUT) return FALSE;
+    auto* results = static_cast<std::vector<DiscoveredEnumResult>*>(lpContext);
+    DiscoveredEnumResult result;
+    result.desc = *lpThisSD;
+    result.sessionName = lpThisSD->lpszSessionNameA ? lpThisSD->lpszSessionNameA : "";
+    results->push_back(std::move(result));
+    return TRUE;
+}
+
+// CNetwork::EnumSessions's call: the application GUID, dwTimeout 0, DPENUMSESSIONS_AVAILABLE.
+std::vector<DiscoveredEnumResult> GameShapedEnumSessions(const GUID& appGuid) {
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+    std::vector<DiscoveredEnumResult> found;
+    DPSESSIONDESC2 filter{};
+    std::memset(&filter, 0, sizeof(filter));
+    filter.dwSize = sizeof(DPSESSIONDESC2);
+    filter.guidApplication = appGuid;
+    CHECK(dp2->EnumSessions(&filter, /*dwTimeout=*/0, GameShapedEnumSessionsCallback, &found,
+                            DPENUMSESSIONS_AVAILABLE) == DP_OK);
+    dp2->Release();
+    dp->Release();
+    return found;
+}
+} // namespace
+
+// docs/directplay-design.md Decision 31: with the games' dwTimeout of 0, EnumSessions() collects
+// replies for the default time instead of not waiting at all, so a LAN session is listed.
+void Test_EnumSessionsOverEnet_GameShapedZeroTimeout_FindsSession() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    GUID appGuid{};
+    appGuid.Data1 = 0x3101;
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication = appGuid;
+    hostDesc.dwMaxPlayers = 4;
+    char sessionName[] = "ROOM";
+    hostDesc.lpszSessionNameA = sessionName;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+    {
+        BackgroundHostServicer servicer(hostDp2);
+        const auto found = GameShapedEnumSessions(appGuid);
+        CHECK(found.size() == 1);
+        if (!found.empty()) CHECK(found[0].sessionName == "ROOM");
+    }
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// docs/directplay-design.md Decision 31: joining a session found by LAN discovery connects to the
+// host it was found at, with no FREE_DIRECT_ENET_HOST_ADDRESS - the games' path: EnumSessions,
+// then Open(DPOPEN_OPENSESSION) with the chosen instance GUID, then CreatePlayer.
+void Test_OpenAsJoinOverEnet_UsesDiscoveredHostAddress() {
+    SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "FREE_DIRECT_ENET_HOST_ADDRESS");
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    GUID appGuid{};
+    appGuid.Data1 = 0x3102;
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication = appGuid;
+    hostDesc.dwMaxPlayers = 4;
+    char sessionName[] = "LAN";
+    hostDesc.lpszSessionNameA = sessionName;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+    DPID hostPlayer = 99;
+    CHECK(hostDp2->CreatePlayer(&hostPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    std::vector<DiscoveredEnumResult> found;
+    {
+        BackgroundHostServicer servicer(hostDp2);  // the host answers discovery meanwhile
+        found = GameShapedEnumSessions(appGuid);
+    }
+    CHECK(found.size() == 1);
+    if (found.empty()) {
+        hostDp2->Release();
+        hostDp->Release();
+        return;
+    }
+
+    // Open() services the host, which lives in this process, while it waits (Decision 29).
+    LPDIRECTPLAY clientDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &clientDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A clientDp2 = nullptr;
+    CHECK(clientDp->QueryInterface(IID_IDirectPlay2A, (void**)&clientDp2) == DP_OK);
+    DPSESSIONDESC2 joinDesc{};
+    std::memset(&joinDesc, 0, sizeof(joinDesc));
+    joinDesc.dwSize = sizeof(DPSESSIONDESC2);
+    joinDesc.guidInstance = found[0].desc.guidInstance;
+    CHECK(clientDp2->Open(&joinDesc, DPOPEN_OPENSESSION) == DP_OK);
+    DPID clientPlayer = 99;
+    CHECK(clientDp2->CreatePlayer(&clientPlayer, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    CHECK(hostPlayer == 0);
+    CHECK(clientPlayer == 1);
+
+    // The client's broadcast reaches the host as coming from the client's DPID.
+    const char msg[] = "lan";
+    CHECK(clientDp2->Send(clientPlayer, 0, DPSEND_GUARANTEED, (LPVOID)msg, sizeof(msg)) == DP_OK);
+    bool received = false;
+    for (int elapsed = 0; elapsed <= kEnetPollTimeoutMs && !received; elapsed += kEnetPollIntervalMs) {
+        DPID from = 99, to = 99;
+        char buf[16] = {};
+        DWORD size = sizeof(buf);
+        if (hostDp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK) {
+            CHECK(from == clientPlayer);
+            CHECK(std::strcmp(buf, "lan") == 0);
+            received = true;
+        } else {
+            SDL_Delay(kEnetPollIntervalMs);
+        }
+    }
+    CHECK(received);
+
+    clientDp2->Release();
+    clientDp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 int main() {
     Test_EnetTransport_ListenAndConnect_EstablishesConnection();
     Test_EnetTransport_ReliableSend_HostToClient_DeliversPayload();
@@ -510,6 +643,8 @@ int main() {
     Test_OpenAsJoinOverEnet_WithHostAddressEnvVar_JoinsSuccessfully();
     Test_EnumSessionsOverEnet_FindsRealHostedSession();
     Test_EnumSessionsOverEnet_FiltersByApplicationGuid();
+    Test_EnumSessionsOverEnet_GameShapedZeroTimeout_FindsSession();
+    Test_OpenAsJoinOverEnet_UsesDiscoveredHostAddress();
 
     if (g_failures == 0) {
         std::printf("OK: all ENet DirectPlay transport tests passed.\n");

@@ -302,14 +302,12 @@ void Test_OpenAsJoinWithHostPresent_Succeeds() {
 // plan.md Phase 7: "Add a test for max-players rejection: a third loopback client joining a
 // two-player-max session receives a rejected outcome (a DPERR_* code, not DP_OK)."
 //
-// Reachable end-to-end now thanks to docs/directplay-design.md Decision 13
-// (IsConnectedToHost(), wired into DirectPlay2AImpl::Receive()): the host's own Receive()
-// call is what actually runs the DPID-assignment/rejection loop (Decision 6's polling
-// model - nothing happens until something calls Receive()), so the host must poll once
-// before the rejection is real. The rejected third client only observes DPERR_NOCONNECTION
-// on its own next Receive() call - Open() itself already returned DP_OK, since the
-// connection was merely pending, not yet rejected, at Open() time.
-void Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection() {
+// Since docs/directplay-design.md Decision 29, Open(DPOPEN_JOIN) waits for the host's answer
+// (the host lives in this process, so the joiner's wait runs its admission), and a refused
+// join is Open()'s own failure: DPERR_CANTADDPLAYER, never a DP_OK for a join the host has
+// already turned away. The refused object is not open, so its Receive() reports
+// DPERR_NOCONNECTION.
+void Test_OpenAsJoinOverMaxPlayers_ThirdClientIsRefused() {
     LPDIRECTPLAY hostDp = nullptr;
     CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
     LPDIRECTPLAY2A hostDp2 = nullptr;
@@ -326,16 +324,15 @@ void Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection() {
         DPSESSIONDESC2 desc{};
         std::memset(&desc, 0, sizeof(desc));
         desc.dwSize = sizeof(DPSESSIONDESC2);
-        CHECK((*outDp2)->Open(&desc, DPOPEN_JOIN) == DP_OK);
+        return (*outDp2)->Open(&desc, DPOPEN_JOIN);
     };
 
     LPDIRECTPLAY dpA = nullptr, dpB = nullptr, dpC = nullptr;
     LPDIRECTPLAY2A dp2A = nullptr, dp2B = nullptr, dp2C = nullptr;
-    openClient(&dpA, &dp2A);
-    openClient(&dpB, &dp2B);
-    openClient(&dpC, &dp2C);
+    CHECK(openClient(&dpA, &dp2A) == DP_OK);
+    CHECK(openClient(&dpB, &dp2B) == DP_OK);
+    CHECK(openClient(&dpC, &dp2C) == DPERR_CANTADDPLAYER);
 
-    // Drives the host's assignment/rejection loop for real - see comment above.
     DPID from = 0, to = 0;
     char buf[8];
     DWORD size = sizeof(buf);
@@ -1217,6 +1214,13 @@ void Test_LoopbackSend_ToUnknownTargetId_Fails() {
 // and asserts round-trip equality."
 //
 // Pure data-structure test - no ENet dependency exists yet, and this header has none.
+// Field-wise, not memcmp: a GUID's padding bytes (64-bit Linux pads its 8-byte Data1 layout
+// to 24 bytes) carry no value and are not part of the wire format.
+bool GuidFieldsEqual(const GUID& a, const GUID& b) {
+    return a.Data1 == b.Data1 && a.Data2 == b.Data2 && a.Data3 == b.Data3 &&
+           std::memcmp(a.Data4, b.Data4, sizeof(a.Data4)) == 0;
+}
+
 void Test_WireHeaderRoundTrip_PreservesAllFields() {
     using namespace free_direct_directplay;
 
@@ -1238,8 +1242,8 @@ void Test_WireHeaderRoundTrip_PreservesAllFields() {
     CHECK(roundTripped.magic == kDirectPlayWireMagic);
     CHECK(roundTripped.version == kDirectPlayWireProtocolVersion);
     CHECK(roundTripped.type == DirectPlayWirePacketType::Discovery);
-    CHECK(std::memcmp(&roundTripped.applicationGuid, &header.applicationGuid, sizeof(GUID)) == 0);
-    CHECK(std::memcmp(&roundTripped.sessionGuid, &header.sessionGuid, sizeof(GUID)) == 0);
+    CHECK(GuidFieldsEqual(roundTripped.applicationGuid, header.applicationGuid));
+    CHECK(GuidFieldsEqual(roundTripped.sessionGuid, header.sessionGuid));
     CHECK(roundTripped.idFrom == 42);
     CHECK(roundTripped.idTo == 99);
     CHECK(roundTripped.payloadLength == 1234);
@@ -1716,22 +1720,33 @@ BOOL RecordingEnumDpCallbackW(LPGUID lpguidSP, LPWSTR lpSPName, DWORD, DWORD, LP
 void Test_DirectPlayEnumerateA_InvokesCallbackExactlyOnceWithValidProvider() {
     EnumDpCallbackRecordA record;
     CHECK(DirectPlayEnumerateA(RecordingEnumDpCallbackA, &record) == DP_OK);
+#ifdef FREE_DIRECT_ENABLE_RELAY
+    // Decision 30: the "FreeDirect server" provider follows the local one.
+    CHECK(record.callCount == 2);
+    CHECK(record.lastName == "FreeDirect server");
+#else
     CHECK(record.callCount == 1);
+    CHECK(record.lastName == "FreeDirect");
+#endif
     CHECK(!record.lastGuidWasNull);
     const GUID zeroGuid{};
     CHECK(std::memcmp(&record.lastGuid, &zeroGuid, sizeof(GUID)) != 0);
-    CHECK(record.lastName == "FreeDirect");
 }
 
 void Test_DirectPlayEnumerateW_InvokesCallbackExactlyOnceWithValidProvider() {
     EnumDpCallbackRecordW record;
     CHECK(DirectPlayEnumerateW(RecordingEnumDpCallbackW, &record) == DP_OK);
+#ifdef FREE_DIRECT_ENABLE_RELAY
+    CHECK(record.callCount == 2);
+    CHECK(record.lastNameLength == 17); // "FreeDirect server"
+#else
     CHECK(record.callCount == 1);
+    CHECK(record.lastNameLength == 10); // "FreeDirect"
+#endif
     CHECK(!record.lastGuidWasNull);
     const GUID zeroGuid{};
     CHECK(std::memcmp(&record.lastGuid, &zeroGuid, sizeof(GUID)) != 0);
     CHECK(!record.lastNameWasNull);
-    CHECK(record.lastNameLength == 10); // "FreeDirect"
 
     // Both encodings must describe the same underlying placeholder provider.
     EnumDpCallbackRecordA recordA;
@@ -2130,6 +2145,154 @@ void Test_DirectPlayOperations_ProducesLogOutput_WhenDebugFlagSet() {
 
 } // namespace
 
+
+// docs/directplay-design.md Decision 28: the header is 56 bytes, fixed-width and
+// little-endian on every platform. Version 1 copied sizeof(GUID) (24 bytes on 64-bit Linux,
+// 16 on WebAssembly) and sizeof(DPID), so those two builds could not read each other.
+void Test_WireHeader_FixedLittleEndianLayout() {
+    using namespace free_direct_directplay;
+
+    CHECK(kDirectPlayWireHeaderSize == 56);
+    DirectPlayWirePacketHeader header;
+    header.type = DirectPlayWirePacketType::JoinAccept;
+    header.applicationGuid = {0x11223344, 0x5566, 0x7788, {1, 2, 3, 4, 5, 6, 7, 8}};
+    header.idFrom = 0x0A0B0C0D;
+    header.idTo = 7;
+    header.payloadLength = 0;
+    std::vector<std::uint8_t> wire;
+    SerializeDirectPlayWireHeader(header, wire);
+    CHECK(wire.size() == 56);
+    const std::uint8_t expectedStart[] = {
+        0x50, 0x44, 0x52, 0x46,  // magic 0x46524450, little-endian
+        0x02, 0x00, 0x00, 0x00,  // version 2
+        0x01, 0x00, 0x00, 0x00,  // JoinAccept
+        0x44, 0x33, 0x22, 0x11, 0x66, 0x55, 0x88, 0x77, 1, 2, 3, 4, 5, 6, 7, 8,
+    };
+    CHECK(std::memcmp(wire.data(), expectedStart, sizeof(expectedStart)) == 0);
+    CHECK(wire[44] == 0x0D && wire[45] == 0x0C && wire[46] == 0x0B && wire[47] == 0x0A);
+    CHECK(wire[48] == 7);
+}
+
+namespace {
+// The callback of Speedy Blupi 1 and 2 (blupi_recon src/network.cpp) and Free Eggbert, which
+// stops at DPESC_TIMEDOUT, the same bit value as the DPENUMSESSIONS_AVAILABLE they enumerate
+// with.
+BOOL GameShapedEnumSessionsCallback(LPDPSESSIONDESC2 lpThisSD, LPDWORD, DWORD dwFlags,
+                                    LPVOID lpContext) {
+    if (dwFlags & DPESC_TIMEDOUT) return FALSE;
+    auto* names = static_cast<std::vector<std::string>*>(lpContext);
+    names->push_back(lpThisSD->lpszSessionNameA ? lpThisSD->lpszSessionNameA : "");
+    return TRUE;
+}
+} // namespace
+
+// docs/directplay-design.md Decision 28: a found session's callback flags are 0, never the
+// caller's DPENUMSESSIONS_AVAILABLE, which a game reads as DPESC_TIMEDOUT and stops at.
+void Test_EnumSessions_GameShapedCallbackSeesSessionNotTimeout() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.guidApplication.Data1 = 0xbe4af9a0;
+    hostDesc.dwMaxPlayers = 4;
+    static char kSessionName[] = "Blupi";
+    hostDesc.lpszSessionNameA = kSessionName;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+
+    LPDIRECTPLAY dp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &dp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A dp2 = nullptr;
+    CHECK(dp->QueryInterface(IID_IDirectPlay2A, (void**)&dp2) == DP_OK);
+    DPSESSIONDESC2 filter{};
+    std::memset(&filter, 0, sizeof(filter));
+    filter.dwSize = sizeof(filter);
+    filter.guidApplication.Data1 = 0xbe4af9a0;
+    std::vector<std::string> names;
+    CHECK(dp2->EnumSessions(&filter, 0, GameShapedEnumSessionsCallback, &names,
+                            DPENUMSESSIONS_AVAILABLE) == DP_OK);
+    CHECK(names.size() == 1);
+    CHECK(!names.empty() && names[0] == "Blupi");
+
+    dp2->Release();
+    dp->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
+// docs/directplay-design.md Decision 29: the call order of CNetwork::CreateSession and
+// CNetwork::JoinSession (blupi_recon src/network.cpp) - Open, then CreatePlayer at once, the
+// returned DPID kept as m_dpid and used as idFrom of every Send(m_dpid, 0, ...). The joiner's
+// DPID must be the one the host assigned, distinct from the host's, and the sender identity
+// each side receives must match the other side's m_dpid.
+void Test_GameShapedJoin_CreatePlayerReturnsHostAssignedDpid() {
+    LPDIRECTPLAY hostDp = nullptr;
+    CHECK(DirectPlayCreate(nullptr, &hostDp, nullptr) == DP_OK);
+    LPDIRECTPLAY2A hostDp2 = nullptr;
+    CHECK(hostDp->QueryInterface(IID_IDirectPlay2A, (void**)&hostDp2) == DP_OK);
+    DPSESSIONDESC2 hostDesc{};
+    std::memset(&hostDesc, 0, sizeof(hostDesc));
+    hostDesc.dwSize = sizeof(DPSESSIONDESC2);
+    hostDesc.dwMaxPlayers = 4;
+    CHECK(hostDp2->Open(&hostDesc, DPOPEN_CREATE) == DP_OK);
+    DPID hostDpid = 99;
+    CHECK(hostDp2->CreatePlayer(&hostDpid, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+
+    auto join = [&](LPDIRECTPLAY* outDp, LPDIRECTPLAY2A* outDp2, DPID* outId) {
+        CHECK(DirectPlayCreate(nullptr, outDp, nullptr) == DP_OK);
+        CHECK((*outDp)->QueryInterface(IID_IDirectPlay2A, (void**)outDp2) == DP_OK);
+        DPSESSIONDESC2 desc{};
+        std::memset(&desc, 0, sizeof(desc));
+        desc.dwSize = sizeof(DPSESSIONDESC2);
+        desc.guidInstance = hostDesc.guidInstance;
+        CHECK((*outDp2)->Open(&desc, DPOPEN_OPENSESSION) == DP_OK);
+        CHECK((*outDp2)->CreatePlayer(outId, nullptr, nullptr, nullptr, 0, 0) == DP_OK);
+    };
+    LPDIRECTPLAY dpA = nullptr, dpB = nullptr;
+    LPDIRECTPLAY2A dp2A = nullptr, dp2B = nullptr;
+    DPID idA = 99, idB = 99;
+    join(&dpA, &dp2A, &idA);
+    join(&dpB, &dp2B, &idB);
+    CHECK(hostDpid == 0);
+    CHECK(idA == 1);
+    CHECK(idB == 2);
+    // One player per joining object: there is no second identity the host knows about.
+    DPID extra = 0;
+    CHECK(dp2A->CreatePlayer(&extra, nullptr, nullptr, nullptr, 0, 0) == DPERR_CANTCREATEPLAYER);
+
+    // Client A's broadcast, the games' Send(m_dpid, 0, GUARANTEED) shape.
+    const char fromA[] = "A";
+    CHECK(dp2A->Send(idA, 0, DPSEND_GUARANTEED, (LPVOID)fromA, sizeof(fromA)) == DP_OK);
+    DPID from = 99, to = 99;
+    char buf[16] = {};
+    DWORD size = sizeof(buf);
+    CHECK(hostDp2->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(from == idA);
+    size = sizeof(buf);
+    CHECK(dp2B->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(from == idA);
+    CHECK(std::strcmp(buf, "A") == 0);
+
+    // The host's broadcast reaches both clients as coming from the host's DPID.
+    const char fromHost[] = "H";
+    CHECK(hostDp2->Send(hostDpid, 0, DPSEND_GUARANTEED, (LPVOID)fromHost, sizeof(fromHost)) == DP_OK);
+    size = sizeof(buf);
+    CHECK(dp2A->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(from == hostDpid);
+    size = sizeof(buf);
+    CHECK(dp2B->Receive(&from, &to, DPRECEIVE_ALL, buf, &size) == DP_OK);
+    CHECK(from == hostDpid);
+
+    dp2B->Release();
+    dpB->Release();
+    dp2A->Release();
+    dpA->Release();
+    hostDp2->Release();
+    hostDp->Release();
+}
+
 int main() {
     Test_ReceiveOnEmptyQueue_ReturnsNoMessages();
     Test_ReceiveWithTooSmallBuffer_PreservesPacket();
@@ -2139,7 +2302,10 @@ int main() {
     Test_OpenAsHostOverLoopback_ReturnsOk();
     Test_OpenAsJoinWithNoHostPresent_ReturnsNoSessions();
     Test_OpenAsJoinWithHostPresent_Succeeds();
-    Test_OpenAsJoinOverMaxPlayers_ThirdClientReceivesNoConnection();
+    Test_OpenAsJoinOverMaxPlayers_ThirdClientIsRefused();
+    Test_GameShapedJoin_CreatePlayerReturnsHostAssignedDpid();
+    Test_EnumSessions_GameShapedCallbackSeesSessionNotTimeout();
+    Test_WireHeader_FixedLittleEndianLayout();
     Test_SendToSpecificRemotePlayer_HostDeliversToAssignedClient();
     Test_SendToUnknownRemotePlayer_ReturnsInvalidPlayer();
     Test_SendFromUnknownLocalPlayer_ReturnsInvalidPlayer();

@@ -95,13 +95,12 @@ typedef struct IDirectPlay2A* LPDIRECTPLAY2A;
 
 #define DPSEND_GUARANTEED 0x00000001L
 
-/** @brief Real call site: free-eggbert's network.cpp EnumSessionsCallback checks
- *  `dwFlags & DPESC_TIMEDOUT` to detect end-of-enumeration. FreeDirect's own `EnumSessions()` is a
- *  synchronous loopback registry lookup (docs/directplay-design.md Decision 18) with no timeout
- *  concept, so it never sets this flag when invoking the callback - the check compiles and is
- *  correct by value, but is presently unreachable from FreeDirect's side. Not a bug: EnumSessions()
- *  still terminates normally (returns DP_OK after the loop) without it. Tracked for
- *  docs/directplay-limitations.md (TASK-24H-0094). */
+/** @brief Real call sites: the EnumSessionsCallback of free-eggbert and of Speedy Blupi 1/2
+ *  (blupi_recon src/network.cpp) returns FALSE at once when `dwFlags & DPESC_TIMEDOUT`. FreeDirect
+ *  passes 0 for every session it reports - never the caller's `DPENUMSESSIONS_AVAILABLE`, which has
+ *  the same value and made every session look like a timeout until 2026-11-11
+ *  (docs/directplay-design.md Decision 28) - and makes no final timed-out call: EnumSessions()
+ *  returns DP_OK once the list ends. */
 #define DPESC_TIMEDOUT 0x00000001L
 
 /** @brief Real call sites: free-eggbert's network.cpp sets both flags in DPSESSIONDESC2::dwFlags
@@ -285,11 +284,11 @@ public:
     virtual ULONG WINAPI AddRef() = 0;
     /** @brief Decrements object reference count; deletes and defensively tears down the transport on last release. @note Status: IMPLEMENTED */
     virtual ULONG WINAPI Release() = 0;
-    /** @brief Enumerates sessions against a real, process-wide loopback-hosted-session registry, plus (ENet-enabled builds only) a real UDP broadcast Discovery/DiscoveryResponse round-trip for LAN-hosted ENet sessions, using dwTimeout for real. @note Status: PARTIAL */
+    /** @brief Enumerates sessions against a real, process-wide loopback-hosted-session registry, plus (ENet-enabled builds only) a real UDP broadcast Discovery/DiscoveryResponse round-trip for LAN-hosted ENet sessions, using dwTimeout for real. With the "FreeDirect server" provider (FREE_DIRECT_ENABLE_RELAY, Decision 30) it lists the sessions of the server room the player entered; the first call on an object shows the connection dialog. @note Status: PARTIAL */
     virtual HRESULT WINAPI EnumSessions(LPDPSESSIONDESC2 lpEnumSessionsDesc, DWORD dwTimeout, LPDPENUMSESSIONS_CALLBACK2 lpEnumSessionsCallback, LPVOID lpContext, DWORD dwFlags) = 0;
-    /** @brief Opens or creates a session. Real for loopback (both host and join roles) and ENet (both host and join roles - joining resolves the host address via the FREE_DIRECT_ENET_HOST_ADDRESS environment variable). @note Status: PARTIAL */
+    /** @brief Opens or creates a session. Real for loopback, ENet (joining connects to the host LAN discovery found for that session, or to FREE_DIRECT_ENET_HOST_ADDRESS, Decision 31) and the "FreeDirect server" provider (Decision 30), for both host and join roles. Joining waits, bounded by FREE_DIRECT_JOIN_TIMEOUT_MS, until the host admits (DP_OK) or refuses (DPERR_CANTADDPLAYER) the joiner, or DPERR_TIMEOUT (Decision 29). @note Status: PARTIAL */
     virtual HRESULT WINAPI Open(LPDPSESSIONDESC2 lpSessionDesc, DWORD dwFlags) = 0;
-    /** @brief Creates a player endpoint with real dwMaxPlayers validation and sequential DPID allocation. Player name/data/event-handle fields are accepted but not stored. @note Status: IMPLEMENTED */
+    /** @brief Creates a player endpoint with real dwMaxPlayers validation and sequential DPID allocation by the host; a joining session's one player gets the DPID the host assigned during Open() (Decision 29). Player name/data/event-handle fields are accepted but not stored. @note Status: IMPLEMENTED */
     virtual HRESULT WINAPI CreatePlayer(LPDPID lpidPlayer, LPDPNAME lpPlayerName, HANDLE hEvent, LPVOID lpData, DWORD dwDataSize, DWORD dwFlags) = 0;
     /** @brief Sends a packet. Real for self-send, host-to-one-assigned-remote-player unicast, and broadcast (idTo == DPID_ALLPLAYERS, delivered to every other player, with host-side relay so a non-host sender's broadcast reaches every other peer too - see docs/directplay-design.md Decisions 20/21). Direct non-broadcast unicast between two non-host peers still has no path (no real call site needs it). @note Status: PARTIAL */
     virtual HRESULT WINAPI Send(DPID idFrom, DPID idTo, DWORD dwFlags, LPVOID lpData, DWORD dwDataSize) = 0;
