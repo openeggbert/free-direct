@@ -73,6 +73,11 @@ cmake --build build/server
 Inside a full Free Direct build, `-DFREE_DIRECT_BUILD_SERVER=ON` builds it as well. Without
 OpenSSL, configure with `-DFREE_DIRECT_RELAY_TLS=OFF` (plain `ws://` only).
 
+**Windows.** The server builds unchanged with MinGW-w64. blupi_recon's
+`freeapi/tools/build_windows.sh` cross-compiles it from Linux as a self-contained
+`free-direct-server.exe` (`-static`, without TLS) and packs it with `start-server.bat`
+(`../../blupi_recon/freeapi/README.md`, "Windows").
+
 ## Running
 
 ```bash
