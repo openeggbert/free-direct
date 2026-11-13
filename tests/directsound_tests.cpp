@@ -213,7 +213,11 @@ void Test_CreateSoundBuffer_HugeSampleRate_FallsBackGracefully() {
 // note) - only that the fix doesn't crash and produces a playable buffer.
 void Test_CreateSoundBuffer_ZeroSampleRateWithValidFormat_PlaysSuccessfully() {
     LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
-    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 1000, 8, 2, 0); // valid 8-bit stereo, freq=0
+    // Valid 8-bit stereo, freq=0. One second at the 22050 Hz fallback: GetStatus reports PLAYING
+    // only while data is queued, and the dummy driver drains it in real time, so a few
+    // milliseconds of sound (this test used 1000 bytes, 23 ms) can be over before GetStatus runs
+    // on a loaded machine.
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 44100, 8, 2, 0);
     CHECK(buf->Play(0, 0, 0) == DS_OK);
     DWORD status = 0;
     CHECK(buf->GetStatus(&status) == DS_OK);
@@ -263,7 +267,8 @@ void Test_Lock_WraparoundRegion_ReturnsTwoValidRegions() {
 
 void Test_LockUnlock_WrittenDataUsedByPlay() {
     LPDIRECTSOUND ds = CreateDirectSoundNoWindow();
-    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 200, 16, 1, 22050);
+    // One second of 16-bit mono (it used 200 bytes, 4.5 ms; see the zero-rate test above).
+    LPDIRECTSOUNDBUFFER buf = CreatePcmBuffer(ds, 44100, 16, 1, 22050);
 
     LPVOID ptr = nullptr; DWORD bytes = 0;
     CHECK(buf->Lock(0, 0, &ptr, &bytes, nullptr, nullptr, DSBLOCK_FROMWRITECURSOR) == DS_OK);
