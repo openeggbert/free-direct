@@ -13,7 +13,7 @@ game (browser) ─ Free Direct ── wss:// ───┘     └─ in a room: 
 
 ## Playing
 
-1. In the game's multiplayer screen, choose the provider **FreeDirect server**.
+1. In the game's multiplayer screen, choose the provider **Internet through a Free Direct server** (before 2026-11-13: "FreeDirect server").
 2. The connection dialog asks for:
    - **Server**: the server's IP address or host name, or a `ws://` or `wss://` URL;
    - **Port**: 51325 unless the server's operator says otherwise (a URL's own port wins);

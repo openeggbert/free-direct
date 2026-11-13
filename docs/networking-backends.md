@@ -90,7 +90,8 @@ firewalls of the machines involved.
 Internet play through `free-direct-server` (`docs/directplay-design.md` Decision 30,
 `docs/free-direct-server.md`). Unlike loopback and ENet, which the build selects, it is chosen at
 run time by the provider GUID the game passes to `DirectPlayCreate`; builds with
-`FREE_DIRECT_ENABLE_RELAY` list it as "FreeDirect server" next to the build's local backend.
+`FREE_DIRECT_ENABLE_RELAY` list it as "Internet through a Free Direct server" (before 2026-11-13: "FreeDirect server") next to the
+build's local backend, "Local network (Free Direct)" (before: "FreeDirect").
 
 - **Native**: IXWebSocket (`FREE_DIRECT_IXWEBSOCKET_SOURCE_DIR`), `ws://` and `wss://` (OpenSSL).
 - **WebAssembly**: the browser's WebSocket (`emscripten/websocket.h`, linked with

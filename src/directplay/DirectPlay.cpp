@@ -61,27 +61,30 @@ namespace {
     // never be mistaken for either COM interface ID if ever compared.
     const GUID kFreeDirectServiceProviderGuid = {2};
 
-    // "FreeDirect" in both encodings the two callback signatures need. free-eggbert's own
-    // EnumProvidersCallback (src/network.cpp) strcpy()s this into a 100-byte buffer
-    // (NamedGUID::name, include/network.hpp) and later exposes it verbatim via
-    // CNetwork::GetProviderName() to the game's UI text rendering (Decision 1's own note), so it
-    // must be a short, human-readable, null-terminated string - not a placeholder-looking token.
-    const char kFreeDirectServiceProviderNameA[] = "FreeDirect";
+    // The local provider's name, "Local network (Free Direct)" (the "FreeDirect" provider of the design notes; renamed
+    // 2026-11-13 so that players can tell it from the server provider), in both encodings the two
+    // callback signatures need. free-eggbert's own EnumProvidersCallback (src/network.cpp)
+    // strcpy()s this into a 100-byte buffer (NamedGUID::name, include/network.hpp) and later
+    // exposes it verbatim via CNetwork::GetProviderName() to the game's UI text rendering
+    // (Decision 1's own note), so it must be a short, human-readable, null-terminated string - not
+    // a placeholder-looking token. It is ASCII: the games' fonts draw it as it is.
+    const char kFreeDirectServiceProviderNameA[] = "Local network (Free Direct)";
     // WCHAR is uint16_t (free-api/include/winnt.h), not the native (4-byte) wchar_t on this
     // platform - a plain L"..." literal would be the wrong width, so this is spelled out
     // char-by-char instead of relying on a wide-string-literal prefix.
     const WCHAR kFreeDirectServiceProviderNameW[] = {
-        'F', 'r', 'e', 'e', 'D', 'i', 'r', 'e', 'c', 't', 0
+        'L', 'o', 'c', 'a', 'l', ' ', 'n', 'e', 't', 'w', 'o', 'r', 'k', ' ', '(', 'F', 'r', 'e', 'e', ' ', 'D', 'i', 'r', 'e', 'c', 't', ')', 0
     };
 
     // The "FreeDirect server" provider (docs/directplay-design.md Decision 30): Internet play
     // through a Free Direct server, in builds with FREE_DIRECT_ENABLE_RELAY. Listed after the
     // local provider in native builds; the only provider of a web build, where the local one
-    // cannot connect anything.
+    // cannot connect anything. Shown as "Internet through a Free Direct server" (since 2026-11-13; the name the
+    // SDL3 port of blupi_recon gives its own server provider).
     const GUID kFreeDirectRelayProviderGuid = {3};
-    const char kFreeDirectRelayProviderNameA[] = "FreeDirect server";
+    const char kFreeDirectRelayProviderNameA[] = "Internet through a Free Direct server";
     const WCHAR kFreeDirectRelayProviderNameW[] = {
-        'F', 'r', 'e', 'e', 'D', 'i', 'r', 'e', 'c', 't', ' ', 's', 'e', 'r', 'v', 'e', 'r', 0
+        'I', 'n', 't', 'e', 'r', 'n', 'e', 't', ' ', 't', 'h', 'r', 'o', 'u', 'g', 'h', ' ', 'a', ' ', 'F', 'r', 'e', 'e', ' ', 'D', 'i', 'r', 'e', 'c', 't', ' ', 's', 'e', 'r', 'v', 'e', 'r', 0
     };
 
 #if defined(FREE_DIRECT_ENABLE_RELAY) && defined(__EMSCRIPTEN__)

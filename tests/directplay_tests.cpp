@@ -1723,10 +1723,10 @@ void Test_DirectPlayEnumerateA_InvokesCallbackExactlyOnceWithValidProvider() {
 #ifdef FREE_DIRECT_ENABLE_RELAY
     // Decision 30: the "FreeDirect server" provider follows the local one.
     CHECK(record.callCount == 2);
-    CHECK(record.lastName == "FreeDirect server");
+    CHECK(record.lastName == "Internet through a Free Direct server");
 #else
     CHECK(record.callCount == 1);
-    CHECK(record.lastName == "FreeDirect");
+    CHECK(record.lastName == "Local network (Free Direct)");
 #endif
     CHECK(!record.lastGuidWasNull);
     const GUID zeroGuid{};
@@ -1738,10 +1738,10 @@ void Test_DirectPlayEnumerateW_InvokesCallbackExactlyOnceWithValidProvider() {
     CHECK(DirectPlayEnumerateW(RecordingEnumDpCallbackW, &record) == DP_OK);
 #ifdef FREE_DIRECT_ENABLE_RELAY
     CHECK(record.callCount == 2);
-    CHECK(record.lastNameLength == 17); // "FreeDirect server"
+    CHECK(record.lastNameLength == 37); // "Internet through a Free Direct server"
 #else
     CHECK(record.callCount == 1);
-    CHECK(record.lastNameLength == 10); // "FreeDirect"
+    CHECK(record.lastNameLength == 27); // "Local network (Free Direct)"
 #endif
     CHECK(!record.lastGuidWasNull);
     const GUID zeroGuid{};

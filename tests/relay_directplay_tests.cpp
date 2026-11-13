@@ -77,7 +77,7 @@ LPDIRECTPLAY2A CreateServerProvider() {
     CHECK(DirectPlayEnumerateA(CollectProvider, &providers) == DP_OK);
     const GUID* serverGuid = nullptr;
     for (const auto& [guid, name] : providers.items) {
-        if (name == "FreeDirect server") serverGuid = &guid;
+        if (name == "Internet through a Free Direct server") serverGuid = &guid;
     }
     CHECK(serverGuid != nullptr);
     if (!serverGuid) return nullptr;
