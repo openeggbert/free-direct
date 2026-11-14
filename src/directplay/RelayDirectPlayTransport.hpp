@@ -11,6 +11,13 @@
  * One difference from the other backends: the server delivers a broadcast to every admitted
  * member itself (`FansOutBroadcasts()`), so the host must not relay a joiner's broadcast again
  * (docs/directplay-design.md Decision 30).
+ *
+ * Link diagnostics: the server delivers everything over one TCP connection, so a lost packet holds
+ * back everything behind it until TCP resends it, and the held messages then arrive together. A
+ * game that predicts the other players' moves for a few frames (Speedy Blupi: 5 ticks, 250 ms)
+ * shows that as a jump. Each sender's stalls (a pause of over 150 ms followed by at least three
+ * messages at once, which a player who just stood still does not produce) are counted and written
+ * to stderr: every 30 s while new ones occur, and when the session ends.
  * @note Status: IMPLEMENTED
  */
 #pragma once
@@ -18,6 +25,7 @@
 #include "DirectPlayTransport.hpp"
 #include "RelayClient.hpp"
 
+#include <chrono>
 #include <deque>
 #include <unordered_map>
 #include <vector>
@@ -62,6 +70,17 @@ public:
 
 private:
     enum class Role { None, Host, Member };
+    using Clock = std::chrono::steady_clock;
+    /// One sender's deliveries (link diagnostics, see the file comment).
+    struct Link {
+        Clock::time_point last{}, burstStart{};
+        double gapMs = 0, worstStallMs = 0;
+        unsigned messages = 0, burst = 0, stalls = 0, reported = 0;
+    };
+
+    void NoteArrival(free_direct_relay::ConnId from);
+    static void FinishBurst(Link& link);
+    void ReportLinks(bool last);
 
     Role role_ = Role::None;
     bool memberConnected_ = false;
@@ -69,6 +88,8 @@ private:
     std::deque<free_direct_relay::ConnId> pending_;                  ///< host: waiting for a DPID
     std::unordered_map<DPID, free_direct_relay::ConnId> peers_;      ///< host: assigned members
     std::deque<DPID> disconnected_;                                  ///< host: assigned members gone
+    std::unordered_map<free_direct_relay::ConnId, Link> links_;      ///< link diagnostics by sender
+    Clock::time_point lastReport_ = Clock::now();
 };
 
 } // namespace free_direct_directplay

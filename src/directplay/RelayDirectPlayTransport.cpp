@@ -6,6 +6,7 @@
 #include "RelayDirectPlayTransport.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 
 namespace free_direct_directplay {
@@ -16,6 +17,14 @@ namespace {
 /// A host keeps at most this many received messages; beyond it the oldest are dropped, as
 /// DirectPlayMessageQueue does for its own bounded queue.
 constexpr std::size_t kMaxReceivedMessages = 4096;
+/// Link diagnostics: a pause longer than this before a delivery, then a burst of at least
+/// kStallBurst deliveries within kBurstMs, is a stall.
+constexpr double kStallGapMs = 150;
+constexpr double kBurstMs = 20;
+constexpr unsigned kStallBurst = 3;
+double Ms(std::chrono::steady_clock::duration d) {
+    return std::chrono::duration<double, std::milli>(d).count();
+}
 } // namespace
 
 RelayDirectPlayTransport::~RelayDirectPlayTransport() { Shutdown(); }
@@ -116,6 +125,8 @@ bool RelayDirectPlayTransport::TakeDisconnectedPeer(DPID* outId) {
 }
 
 void RelayDirectPlayTransport::Shutdown() {
+    ReportLinks(true);
+    links_.clear();
     RelayClient& client = RelayClient::Instance();
     if (role_ == Role::Host) {
         client.CloseSession();
@@ -155,10 +166,50 @@ void RelayDirectPlayTransport::OnSessionEnded(SessionEndReason) {
     if (role_ == Role::Member) memberConnected_ = false;
 }
 
-void RelayDirectPlayTransport::OnDeliver(ConnId, std::vector<std::uint8_t> payload) {
+void RelayDirectPlayTransport::OnDeliver(ConnId from, std::vector<std::uint8_t> payload) {
     if (role_ == Role::None) return;
+    NoteArrival(from);
     if (received_.size() >= kMaxReceivedMessages) received_.pop_front();
     received_.push_back(std::move(payload));
+}
+
+void RelayDirectPlayTransport::FinishBurst(Link& link) {
+    if (link.burst >= kStallBurst) {
+        ++link.stalls;
+        link.worstStallMs = std::max(link.worstStallMs, link.gapMs);
+    }
+    link.burst = 0;
+}
+
+void RelayDirectPlayTransport::NoteArrival(ConnId from) {
+    const Clock::time_point now = Clock::now();
+    Link& link = links_[from];
+    if (link.burst && Ms(now - link.burstStart) <= kBurstMs) {
+        ++link.burst;
+    } else {
+        FinishBurst(link);
+        if (link.messages && Ms(now - link.last) > kStallGapMs) {
+            link.gapMs = Ms(now - link.last);
+            link.burst = 1;
+            link.burstStart = now;
+        }
+    }
+    ++link.messages;
+    link.last = now;
+    if (Ms(now - lastReport_) >= 30000) ReportLinks(false);
+}
+
+void RelayDirectPlayTransport::ReportLinks(bool last) {
+    lastReport_ = Clock::now();
+    for (auto& [conn, link] : links_) {
+        if (last) FinishBurst(link);
+        if (link.stalls == link.reported && !(last && link.messages)) continue;
+        std::fprintf(stderr,
+                     "free-direct relay: link from connection %u: %u messages, %u stalls "
+                     "(a pause over %.0f ms, then a burst), the longest %.0f ms\n",
+                     static_cast<unsigned>(conn), link.messages, link.stalls, kStallGapMs, link.worstStallMs);
+        link.reported = link.stalls;
+    }
 }
 
 void RelayDirectPlayTransport::OnDisconnected() {
