@@ -298,11 +298,19 @@ inline std::string FormatRoomId(const std::string& normalized) {
     return out;
 }
 
-/// Builds a room ID from kRoomIdLength random bytes (only the low 5 bits of each are used).
+/// The characters of a new room ID: kRoomIdAlphabet without 0, which looks like O (and O is not
+/// in it either), so that nobody has to guess which one they see. 31 characters, about 99 bits.
+inline constexpr char kNewRoomIdAlphabet[] = "123456789ABCDEFGHJKMNPQRSTVWXYZ";
+inline constexpr std::size_t kNewRoomIdAlphabetSize = sizeof(kNewRoomIdAlphabet) - 1;
+
+/// Builds a room ID from random bytes, each byte below 248 (8 times 31) giving one character, the
+/// others skipped so that every character is equally likely. Shorter than kRoomIdLength if the bytes
+/// run out (2 * kRoomIdLength bytes almost never do; the caller tries again).
 inline std::string RoomIdFromRandomBytes(const std::uint8_t* random, std::size_t count) {
     std::string out;
     for (std::size_t i = 0; i < count && out.size() < kRoomIdLength; ++i) {
-        out.push_back(kRoomIdAlphabet[random[i] & 0x1F]);
+        if (random[i] >= 8 * kNewRoomIdAlphabetSize) continue;
+        out.push_back(kNewRoomIdAlphabet[random[i] % kNewRoomIdAlphabetSize]);
     }
     return out;
 }

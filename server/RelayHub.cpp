@@ -267,10 +267,10 @@ void RelayHub::HandleCreateRoom(ConnId id, Conn& c, Clock::time_point now, std::
     }
     std::string roomId;
     for (int attempt = 0; attempt < 8; ++attempt) {
-        std::uint8_t random[kRoomIdLength];
+        std::uint8_t random[2 * kRoomIdLength];
         random_(random, sizeof(random));
         roomId = RoomIdFromRandomBytes(random, sizeof(random));
-        if (rooms_.find(roomId) == rooms_.end()) break;
+        if (roomId.size() == kRoomIdLength && rooms_.find(roomId) == rooms_.end()) break;
         roomId.clear();
     }
     if (roomId.empty()) {
