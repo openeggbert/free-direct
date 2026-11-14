@@ -43,12 +43,13 @@ Client to server:
 | `0x09` | Admit | member connection `u32` | - |
 | `0x0A` | Refuse | member connection `u32` | (the member gets SessionEnded Refused) |
 | `0x0B` | Data | route `u8`, target connection `u32`, payload (rest) | (Deliver to the recipients) |
+| `0x0C` | RtcOffer | SDP (rest): a browser's WebRTC offer for datagrams (see "Datagrams") | RtcAnswer, or Error |
 
 Server to client:
 
 | Type | Name | Fields |
 |---|---|---|
-| `0x81` | Welcome | version `u16`, the client's connection ID `u32`, flags `u8` (bit 0: the server has a password; bit 1: datagrams, then UDP port `u16` and token, see "Datagrams") |
+| `0x81` | Welcome | version `u16`, the client's connection ID `u32`, flags `u8` (bit 0: the server has a password; bit 1: UDP datagrams; bit 2: WebRTC datagrams; with bit 1 or 2 the UDP port `u16`, 0 if none, and the token follow, see "Datagrams") |
 | `0x82` | Error | request type `u8`, code `u16`, text `str` (English) |
 | `0x83` | RoomCreated | room ID `str` (formatted) |
 | `0x84` | RoomJoined | room ID `str` (formatted) |
@@ -59,6 +60,7 @@ Server to client:
 | `0x89` | PeerLeft | member connection `u32` (to the host: a pending or admitted member is gone) |
 | `0x8A` | SessionEnded | reason `u8`: 0 host closed or left, 1 refused, 2 server shutting down |
 | `0x8B` | Deliver | sender connection `u32`, payload (rest) |
+| `0x8C` | RtcAnswer | SDP (rest): the server's answer, complete with its candidates |
 
 Error codes: 1 malformed, 2 no hello yet, 3 protocol version, 4 wrong password, 5 rate limited,
 6 server full, 7 origin not allowed, 8 too many rooms, 9 no such room, 10 room full, 11 room of
@@ -120,9 +122,20 @@ own non-guaranteed messages did. Source: [`src/relay/RelayDatagram.hpp`](../src/
   WebSocket.
 - Unknown tokens get no answer. The token travels inside Welcome, so over `wss://` it is as private as
   the connection; the datagrams themselves are not encrypted (the WebSocket's `ws://` is not either).
-- Clients: Free Direct's native DirectPlay (`src/directplay/RelayDatagramsUdp.cpp`) and the SDL3
-  port's relay client (blupi_recon `port/common/net/relay.cpp`). A browser has no UDP: WebRTC data
-  channels are the planned equivalent (`docs/relay-latency.md`).
+- **Browsers** have no UDP: the same datagrams travel over a **WebRTC data channel** to the server
+  when Welcome's flags bit 2 (`0x04`) offers it (the port field is then 0 if the server has no UDP).
+  The browser makes one peer connection with one data channel, unordered and without
+  retransmissions (`ordered: false, maxRetransmits: 0`), waits until its ICE gathering is complete,
+  and sends the offer's SDP as **RtcOffer**; the server answers with **RtcAnswer** (likewise
+  complete; no separate candidate messages). No STUN or TURN server: the server has a public
+  address, and its ICE runs on one UDP port for all browsers (by default the datagram port + 1).
+  When the channel opens the server sends BindAck over it, and the channel then carries exactly
+  the datagrams above, with the token; Bind is not needed. A client gives up after 10 s and sends
+  everything over the WebSocket.
+- Clients: Free Direct's DirectPlay, natively over UDP (`src/directplay/RelayDatagramsUdp.cpp`) and
+  in a browser over WebRTC (`RelayDatagramsWeb.cpp`), and the SDL3 port's relay client (blupi_recon
+  `port/common/net/relay.cpp`, both). The server's WebRTC needs libdatachannel at build time
+  (`free-direct-server.md`).
 
 ## Room IDs
 

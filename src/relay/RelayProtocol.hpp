@@ -54,6 +54,7 @@ enum class MsgType : std::uint8_t {
     Admit = 0x09,         ///< conn u32 - the host accepts a pending member
     Refuse = 0x0A,        ///< conn u32 - the host turns a pending member away
     Data = 0x0B,          ///< route u8, target conn u32, payload (rest of the message)
+    RtcOffer = 0x0C,      ///< SDP (rest of the message): a browser's WebRTC offer for datagrams
 
     // Server -> client.
     Welcome = 0x81,        ///< version u16, conn u32, flags u8 (bit 0: server has a password)
@@ -67,6 +68,7 @@ enum class MsgType : std::uint8_t {
     PeerLeft = 0x89,       ///< conn u32 - to the host: a pending or admitted member is gone
     SessionEnded = 0x8A,   ///< reason u8 (SessionEndReason) - to a member
     Deliver = 0x8B,        ///< from conn u32, payload (rest of the message)
+    RtcAnswer = 0x8C,      ///< SDP (rest of the message): the server's answer to RtcOffer
 };
 
 /// Where a Data message goes. Always within the sender's own session.

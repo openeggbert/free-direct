@@ -76,6 +76,9 @@ void PrintUsage() {
         "  --ping-interval SECS      WebSocket ping interval, 0 disables (default 20)\n"
         "  --udp-port PORT           UDP port for datagrams (default: the same number as --port)\n"
         "  --no-udp                  no datagrams: everything over the WebSocket\n"
+        "  --rtc-port PORT           UDP port of the WebRTC data channels for browsers\n"
+        "                            (default: the datagram port + 1; built with libdatachannel only)\n"
+        "  --no-webrtc               no WebRTC: browsers send everything over the WebSocket\n"
         "  --version                 print the version\n"
         "  --help                    this text\n",
         static_cast<unsigned>(kDefaultRelayPort), HubConfig{}.maxConnections, HubConfig{}.maxRooms,
@@ -156,6 +159,15 @@ int ParseOptions(int argc, char** argv, Options& o) {
             }
         } else if (a == "--no-udp") {
             o.datagrams = false;
+        } else if (a == "--rtc-port") {
+            if (!(v = value(a.c_str()))) return 2;
+            o.rtcPort = std::atoi(v);
+            if (o.rtcPort < 1 || o.rtcPort > 65535) {
+                std::fprintf(stderr, "free-direct-server: --rtc-port wants 1..65535\n");
+                return 2;
+            }
+        } else if (a == "--no-webrtc") {
+            o.webrtc = false;
         } else {
             std::fprintf(stderr, "free-direct-server: unknown option %s (see --help)\n", a.c_str());
             return 2;

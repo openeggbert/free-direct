@@ -29,9 +29,15 @@ constexpr std::size_t kDatagramTokenBytes = 16;
 constexpr std::size_t kMaxDatagramBytes = 1200;
 /// Welcome's flags (after the connection ID).
 constexpr std::uint8_t kWelcomeFlagPassword = 0x01;
-/// The server takes datagrams: Welcome's flags are followed by the UDP port `u16` and the
-/// connection's datagram token (16 bytes).
+/// The server takes datagrams over UDP. With this flag or the next, Welcome's flags are followed by
+/// the UDP port `u16` (0: no UDP) and the connection's datagram token (16 bytes).
 constexpr std::uint8_t kWelcomeFlagDatagrams = 0x02;
+/// The server takes the same datagrams over a WebRTC data channel (browsers, which have no UDP):
+/// the client sends RtcOffer, the server answers with RtcAnswer, and the channel carries the
+/// datagrams exactly as UDP does (Bind is implicit: the server sends BindAck when the channel opens).
+constexpr std::uint8_t kWelcomeFlagWebRtc = 0x04;
+/// A client gives up on the data channel when it is not open after this.
+constexpr unsigned kWebRtcTimeoutMs = 10000;
 /// A client that has had no BindAck within this time sends everything over the WebSocket.
 constexpr unsigned kDatagramBindTimeoutMs = 3000;
 constexpr unsigned kDatagramBindRetryMs = 250;
