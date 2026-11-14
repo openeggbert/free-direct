@@ -510,6 +510,97 @@ void Test_ConstantTimeEquals() {
 
 } // namespace
 
+void Test_Datagrams_TokenInWelcomeAndDeliveriesMarked() {
+    // Without a UDP port, Welcome is as before: version, connection, flags.
+    {
+        Harness plain;
+        plain.Open(1);
+        plain.Hello(1);
+        std::vector<std::uint8_t> body;
+        CHECK(plain.Next(1, &body) == T(MsgType::Welcome));
+        CHECK(body.size() == 7 && (body[6] & kWelcomeFlagDatagrams) == 0);
+    }
+    HubConfig config;
+    config.datagramPort = 51325;
+    Harness h(config);
+    DatagramToken tokens[4]{};
+    for (ConnId c = 1; c <= 3; ++c) {
+        h.Open(c);
+        h.Hello(c);
+        std::vector<std::uint8_t> body;
+        CHECK(h.Next(c, &body) == T(MsgType::Welcome));
+        Reader r(body.data(), body.size());
+        r.U16();
+        CHECK(r.U32() == c);
+        CHECK((r.U8() & kWelcomeFlagDatagrams) != 0);
+        CHECK(r.U16() == 51325);
+        const auto rest = r.Rest();
+        CHECK(rest.size() == kDatagramTokenBytes);
+        if (rest.size() == kDatagramTokenBytes) std::copy(rest.begin(), rest.end(), tokens[c].begin());
+        CHECK(h.hub.ConnForToken(tokens[c]) == c);
+    }
+    CHECK(tokens[1] != tokens[2] && tokens[2] != tokens[3]);
+    DatagramToken unknown{};
+    unknown.fill(0xEE);
+    CHECK(h.hub.ConnForToken(unknown) == 0);
+
+    const std::string id = h.CreateRoom(1);
+    for (ConnId c = 2; c <= 3; ++c) {
+        h.Msg(c, std::move(Writer(MsgType::JoinRoom).Str(id)));
+        h.Next(c);
+    }
+    h.Msg(1, std::move(Writer(MsgType::HostSession).Session(Session(5, 4, "D"))));
+    h.Next(1);
+    for (ConnId c = 2; c <= 3; ++c) {
+        h.Msg(c, std::move(Writer(MsgType::JoinSession).Guid(Guid(5))));
+        h.Next(c);
+        h.Next(1);
+        h.Msg(1, std::move(Writer(MsgType::Admit).U32(c)));
+    }
+
+    // A member's datagram to all others: the host and the other member, marked as datagrams.
+    const std::uint8_t data[] = {static_cast<std::uint8_t>(Route::ToAllOthers), 0, 0, 0, 0, 'p', 'o', 's'};
+    auto actions = h.hub.OnDatagramData(2, data, sizeof(data), h.now);
+    CHECK(actions.size() == 2);
+    for (const auto& a : actions) {
+        CHECK(a.kind == HubAction::Kind::Send && a.datagram && (a.conn == 1 || a.conn == 3));
+        CHECK(!a.bytes.empty() && a.bytes[0] == T(MsgType::Deliver));
+    }
+    // The same over the WebSocket is not marked.
+    const auto ws = Writer(MsgType::Data).U8(static_cast<std::uint8_t>(Route::ToAllOthers)).U32(0).Bytes("pos", 3).Take();
+    actions = h.hub.OnMessage(2, ws.data(), ws.size(), h.now);
+    CHECK(actions.size() == 2);
+    for (const auto& a : actions) CHECK(!a.datagram);
+    // A datagram that is not a well-formed Data is dropped; a closed connection's token is gone.
+    CHECK(h.hub.OnDatagramData(2, data, 3, h.now).empty());
+    h.Close(2);
+    CHECK(h.hub.ConnForToken(tokens[2]) == 0);
+    CHECK(h.hub.OnDatagramData(2, data, sizeof(data), h.now).empty());
+}
+
+void Test_Datagrams_Encoding() {
+    DatagramToken token{};
+    for (std::size_t i = 0; i < token.size(); ++i) token[i] = static_cast<std::uint8_t>(i + 1);
+    const auto d = DataDatagram(token, 2, 7, "abc", 3);
+    ClientDatagramView v;
+    CHECK(ParseClientDatagram(d.data(), d.size(), v));
+    CHECK(v.token == token && v.type == DatagramType::Data && v.bodySize == 8 && v.body[0] == 2 && v.body[5] == 'a');
+    const auto bind = ClientDatagram(token, DatagramType::Bind);
+    CHECK(ParseClientDatagram(bind.data(), bind.size(), v) && v.type == DatagramType::Bind && v.bodySize == 0);
+    auto bad = d;
+    bad[0] ^= 1;
+    CHECK(!ParseClientDatagram(bad.data(), bad.size(), v));
+    const std::uint8_t payload[] = {9, 8};
+    const auto deliver = DeliverDatagram(42, payload, 2);
+    ServerDatagramView s;
+    CHECK(ParseServerDatagram(deliver.data(), deliver.size(), s) && s.type == DatagramType::Deliver);
+    CHECK(s.sender == 42 && s.payloadSize == 2 && s.payload[0] == 9);
+    const auto ack = ServerDatagram(DatagramType::BindAck);
+    CHECK(ParseServerDatagram(ack.data(), ack.size(), s) && s.type == DatagramType::BindAck);
+    std::vector<std::uint8_t> big(kMaxDatagramBytes + 1, 0);
+    CHECK(!ParseServerDatagram(big.data(), big.size(), s));
+}
+
 int main() {
     Test_RoomIdNormalization();
     Test_Hello_WrongVersionAndMagicAreRefused();
@@ -530,6 +621,8 @@ int main() {
     Test_Limits_OversizedMessageClosesAndServerFullRefuses();
     Test_Reader_RejectsTruncatedFields();
     Test_ConstantTimeEquals();
+    Test_Datagrams_TokenInWelcomeAndDeliveriesMarked();
+    Test_Datagrams_Encoding();
     if (g_failures == 0) {
         std::printf("OK: all relay hub tests passed.\n");
         return 0;

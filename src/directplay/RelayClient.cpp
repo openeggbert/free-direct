@@ -94,6 +94,18 @@ bool RelayClient::Connect(const std::string& url, const std::string& password, c
         Disconnect();
         return false;
     }
+    r.U32();  // this connection's ID
+    const std::uint8_t flags = r.U8();
+    if (r.Ok() && (flags & kWelcomeFlagDatagrams)) {
+        // The server's UDP port and this connection's token (a server before datagrams sends neither).
+        const std::uint16_t port = r.U16();
+        const std::vector<std::uint8_t> token = r.Rest();
+        if (r.Ok() && token.size() >= kDatagramTokenBytes) {
+            std::copy(token.begin(), token.begin() + kDatagramTokenBytes, datagramToken_.begin());
+            datagrams_ = CreateRelayDatagrams();
+            if (datagrams_ && !datagrams_->Start(RelayUrlHost(url), port, datagramToken_)) datagrams_.reset();
+        }
+    }
     password_ = password;
     compat_ = compat;
     connected_ = true;
@@ -102,6 +114,7 @@ bool RelayClient::Connect(const std::string& url, const std::string& password, c
 }
 
 void RelayClient::Disconnect() {
+    datagrams_.reset();
     if (socket_) {
         socket_->Close();
         socket_.reset();
@@ -221,8 +234,12 @@ void RelayClient::Refuse(ConnId conn) {
     if (socket_) socket_->Send(Writer(MsgType::Refuse).U32(conn).Data());
 }
 
-bool RelayClient::SendData(Route route, ConnId target, const void* data, std::size_t size) {
+bool RelayClient::SendData(Route route, ConnId target, const void* data, std::size_t size, bool reliable) {
     if (!socket_ || !connected_) return false;
+    if (!reliable && DatagramsOn() && 4 + kDatagramTokenBytes + 1 + 1 + 4 + size <= kMaxDatagramBytes &&
+        datagrams_->Send(DataDatagram(datagramToken_, static_cast<std::uint8_t>(route), target, data, size))) {
+        return true;
+    }
     Writer w(MsgType::Data);
     w.U8(static_cast<std::uint8_t>(route)).U32(target).Bytes(data, size);
     return socket_->Send(w.Data());
@@ -245,6 +262,22 @@ void RelayClient::Pump() {
                 return;
         }
     }
+    if (datagrams_) {
+        datagrams_->Pump([this](ConnId from, std::vector<std::uint8_t> payload) {
+            if (listener_) listener_->OnDeliver(from, std::move(payload));
+        });
+    }
+}
+
+std::string RelayUrlHost(const std::string& url) {
+    std::size_t at = url.find("://");
+    at = at == std::string::npos ? 0 : at + 3;
+    if (at < url.size() && url[at] == '[') {
+        const std::size_t end = url.find(']', at);
+        return end == std::string::npos ? std::string() : url.substr(at + 1, end - at - 1);
+    }
+    const std::size_t end = url.find_first_of(":/", at);
+    return url.substr(at, end == std::string::npos ? std::string::npos : end - at);
 }
 
 void RelayClient::OnClosed(const std::string& reason) {

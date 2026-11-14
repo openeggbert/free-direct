@@ -99,6 +99,8 @@ std::vector<HubAction> RelayHub::OnClose(ConnId conn, Clock::time_point now) {
     std::vector<HubAction> out;
     auto it = conns_.find(conn);
     if (it == conns_.end()) return out;
+    auto token = tokens_.find(it->second.token);
+    if (token != tokens_.end() && token->second == conn) tokens_.erase(token);
     LeaveRoom(conn, it->second, now, out);
     conns_.erase(it);
     Log("connection " + std::to_string(conn) + " closed");
@@ -227,11 +229,18 @@ void RelayHub::HandleHello(ConnId id, Conn& c, Reader& r, Clock::time_point now,
     }
     c.welcomed = true;
     c.compat = compat;
-    Send(out, id, Writer(MsgType::Welcome)
-                      .U16(kRelayProtocolVersion)
-                      .U32(id)
-                      .U8(config_.password.empty() ? 0 : 1)
-                      .Take());
+    std::uint8_t flags = config_.password.empty() ? 0 : kWelcomeFlagPassword;
+    if (config_.datagramPort != 0) {
+        // Datagrams: the port and this connection's token, after the flags. Clients that do not
+        // know them ignore the rest of Welcome.
+        do random_(c.token.data(), c.token.size()); while (tokens_.count(c.token) != 0);
+        tokens_[c.token] = id;
+        flags |= kWelcomeFlagDatagrams;
+    }
+    Writer welcome(MsgType::Welcome);
+    welcome.U16(kRelayProtocolVersion).U32(id).U8(flags);
+    if (config_.datagramPort != 0) welcome.U16(config_.datagramPort).Bytes(c.token.data(), c.token.size());
+    Send(out, id, welcome.Take());
     Log("connection " + std::to_string(id) + " hello: " + compat + " (" + client + ")");
 }
 
@@ -419,7 +428,22 @@ void RelayHub::HandleAdmitOrRefuse(ConnId id, Conn& c, Reader& r, bool admit, st
     Send(out, member, Writer(MsgType::SessionEnded).U8(static_cast<std::uint8_t>(SessionEndReason::Refused)).Take());
 }
 
-void RelayHub::HandleData(ConnId id, Conn& c, Reader& r, std::vector<HubAction>& out) {
+ConnId RelayHub::ConnForToken(const DatagramToken& token) const {
+    auto it = tokens_.find(token);
+    return it == tokens_.end() ? 0 : it->second;
+}
+
+std::vector<HubAction> RelayHub::OnDatagramData(ConnId conn, const std::uint8_t* body, std::size_t size,
+                                                Clock::time_point) {
+    std::vector<HubAction> out;
+    auto it = conns_.find(conn);
+    if (it == conns_.end() || !it->second.welcomed) return out;
+    Reader r(body, size);
+    HandleData(conn, it->second, r, out, true);
+    return out;
+}
+
+void RelayHub::HandleData(ConnId id, Conn& c, Reader& r, std::vector<HubAction>& out, bool datagram) {
     const auto route = static_cast<Route>(r.U8());
     const ConnId target = r.U32();
     if (!r.Ok()) return;
@@ -428,6 +452,7 @@ void RelayHub::HandleData(ConnId id, Conn& c, Reader& r, std::vector<HubAction>&
     const std::vector<std::uint8_t> payload = r.Rest();
     auto deliver = [&](ConnId to) {
         Send(out, to, Writer(MsgType::Deliver).U32(id).Bytes(payload.data(), payload.size()).Take());
+        out.back().datagram = datagram;
     };
     switch (route) {
         case Route::ToHost:

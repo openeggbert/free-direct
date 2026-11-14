@@ -22,6 +22,10 @@ struct ServerOptions {
     std::string tlsCert;  ///< PEM certificate chain; with tlsKey, serve wss://
     std::string tlsKey;
     int pingSeconds = 20;  ///< WebSocket ping interval; 0 disables
+    /// Datagrams beside the WebSocket (RelayDatagram.hpp): a UDP socket on udpPort (0: the
+    /// WebSocket's port number). If it cannot be opened the server runs without, and says so.
+    bool datagrams = true;
+    int udpPort = 0;
 };
 
 class RelayServer {

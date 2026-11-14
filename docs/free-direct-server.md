@@ -99,12 +99,19 @@ free-direct-server --tls-cert fullchain.pem --tls-key privkey.pem    # wss://
 | `--max-room-games` | 8 | sessions per room |
 | `--room-idle-timeout` | 600 | seconds a room without members is kept |
 | `--ping-interval` | 20 | seconds; 0 disables |
+| `--udp-port` | the `--port` number | UDP port for datagrams (non-guaranteed game messages, `directplay-relay-protocol.md` "Datagrams") |
+| `--no-udp` | | no datagrams: everything over the WebSocket |
 
 The log goes to standard error: connections with their address, hellos, rooms (only the first
 four characters of an ID), refusals. It never contains passwords or game data. `SIGINT`/`SIGTERM`
 end every game and close every connection; rooms do not survive a restart.
 
-Open the TCP port in the firewall. Behind NAT, forward it to the server; players need nothing.
+Open the TCP port in the firewall, and the **UDP port** (by default the same number, 51325) for
+datagrams. Behind NAT, forward both to the server; players need nothing. If the UDP port is closed,
+games still work: a client that gets no answer over UDP within 3 s sends everything over the
+WebSocket, with the lag that brings on a lossy link (`relay-latency.md`). A TLS front (nginx, below)
+carries only the WebSocket; datagrams always go straight to the server's UDP port, to the same host
+name. The log says `datagrams on UDP port N` at the start.
 
 ### TLS through a reverse proxy
 

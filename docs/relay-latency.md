@@ -1,6 +1,7 @@
 # Lag through a Free Direct server: what it is, and the transports that would fix it
 
-Status: **analysis and proposal; the datagram transports below are not implemented.** Recorded on
+Status: **A (UDP datagrams for native programs) implemented on 2026-11-14; B (WebRTC for
+browsers) in progress.** Recorded on
 2026-11-14 after players' reports of lag and of other players' Blupis "teleporting" in games through
 `fds.openeggbert.com`. Labels: **[EVIDENCE]** source or measurement, **[DESIGN]** proposal,
 **[OPEN]** a decision for the owner.
@@ -61,7 +62,19 @@ datagram transport would have dropped the lost position instead, and the next on
 Both keep the WebSocket for everything guaranteed (lobby, start, deaths, objects) and send the
 non-guaranteed messages (positions) as datagrams, which a loss only drops.
 
-### A. A UDP side channel for native programs [DESIGN]
+### A. A UDP side channel for native programs [IMPLEMENTED 2026-11-14]
+
+[EVIDENCE] As specified in `directplay-relay-protocol.md` ("Datagrams"): the server
+(`server/RelayServer.cpp`, `RelayHub::OnDatagramData`), Free Direct's native DirectPlay
+(`src/directplay/RelayDatagramsUdp.cpp`) and the SDL3 port's relay client. The measurement of
+section 3 repeated with datagrams on (the same 300 ms stalls of the WebSocket's TCP connection every
+3 s on average): 1068 messages from the host, 2 over 150 ms late and 1 over 250 ms (the latest 271 ms),
+against 47 and 16 without. What remains late are guaranteed messages, which still use the
+WebSocket. Tests: `relay_hub_tests` (tokens, routing, encoding), `relay_directplay_tests` (DirectPlay
+games through an in-process server, with datagrams on); blupi_recon's relay tests check that every
+program binds.
+
+The original proposal:
 
 - The server opens a UDP socket on its port number. Its Welcome offers a datagram token (random,
   per connection). The client sends `Bind(token)` datagrams until the server confirms over the

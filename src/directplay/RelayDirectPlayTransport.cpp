@@ -65,23 +65,24 @@ bool RelayDirectPlayTransport::Join(const RelayGuid& instance, std::string& erro
 bool RelayDirectPlayTransport::Listen(std::uint16_t) { return false; }
 bool RelayDirectPlayTransport::Connect(const char*, std::uint16_t) { return false; }
 
-bool RelayDirectPlayTransport::Send(DPID targetId, const void* data, std::size_t size, bool) {
+// A non-guaranteed message (DPSEND_GUARANTEED not set) may go as a datagram (RelayClient::SendData).
+bool RelayDirectPlayTransport::Send(DPID targetId, const void* data, std::size_t size, bool reliable) {
     RelayClient& client = RelayClient::Instance();
     if (role_ == Role::Member) {
         if (!memberConnected_) return false;
-        return client.SendData(Route::ToHost, 0, data, size);
+        return client.SendData(Route::ToHost, 0, data, size, reliable);
     }
     if (role_ == Role::Host) {
         auto it = peers_.find(targetId);
         if (it == peers_.end()) return false;
-        return client.SendData(Route::ToMember, it->second, data, size);
+        return client.SendData(Route::ToMember, it->second, data, size, reliable);
     }
     return false;
 }
 
-bool RelayDirectPlayTransport::SendToAll(const void* data, std::size_t size, bool) {
+bool RelayDirectPlayTransport::SendToAll(const void* data, std::size_t size, bool reliable) {
     if (role_ == Role::None || (role_ == Role::Member && !memberConnected_)) return false;
-    return RelayClient::Instance().SendData(Route::ToAllOthers, 0, data, size);
+    return RelayClient::Instance().SendData(Route::ToAllOthers, 0, data, size, reliable);
 }
 
 bool RelayDirectPlayTransport::Receive(void* buffer, std::size_t bufferSize, std::size_t* outSize) {
