@@ -17,6 +17,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/../cmake/FreeDirectIXWebSocket.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/FreeDirectLibDataChannel.cmake)
 find_package(Threads REQUIRED)
 
 # The room logic, without network code (also compiled into the hub unit tests).
@@ -29,6 +30,11 @@ target_compile_features(free-direct-relay-hub PUBLIC cxx_std_20)
 # The WebSocket front end, shared by the program and the relay integration tests.
 add_library(free-direct-relay-server STATIC RelayServer.cpp)
 target_link_libraries(free-direct-relay-server PUBLIC free-direct-relay-hub FreeDirect::IXWebSocket Threads::Threads)
+if(TARGET datachannel-static)
+    target_link_libraries(free-direct-relay-server PRIVATE datachannel-static)
+    target_compile_definitions(free-direct-relay-server PRIVATE FREE_DIRECT_SERVER_WEBRTC=1)
+    message(STATUS "free-direct-server: WebRTC data channels for browsers (libdatachannel)")
+endif()
 
 add_executable(free-direct-server main.cpp)
 target_link_libraries(free-direct-server PRIVATE free-direct-relay-server)

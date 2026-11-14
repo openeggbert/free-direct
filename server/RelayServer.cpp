@@ -24,6 +24,10 @@
 #include <unistd.h>
 #endif
 
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+#include <rtc/rtc.hpp>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -73,10 +77,14 @@ void CloseUdp(UdpSocket s) { ::close(s); }
 using AddressLength = socklen_t;
 #endif
 
-/// A connection's bound UDP address (Bind), and its datagram count in the current second.
+/// A connection's bound UDP address (Bind) or its open WebRTC data channel, and its datagram count
+/// in the current second.
 struct Endpoint {
     sockaddr_storage address{};
     AddressLength length = 0;
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+    std::shared_ptr<rtc::DataChannel> channel;  ///< set: datagrams go over the channel
+#endif
     unsigned count = 0;
     std::chrono::steady_clock::time_point second{};
 };
@@ -159,21 +167,42 @@ struct RelayServer::Impl {
     std::atomic<bool> udpRunning{false};
     std::mutex endpointsMutex;  // never held while taking socketsMutex or hubMutex
     std::unordered_map<ConnId, Endpoint> endpoints;
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+    // WebRTC: one peer connection per browser that offered, and its data channel until it opens.
+    bool webrtc = false;
+    rtc::Configuration rtcConfig;
+    std::mutex peersMutex;  // held only around the maps
+    std::unordered_map<ConnId, std::shared_ptr<rtc::PeerConnection>> peers;
+    std::unordered_map<ConnId, std::shared_ptr<rtc::DataChannel>> channels;
+#endif
 
     Impl(ServerOptions o, RelayHub::Logger l)
         : options(std::move(o)), log(l), hub(options.hub, FillRandom, l) {}
 
     void Execute(const std::vector<HubAction>& actions) {
-        std::lock_guard<std::mutex> lock(socketsMutex);
-        for (const HubAction& a : actions) {
+        std::vector<const HubAction*> offers;
+        {
+            std::lock_guard<std::mutex> lock(socketsMutex);
+            for (const HubAction& a : actions) {
+                if (a.kind == HubAction::Kind::RtcOffer) offers.push_back(&a);
+                else Perform(a);
+            }
+        }
+        // Outside socketsMutex: the WebRTC library may call back (and so Execute) at once.
+        for (const HubAction* a : offers) AnswerOffer(a->conn, std::string(a->bytes.begin(), a->bytes.end()));
+    }
+
+    /// One Send or Close; socketsMutex is held.
+    void Perform(const HubAction& a) {
+        {
             auto it = sockets.find(a.conn);
-            if (it == sockets.end()) continue;
+            if (it == sockets.end()) return;
             ix::WebSocket* ws = it->second;
-            if (a.kind == HubAction::Kind::Send && a.datagram && SendDatagram(a)) continue;
+            if (a.kind == HubAction::Kind::Send && a.datagram && SendDatagram(a)) return;
             if (a.kind == HubAction::Kind::Send) {
                 if (ws->bufferedAmount() > kMaxBufferedBytes) {
                     ws->close(1008, "client too slow");
-                    continue;
+                    return;
                 }
                 ws->sendBinary(std::string(a.bytes.begin(), a.bytes.end()));
             } else {
@@ -182,10 +211,93 @@ struct RelayServer::Impl {
         }
     }
 
+    /// A browser's WebRTC offer: a peer connection whose answer (complete, with its candidates)
+    /// goes back as RtcAnswer; the browser's data channel, once open, is the connection's datagram
+    /// endpoint, as a bound UDP address is.
+    void AnswerOffer(ConnId conn, const std::string& sdp) {
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+        if (!webrtc) return;
+        try {
+            auto pc = std::make_shared<rtc::PeerConnection>(rtcConfig);
+            std::weak_ptr<rtc::PeerConnection> weakPc = pc;
+            pc->onGatheringStateChange([this, conn, weakPc](rtc::PeerConnection::GatheringState state) {
+                if (state != rtc::PeerConnection::GatheringState::Complete) return;
+                auto p = weakPc.lock();
+                if (!p) return;
+                const auto description = p->localDescription();
+                if (!description) return;
+                const std::string answer = std::string(*description);
+                HubAction a;
+                a.conn = conn;
+                a.bytes = Writer(MsgType::RtcAnswer).Bytes(answer.data(), answer.size()).Take();
+                Execute({a});
+            });
+            pc->onDataChannel([this, conn](std::shared_ptr<rtc::DataChannel> channel) {
+                std::weak_ptr<rtc::DataChannel> weakChannel = channel;
+                channel->onOpen([this, conn, weakChannel] {
+                    auto c = weakChannel.lock();
+                    if (!c) return;
+                    {
+                        std::lock_guard<std::mutex> lock(endpointsMutex);
+                        Endpoint& e = endpoints[conn];
+                        e = Endpoint{};
+                        e.channel = c;
+                    }
+                    const std::vector<std::uint8_t> ack = ServerDatagram(DatagramType::BindAck);
+                    c->send(reinterpret_cast<const std::byte*>(ack.data()), ack.size());
+                });
+                channel->onMessage([this, conn](rtc::binary data) {
+                    OnChannelDatagram(conn, reinterpret_cast<const std::uint8_t*>(data.data()), data.size());
+                }, [](rtc::string) {});
+                std::lock_guard<std::mutex> lock(peersMutex);
+                channels[conn] = std::move(channel);
+            });
+            {
+                std::lock_guard<std::mutex> lock(peersMutex);
+                peers[conn] = pc;
+            }
+            pc->setRemoteDescription(rtc::Description(sdp, rtc::Description::Type::Offer));
+        } catch (const std::exception& e) {
+            if (log) log("connection " + std::to_string(conn) + ": WebRTC offer refused: " + e.what());
+        }
+#else
+        (void)conn;
+        (void)sdp;
+#endif
+    }
+
+    /// A datagram over a connection's data channel: as over UDP, but the channel is the endpoint.
+    void OnChannelDatagram(ConnId conn, const std::uint8_t* data, std::size_t size) {
+        ClientDatagramView v;
+        if (!ParseClientDatagram(data, size, v) || v.type != DatagramType::Data) return;
+        {
+            std::lock_guard<std::mutex> lock(hubMutex);
+            if (hub.ConnForToken(v.token) != conn) return;
+        }
+        const auto now = RelayHub::Clock::now();
+        {
+            std::lock_guard<std::mutex> lock(endpointsMutex);
+            auto it = endpoints.find(conn);
+            if (it == endpoints.end()) return;
+            Endpoint& e = it->second;
+            if (now - e.second >= std::chrono::seconds(1)) {
+                e.second = now;
+                e.count = 0;
+            }
+            if (++e.count > kMaxDatagramsPerSecond) return;
+        }
+        std::vector<HubAction> actions;
+        {
+            std::lock_guard<std::mutex> lock(hubMutex);
+            actions = hub.OnDatagramData(conn, v.body, v.bodySize, now);
+        }
+        Execute(actions);
+    }
+
     /// A datagram's Deliver to a connection with a bound address, as a datagram; false to send it
     /// over the WebSocket instead.
     bool SendDatagram(const HubAction& a) {
-        if (udp == kNoUdpSocket || a.bytes.empty()) return false;
+        if (a.bytes.empty()) return false;
         Endpoint to;
         {
             std::lock_guard<std::mutex> lock(endpointsMutex);
@@ -197,6 +309,14 @@ struct RelayServer::Impl {
         std::vector<std::uint8_t> d = ServerDatagram(DatagramType::Deliver);
         d.insert(d.end(), a.bytes.begin() + 1, a.bytes.end());
         if (d.size() > kMaxDatagramBytes) return false;
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+        if (to.channel) {
+            if (!to.channel->isOpen()) return false;
+            to.channel->send(reinterpret_cast<const std::byte*>(d.data()), d.size());
+            return true;
+        }
+#endif
+        if (udp == kNoUdpSocket) return false;
         sendto(udp, reinterpret_cast<const char*>(d.data()), static_cast<int>(d.size()), 0,
                reinterpret_cast<const sockaddr*>(&to.address), to.length);
         return true;
@@ -253,8 +373,29 @@ struct RelayServer::Impl {
     }
 
     void Forget(ConnId conn) {
-        std::lock_guard<std::mutex> lock(endpointsMutex);
-        endpoints.erase(conn);
+        {
+            std::lock_guard<std::mutex> lock(endpointsMutex);
+            endpoints.erase(conn);
+        }
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+        std::shared_ptr<rtc::PeerConnection> pc;
+        std::shared_ptr<rtc::DataChannel> channel;
+        {
+            std::lock_guard<std::mutex> lock(peersMutex);
+            auto p = peers.find(conn);
+            if (p != peers.end()) {
+                pc = std::move(p->second);
+                peers.erase(p);
+            }
+            auto c = channels.find(conn);
+            if (c != channels.end()) {
+                channel = std::move(c->second);
+                channels.erase(c);
+            }
+        }
+        if (channel) channel->close();
+        if (pc) pc->close();
+#endif
     }
 
     void OnMessage(const std::shared_ptr<ix::ConnectionState>& state, ix::WebSocket& ws,
@@ -372,6 +513,25 @@ bool RelayServer::Start(std::string& error) {
             if (impl_->log) impl_->log("datagrams on UDP port " + std::to_string(udpPort));
         }
     }
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+    if (o.webrtc) {
+        // Every peer connection's ICE on one UDP port (multiplexed), so a firewall needs one port.
+        const int rtcPort = o.rtcPort > 0 ? o.rtcPort : (o.udpPort > 0 ? o.udpPort : o.port) + 1;
+        impl_->rtcConfig.enableIceUdpMux = true;
+        impl_->rtcConfig.portRangeBegin = impl_->rtcConfig.portRangeEnd = static_cast<std::uint16_t>(rtcPort);
+        if (!(o.host.empty() || o.host == "0.0.0.0" || o.host == "::")) impl_->rtcConfig.bindAddress = o.host;
+        RelayHub::Logger rtcLog = impl_->log;
+        rtc::InitLogger(rtc::LogLevel::Error, [rtcLog](rtc::LogLevel, std::string message) {
+            if (rtcLog) rtcLog("webrtc: " + message);
+        });
+        impl_->webrtc = true;
+        {
+            std::lock_guard<std::mutex> lock(impl_->hubMutex);
+            impl_->hub.SetWebRtc(true);
+        }
+        if (impl_->log) impl_->log("WebRTC data channels on UDP port " + std::to_string(rtcPort));
+    }
+#endif
     return true;
 }
 
@@ -395,6 +555,14 @@ void RelayServer::Stop() {
         impl_->udpRunning = false;
         impl_->udpThread.join();
     }
+#if defined(FREE_DIRECT_SERVER_WEBRTC)
+    std::vector<ConnId> rtcConns;
+    {
+        std::lock_guard<std::mutex> lock(impl_->peersMutex);
+        for (const auto& [conn, pc] : impl_->peers) rtcConns.push_back(conn);
+    }
+    for (ConnId conn : rtcConns) impl_->Forget(conn);
+#endif
     if (impl_->udp != kNoUdpSocket) {
         CloseUdp(impl_->udp);
         impl_->udp = kNoUdpSocket;

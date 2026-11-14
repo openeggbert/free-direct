@@ -1,7 +1,7 @@
 # Lag through a Free Direct server: what it is, and the transports that would fix it
 
-Status: **A (UDP datagrams for native programs) implemented on 2026-11-14; B (WebRTC for
-browsers) in progress.** Recorded on
+Status: **A (UDP datagrams for native programs) and B (WebRTC data channels for browsers)
+implemented on 2026-11-14.** Recorded on
 2026-11-14 after players' reports of lag and of other players' Blupis "teleporting" in games through
 `fds.openeggbert.com`. Labels: **[EVIDENCE]** source or measurement, **[DESIGN]** proposal,
 **[OPEN]** a decision for the owner.
@@ -89,7 +89,19 @@ The original proposal:
 - Cost: a protocol version 2 (Welcome offer, Bind), about 200 lines in the server and 150 in each
   client, hub unit tests and a stall test. Helps desktop and Android players, not browsers.
 
-### B. WebRTC data channels for browsers [DESIGN]
+### B. WebRTC data channels for browsers [IMPLEMENTED 2026-11-14]
+
+[EVIDENCE] The server answers a browser's offer with libdatachannel (`server/RelayServer.cpp`,
+`AnswerOffer`; ICE multiplexed on one UDP port); the browser's channel is the connection's datagram
+endpoint, as a bound UDP address is (`directplay-relay-protocol.md`, "Datagrams"). Clients: Free
+Direct's DirectPlay in a browser (`src/directplay/RelayDatagramsWeb.cpp`) and the SDL3 port's web
+build. Checked in headless browsers against a local server: the SDL3 port's page (Chrome: 411
+datagrams sent and 401 received through the channel in one game; Firefox: 409 and 423) with a
+native program on UDP, and two browsers with the Free API build of Speedy Blupi (blupi_recon
+`freeapi/tools/net_web.mjs --expect-webrtc`: the host's page sent 66 datagrams, the client's
+received 67, during the walk the test plays).
+
+The original proposal:
 
 - The server becomes each browser's WebRTC peer (libdatachannel, MPL-2.0, with libjuice and usrsctp;
   TLS from OpenSSL or Mbed TLS). Offer, answer and ICE candidates travel over the existing WebSocket.

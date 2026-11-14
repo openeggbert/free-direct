@@ -26,6 +26,10 @@ struct ServerOptions {
     /// WebSocket's port number). If it cannot be opened the server runs without, and says so.
     bool datagrams = true;
     int udpPort = 0;
+    /// The same datagrams over WebRTC data channels, for browsers (built with libdatachannel only):
+    /// every peer connection's ICE on one UDP port, rtcPort (0: the datagram port + 1).
+    bool webrtc = true;
+    int rtcPort = 0;
 };
 
 class RelayServer {

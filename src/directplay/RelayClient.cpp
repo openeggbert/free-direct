@@ -96,11 +96,12 @@ bool RelayClient::Connect(const std::string& url, const std::string& password, c
     }
     r.U32();  // this connection's ID
     const std::uint8_t flags = r.U8();
-    if (r.Ok() && (flags & kWelcomeFlagDatagrams)) {
-        // The server's UDP port and this connection's token (a server before datagrams sends neither).
+    if (r.Ok() && (flags & (kWelcomeFlagDatagrams | kWelcomeFlagWebRtc))) {
+        // The server's UDP port (0: none) and this connection's token (a server before datagrams
+        // sends neither); this platform's channel only if the server offers it.
         const std::uint16_t port = r.U16();
         const std::vector<std::uint8_t> token = r.Rest();
-        if (r.Ok() && token.size() >= kDatagramTokenBytes) {
+        if (r.Ok() && token.size() >= kDatagramTokenBytes && (flags & RelayDatagramsWelcomeFlag())) {
             std::copy(token.begin(), token.begin() + kDatagramTokenBytes, datagramToken_.begin());
             datagrams_ = CreateRelayDatagrams();
             if (datagrams_ && !datagrams_->Start(RelayUrlHost(url), port, datagramToken_)) datagrams_.reset();
@@ -266,6 +267,12 @@ void RelayClient::Pump() {
         datagrams_->Pump([this](ConnId from, std::vector<std::uint8_t> payload) {
             if (listener_) listener_->OnDeliver(from, std::move(payload));
         });
+        std::string offer;
+        if (datagrams_ && socket_ && datagrams_->TakeOffer(offer)) {
+            Writer w(MsgType::RtcOffer);
+            w.Bytes(offer.data(), offer.size());
+            socket_->Send(w.Data());
+        }
     }
 }
 
@@ -321,6 +328,9 @@ void RelayClient::Handle(const std::vector<std::uint8_t>& message) {
             if (r.Ok() && listener_) listener_->OnDeliver(from, r.Rest());
             return;
         }
+        case MsgType::RtcAnswer:
+            if (datagrams_) datagrams_->Answer(std::string(message.begin() + 1, message.end()));
+            return;
         default:
             break;
     }

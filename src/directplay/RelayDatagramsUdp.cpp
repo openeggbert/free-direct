@@ -122,5 +122,6 @@ private:
 } // namespace
 
 std::unique_ptr<IRelayDatagrams> CreateRelayDatagrams() { return std::make_unique<UdpDatagrams>(); }
+std::uint8_t RelayDatagramsWelcomeFlag() { return kWelcomeFlagDatagrams; }
 
 } // namespace free_direct_directplay

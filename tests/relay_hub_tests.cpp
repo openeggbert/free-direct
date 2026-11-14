@@ -601,6 +601,38 @@ void Test_Datagrams_Encoding() {
     CHECK(!ParseServerDatagram(big.data(), big.size(), s));
 }
 
+void Test_WebRtc_OfferedAndSignalled() {
+    // Without WebRTC an offer is an error.
+    {
+        Harness plain;
+        plain.Open(1);
+        plain.Hello(1);
+        plain.Next(1);
+        plain.Msg(1, std::move(Writer(MsgType::RtcOffer).Bytes("v=0", 3)));
+        std::vector<std::uint8_t> body;
+        CHECK(plain.Next(1, &body) == T(MsgType::Error));
+    }
+    HubConfig config;
+    config.webrtc = true;  // and no UDP port
+    Harness h(config);
+    h.Open(1);
+    h.Hello(1);
+    std::vector<std::uint8_t> body;
+    CHECK(h.Next(1, &body) == T(MsgType::Welcome));
+    Reader r(body.data(), body.size());
+    r.U16();
+    r.U32();
+    const std::uint8_t flags = r.U8();
+    CHECK((flags & kWelcomeFlagWebRtc) != 0 && (flags & kWelcomeFlagDatagrams) == 0);
+    CHECK(r.U16() == 0);
+    CHECK(r.Rest().size() == kDatagramTokenBytes);
+    // An offer becomes an action for the server's WebRTC front, with the SDP.
+    const auto offer = Writer(MsgType::RtcOffer).Bytes("v=0 offer", 9).Take();
+    const auto actions = h.hub.OnMessage(1, offer.data(), offer.size(), h.now);
+    CHECK(actions.size() == 1 && actions[0].kind == HubAction::Kind::RtcOffer && actions[0].conn == 1);
+    CHECK(actions.size() == 1 && std::string(actions[0].bytes.begin(), actions[0].bytes.end()) == "v=0 offer");
+}
+
 int main() {
     Test_RoomIdNormalization();
     Test_Hello_WrongVersionAndMagicAreRefused();
@@ -623,6 +655,7 @@ int main() {
     Test_ConstantTimeEquals();
     Test_Datagrams_TokenInWelcomeAndDeliveriesMarked();
     Test_Datagrams_Encoding();
+    Test_WebRtc_OfferedAndSignalled();
     if (g_failures == 0) {
         std::printf("OK: all relay hub tests passed.\n");
         return 0;

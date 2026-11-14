@@ -185,6 +185,20 @@ std::vector<HubAction> RelayHub::OnMessage(ConnId id, const std::uint8_t* data, 
         case MsgType::Admit: HandleAdmitOrRefuse(id, c, r, true, out); break;
         case MsgType::Refuse: HandleAdmitOrRefuse(id, c, r, false, out); break;
         case MsgType::Data: HandleData(id, c, r, out); break;
+        case MsgType::RtcOffer: {
+            // The server's WebRTC front (RelayServer) answers; the hub only checks it may.
+            const std::vector<std::uint8_t> sdp = r.Rest();
+            if (!config_.webrtc || sdp.empty()) {
+                SendError(out, id, type, ErrorCode::Malformed);
+                break;
+            }
+            HubAction a;
+            a.kind = HubAction::Kind::RtcOffer;
+            a.conn = id;
+            a.bytes = sdp;
+            out.push_back(std::move(a));
+            break;
+        }
         default:
             SendError(out, id, type, ErrorCode::Malformed);
             break;
@@ -230,16 +244,18 @@ void RelayHub::HandleHello(ConnId id, Conn& c, Reader& r, Clock::time_point now,
     c.welcomed = true;
     c.compat = compat;
     std::uint8_t flags = config_.password.empty() ? 0 : kWelcomeFlagPassword;
-    if (config_.datagramPort != 0) {
-        // Datagrams: the port and this connection's token, after the flags. Clients that do not
+    const bool datagrams = config_.datagramPort != 0 || config_.webrtc;
+    if (datagrams) {
+        // Datagrams: the UDP port and this connection's token, after the flags. Clients that do not
         // know them ignore the rest of Welcome.
         do random_(c.token.data(), c.token.size()); while (tokens_.count(c.token) != 0);
         tokens_[c.token] = id;
-        flags |= kWelcomeFlagDatagrams;
+        if (config_.datagramPort != 0) flags |= kWelcomeFlagDatagrams;
+        if (config_.webrtc) flags |= kWelcomeFlagWebRtc;
     }
     Writer welcome(MsgType::Welcome);
     welcome.U16(kRelayProtocolVersion).U32(id).U8(flags);
-    if (config_.datagramPort != 0) welcome.U16(config_.datagramPort).Bytes(c.token.data(), c.token.size());
+    if (datagrams) welcome.U16(config_.datagramPort).Bytes(c.token.data(), c.token.size());
     Send(out, id, welcome.Take());
     Log("connection " + std::to_string(id) + " hello: " + compat + " (" + client + ")");
 }

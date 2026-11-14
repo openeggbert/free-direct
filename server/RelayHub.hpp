@@ -46,13 +46,15 @@ struct HubConfig {
     std::vector<std::string> allowedOrigins;         ///< browser Origin values; empty: any
     /// The server's UDP port for datagrams (RelayDatagram.hpp); 0: none. Welcome offers it.
     std::uint16_t datagramPort = 0;
+    /// The server answers WebRTC offers (datagrams over a data channel, for browsers).
+    bool webrtc = false;
 };
 
 struct HubAction {
-    enum class Kind { Send, Close };
+    enum class Kind { Send, Close, RtcOffer };
     Kind kind = Kind::Send;
     ConnId conn = 0;
-    std::vector<std::uint8_t> bytes;  ///< Send
+    std::vector<std::uint8_t> bytes;  ///< Send; RtcOffer: the browser's SDP
     std::uint16_t closeCode = 1000;   ///< Close
     std::string reason;               ///< Close
     /// Send: a Deliver of a message that came as a datagram; the server sends it as a datagram to a
@@ -81,6 +83,7 @@ public:
 
     /// Datagrams (RelayDatagram.hpp): offered in Welcome from now on.
     void SetDatagramPort(std::uint16_t port) { config_.datagramPort = port; }
+    void SetWebRtc(bool on) { config_.webrtc = on; }
     /// The welcomed connection a datagram token belongs to; 0 if none.
     ConnId ConnForToken(const DatagramToken& token) const;
     /// A non-guaranteed Data (route, target, payload) that came as a datagram from the connection's

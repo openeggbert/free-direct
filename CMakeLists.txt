@@ -232,7 +232,7 @@ if(FREE_DIRECT_ENABLE_RELAY)
         target_compile_definitions(free-direct PRIVATE FREE_DIRECT_RELAY_COMPAT="${FREE_DIRECT_RELAY_COMPAT}")
     endif()
     if(EMSCRIPTEN)
-        target_sources(free-direct PRIVATE src/directplay/RelaySocketWeb.cpp src/directplay/RelayDatagramsNone.cpp)
+        target_sources(free-direct PRIVATE src/directplay/RelaySocketWeb.cpp src/directplay/RelayDatagramsWeb.cpp)
         # The browser WebSocket API; INTERFACE, so the game's final link gets it.
         target_link_options(free-direct INTERFACE "-lwebsocket.js")
     else()

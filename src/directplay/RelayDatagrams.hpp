@@ -5,8 +5,8 @@
  *
  * RelayClient sends non-guaranteed Data through it once the server has bound this program's
  * address (BindAck), and hands its Deliver datagrams to the session like the WebSocket's. Native
- * programs use UDP (RelayDatagramsUdp.cpp); where there is none, CreateRelayDatagrams() returns
- * nothing and everything stays on the WebSocket.
+ * programs use UDP (RelayDatagramsUdp.cpp), browsers a WebRTC data channel to the server
+ * (RelayDatagramsWeb.cpp), whose offer and answer travel over the WebSocket (TakeOffer, Answer).
  * @note Status: IMPLEMENTED
  */
 #pragma once
@@ -37,10 +37,16 @@ public:
     /// Reads what has arrived (Deliver goes to `deliver`), repeats Bind until acknowledged, gives up
     /// after kDatagramBindTimeoutMs, and keeps the address bound afterwards.
     virtual void Pump(const DeliverFn& deliver) = 0;
+    /// WebRTC: the offer to send as RtcOffer, once (complete with its candidates).
+    virtual bool TakeOffer(std::string& sdp) { (void)sdp; return false; }
+    /// WebRTC: the server's RtcAnswer.
+    virtual void Answer(const std::string& sdp) { (void)sdp; }
 };
 
 /// A datagram channel, or nothing on a platform without one.
 std::unique_ptr<IRelayDatagrams> CreateRelayDatagrams();
+/// The Welcome flag that offers this platform's channel: UDP natively, WebRTC in a browser.
+std::uint8_t RelayDatagramsWelcomeFlag();
 
 /// The host of a ws:// or wss:// URL, without brackets.
 std::string RelayUrlHost(const std::string& url);

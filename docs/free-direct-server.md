@@ -101,17 +101,26 @@ free-direct-server --tls-cert fullchain.pem --tls-key privkey.pem    # wss://
 | `--ping-interval` | 20 | seconds; 0 disables |
 | `--udp-port` | the `--port` number | UDP port for datagrams (non-guaranteed game messages, `directplay-relay-protocol.md` "Datagrams") |
 | `--no-udp` | | no datagrams: everything over the WebSocket |
+| `--rtc-port` | the datagram port + 1 | UDP port of the WebRTC data channels for browsers (only in a build with libdatachannel) |
+| `--no-webrtc` | | no WebRTC: browsers send everything over the WebSocket |
 
 The log goes to standard error: connections with their address, hellos, rooms (only the first
 four characters of an ID), refusals. It never contains passwords or game data. `SIGINT`/`SIGTERM`
 end every game and close every connection; rooms do not survive a restart.
 
-Open the TCP port in the firewall, and the **UDP port** (by default the same number, 51325) for
-datagrams. Behind NAT, forward both to the server; players need nothing. If the UDP port is closed,
+Open the TCP port in the firewall, and the **UDP ports** (by default the same number, 51325, for
+native programs' datagrams, and the next, 51326, for browsers' WebRTC data channels). Behind NAT, forward both to the server; players need nothing. If the UDP port is closed,
 games still work: a client that gets no answer over UDP within 3 s sends everything over the
 WebSocket, with the lag that brings on a lossy link (`relay-latency.md`). A TLS front (nginx, below)
 carries only the WebSocket; datagrams always go straight to the server's UDP port, to the same host
-name. The log says `datagrams on UDP port N` at the start.
+name. The log says `datagrams on UDP port N` and `WebRTC data channels on UDP port N` at the start.
+
+WebRTC for browsers is built in when CMake is given libdatachannel (with its `deps/libjuice`,
+`deps/usrsctp` and `deps/plog` submodules; OpenSSL, no media):
+`-DFREE_DIRECT_LIBDATACHANNEL_SOURCE_DIR=/path/to/libdatachannel` (tested with v0.24.6). Without it
+the server offers no WebRTC, and browsers keep everything on the WebSocket; native programs still
+get UDP datagrams. The Windows package (blupi_recon `freeapi/tools/build_windows.sh`) is built
+without it.
 
 ### TLS through a reverse proxy
 
