@@ -48,7 +48,7 @@ Server to client:
 
 | Type | Name | Fields |
 |---|---|---|
-| `0x81` | Welcome | version `u16`, the client's connection ID `u32`, flags `u8` (bit 0: the server has a password) |
+| `0x81` | Welcome | version `u16`, the client's connection ID `u32`, flags `u8` (bit 0: the server has a password; bit 1: datagrams, then UDP port `u16` and token, see "Datagrams") |
 | `0x82` | Error | request type `u8`, code `u16`, text `str` (English) |
 | `0x83` | RoomCreated | room ID `str` (formatted) |
 | `0x84` | RoomJoined | room ID `str` (formatted) |
@@ -90,6 +90,39 @@ member.
    (header and game data) that the server does not interpret.
 5. **Leaving.** CloseSession, LeaveSession, or closing the connection. When the host goes, every
    member gets SessionEnded and the session is gone; when a member goes, the host gets PeerLeft.
+
+## Datagrams
+
+Over the WebSocket everything arrives, in order: one lost TCP segment holds back every message
+behind it until TCP resends it, and they then arrive together, which a game that predicts the other
+players for a few frames shows as a stop and a jump (`docs/relay-latency.md`). So the server also
+takes **non-guaranteed Data as UDP datagrams**, where a loss only loses that message, as DirectPlay's
+own non-guaranteed messages did. Source: [`src/relay/RelayDatagram.hpp`](../src/relay/RelayDatagram.hpp).
+
+- **Offer.** Welcome's flags bit 1 (`0x02`) says the server takes datagrams; the flags are then
+  followed by the server's UDP port `u16` (by default the WebSocket's port number) and this
+  connection's **token** (16 random bytes). A server without datagrams (`--no-udp`, or before them)
+  sends neither, and clients that do not know them ignore the rest of Welcome.
+- **Client to server** (UDP to the WebSocket's host and Welcome's port): magic `u32` = `0x55524446`
+  ("FDRU"), token (16 bytes), type `u8`, then:
+  - `0x01` **Bind**: nothing. Binds the datagram's source address to the token's connection (a
+    later Bind rebinds it). The client repeats it every 250 ms until BindAck, gives up after 3 s
+    (everything then goes over the WebSocket), and repeats it every 15 s afterwards, which keeps a
+    NAT's mapping open.
+  - `0x02` **Data**: route `u8`, target `u32`, payload: as the WebSocket's Data, for messages that
+    need not arrive. Accepted only from the bound address, at most 400 per second per connection.
+- **Server to client** (to the bound address): magic `u32`, type `u8`, then:
+  - `0x81` **BindAck**: nothing.
+  - `0x82` **Deliver**: sender `u32`, payload: as the WebSocket's Deliver.
+- A Deliver goes as a datagram only if its Data came as one and the recipient has a bound address;
+  otherwise over the WebSocket. Guaranteed messages and every control message always use the
+  WebSocket. A datagram is at most 1200 bytes; a longer non-guaranteed message goes over the
+  WebSocket.
+- Unknown tokens get no answer. The token travels inside Welcome, so over `wss://` it is as private as
+  the connection; the datagrams themselves are not encrypted (the WebSocket's `ws://` is not either).
+- Clients: Free Direct's native DirectPlay (`src/directplay/RelayDatagramsUdp.cpp`) and the SDL3
+  port's relay client (blupi_recon `port/common/net/relay.cpp`). A browser has no UDP: WebRTC data
+  channels are the planned equivalent (`docs/relay-latency.md`).
 
 ## Room IDs
 

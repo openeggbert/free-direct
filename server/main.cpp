@@ -74,6 +74,8 @@ void PrintUsage() {
         "  --room-idle-timeout SECS  delete a room this long after its last member left\n"
         "                            (default %lld)\n"
         "  --ping-interval SECS      WebSocket ping interval, 0 disables (default 20)\n"
+        "  --udp-port PORT           UDP port for datagrams (default: the same number as --port)\n"
+        "  --no-udp                  no datagrams: everything over the WebSocket\n"
         "  --version                 print the version\n"
         "  --help                    this text\n",
         static_cast<unsigned>(kDefaultRelayPort), HubConfig{}.maxConnections, HubConfig{}.maxRooms,
@@ -145,6 +147,15 @@ int ParseOptions(int argc, char** argv, Options& o) {
         } else if (a == "--ping-interval") {
             if (!(v = value(a.c_str()))) return 2;
             o.pingSeconds = std::atoi(v);
+        } else if (a == "--udp-port") {
+            if (!(v = value(a.c_str()))) return 2;
+            o.udpPort = std::atoi(v);
+            if (o.udpPort < 1 || o.udpPort > 65535) {
+                std::fprintf(stderr, "free-direct-server: --udp-port wants 1..65535\n");
+                return 2;
+            }
+        } else if (a == "--no-udp") {
+            o.datagrams = false;
         } else {
             std::fprintf(stderr, "free-direct-server: unknown option %s (see --help)\n", a.c_str());
             return 2;

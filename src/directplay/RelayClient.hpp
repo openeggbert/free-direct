@@ -13,6 +13,7 @@
  */
 #pragma once
 
+#include "RelayDatagrams.hpp"
 #include "RelayProtocol.hpp"
 #include "RelaySocket.hpp"
 
@@ -63,8 +64,12 @@ public:
     void LeaveSession();
     void Admit(free_direct_relay::ConnId conn);
     void Refuse(free_direct_relay::ConnId conn);
+    /// A non-guaranteed message (`reliable` false) goes as a datagram once the server has bound this
+    /// program's address (RelayDatagrams.hpp); anything else over the WebSocket.
     bool SendData(free_direct_relay::Route route, free_direct_relay::ConnId target, const void* data,
-                  std::size_t size);
+                  std::size_t size, bool reliable = true);
+    /// Datagrams are on: the server acknowledged this program's address.
+    bool DatagramsOn() const { return datagrams_ && datagrams_->Ready(); }
 
     /// Processes every queued incoming event; called from DirectPlay's Receive() servicing and
     /// from every bounded wait.
@@ -99,6 +104,8 @@ private:
     static long TimeoutMs();
 
     std::unique_ptr<IRelaySocket> socket_;
+    std::unique_ptr<IRelayDatagrams> datagrams_;  ///< when Welcome offers datagrams
+    free_direct_relay::DatagramToken datagramToken_{};
     bool opened_ = false;
     bool connected_ = false;   ///< opened and welcomed
     std::string closeReason_;

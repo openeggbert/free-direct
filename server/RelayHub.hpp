@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include "RelayDatagram.hpp"
 #include "RelayProtocol.hpp"
 
 #include <chrono>
@@ -43,6 +44,8 @@ struct HubConfig {
     unsigned maxFailuresPerAddress = 20;             ///< wrong passwords/room IDs per address and window
     std::chrono::seconds failureWindow{600};
     std::vector<std::string> allowedOrigins;         ///< browser Origin values; empty: any
+    /// The server's UDP port for datagrams (RelayDatagram.hpp); 0: none. Welcome offers it.
+    std::uint16_t datagramPort = 0;
 };
 
 struct HubAction {
@@ -52,6 +55,9 @@ struct HubAction {
     std::vector<std::uint8_t> bytes;  ///< Send
     std::uint16_t closeCode = 1000;   ///< Close
     std::string reason;               ///< Close
+    /// Send: a Deliver of a message that came as a datagram; the server sends it as a datagram to a
+    /// connection with a bound address, over the WebSocket to any other.
+    bool datagram = false;
 };
 
 class RelayHub {
@@ -73,6 +79,15 @@ public:
     /// Deletes rooms that have had no members for roomIdleTimeout.
     void Reap(Clock::time_point now);
 
+    /// Datagrams (RelayDatagram.hpp): offered in Welcome from now on.
+    void SetDatagramPort(std::uint16_t port) { config_.datagramPort = port; }
+    /// The welcomed connection a datagram token belongs to; 0 if none.
+    ConnId ConnForToken(const DatagramToken& token) const;
+    /// A non-guaranteed Data (route, target, payload) that came as a datagram from the connection's
+    /// bound address: routed as the WebSocket's Data, its Deliver actions marked `datagram`.
+    std::vector<HubAction> OnDatagramData(ConnId conn, const std::uint8_t* body, std::size_t size,
+                                          Clock::time_point now);
+
     std::size_t ConnectionCount() const { return conns_.size(); }
     std::size_t RoomCount() const { return rooms_.size(); }
     std::size_t SessionCount() const;
@@ -89,6 +104,7 @@ private:
         Role role = Role::None;
         RelayGuid session{};
         bool admitted = false;  ///< Role::Member only
+        DatagramToken token{};  ///< with datagrams: given in Welcome
     };
 
     struct Session {
@@ -111,7 +127,7 @@ private:
     void HandleHostSession(ConnId id, Conn& c, Reader& r, std::vector<HubAction>& out);
     void HandleJoinSession(ConnId id, Conn& c, Reader& r, std::vector<HubAction>& out);
     void HandleAdmitOrRefuse(ConnId id, Conn& c, Reader& r, bool admit, std::vector<HubAction>& out);
-    void HandleData(ConnId id, Conn& c, Reader& r, std::vector<HubAction>& out);
+    void HandleData(ConnId id, Conn& c, Reader& r, std::vector<HubAction>& out, bool datagram = false);
 
     /// Leaves the connection's session (ending it if the connection hosts it).
     void LeaveSession(ConnId id, Conn& c, SessionEndReason reason, std::vector<HubAction>& out);
@@ -134,6 +150,7 @@ private:
     std::unordered_map<ConnId, Conn> conns_;
     std::unordered_map<std::string, Room> rooms_;
     std::unordered_map<std::string, std::deque<Clock::time_point>> addressFailures_;
+    std::map<DatagramToken, ConnId> tokens_;
 };
 
 /// Constant-time comparison for the server password.
