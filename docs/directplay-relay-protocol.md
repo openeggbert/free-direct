@@ -139,9 +139,11 @@ own non-guaranteed messages did. Source: [`src/relay/RelayDatagram.hpp`](../src/
 
 ## Room IDs
 
-20 characters of Crockford base32 (`0-9`, `A-Z` without `I`, `L`, `O`, `U`), from 100 random bits of
-the operating system's random source, shown as `ABCDE-FGHJK-MNPQR-STVWX`. Entering one ignores
-case, spaces and dashes, and reads `O` as `0` and `I`/`L` as `1`. Logs show only the first four
+20 characters from the operating system's random source, shown as `ABCDE-FGHJK-MNPQR-STVWX`. Since
+2026-11-14 a new ID uses 31 characters: `1-9` and `A-Z` without `I`, `L`, `O` and `U`, so never `0`
+and `O`, which look alike (about 99 random bits; each random byte below 248 gives one character).
+Earlier IDs used Crockford base32 with `0`. Entering one ignores case, spaces and dashes, and reads
+`O` as `0` and `I`/`L` as `1`, so IDs of either kind are still read. Logs show only the first four
 characters.
 
 ## Abuse limits

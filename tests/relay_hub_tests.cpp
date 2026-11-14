@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <map>
 #include <string>
 #include <vector>
@@ -111,6 +112,19 @@ void Test_RoomIdNormalization() {
     CHECK(!NormalizeRoomId("ABCDE-FGHJK-MNPQR-STVWXY"));   // too long
     CHECK(!NormalizeRoomId("ABCDE-FGHJK-MNPQR-STVWU"));    // U is not in the alphabet
     CHECK(FormatRoomId("ABCDEFGHJKMNPQRSTVWX") == "ABCDE-FGHJK-MNPQR-STVWX");
+    // A new ID never has 0 (nor O): every byte value gives one of the 31 other characters or none.
+    std::uint8_t all[256];
+    for (int i = 0; i < 256; ++i) all[i] = static_cast<std::uint8_t>(i);
+    std::string seen;
+    for (int start = 0; start < 256; start += kRoomIdLength) {
+        const std::string id = RoomIdFromRandomBytes(all + start, std::min<std::size_t>(kRoomIdLength, 256 - start));
+        CHECK(id.find('0') == std::string::npos && id.find('O') == std::string::npos);
+        seen += id;
+    }
+    CHECK(seen.size() == 248);  // bytes 248..255 are skipped
+    for (char c : std::string(kNewRoomIdAlphabet)) CHECK(seen.find(c) != std::string::npos);
+    const std::uint8_t high[2 * kRoomIdLength] = {255, 254, 248, 0, 30, 31};
+    CHECK(RoomIdFromRandomBytes(high, 6) == "1Z1");  // 0 -> '1', 30 -> 'Z', 31 -> '1' again
 }
 
 void Test_Hello_WrongVersionAndMagicAreRefused() {
